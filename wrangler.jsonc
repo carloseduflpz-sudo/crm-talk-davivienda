@@ -1,0 +1,44 @@
+{
+  // CRM Talk Davivienda 2.0 — un solo Worker sirve la app (apps/web) y la API (apps/api).
+  // Cloudflare lo despliega solo con cada cambio en la rama main de GitHub.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crm-talk-davivienda",
+  "main": "apps/api/src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // App web ya compilada. Las rutas /api/* siempre las atiende el Worker;
+  // cualquier otra ruta que no sea un archivo abre la app (navegación del lado del navegador).
+  "assets": {
+    "directory": "./apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Tablas: clientes, ventas, llamadas, metas, cierres y bitácora.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crm-talk",
+      "database_id": "REEMPLAZAR_CON_ID_DE_D1",
+      "migrations_dir": "packages/db/migrations"
+    }
+  ],
+
+  // Archivos: Excel originales, presentaciones generadas y respaldos. Bucket privado.
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "crm-talk-datos" }
+  ],
+
+  "vars": {
+    // Cloudflare Access. Sin estos dos valores la API no entrega datos (falla cerrada).
+    "ACCESS_TEAM_DOMAIN": "still-wind-00ec.cloudflareaccess.com",
+    "ACCESS_AUD": "",
+    // Correos con rol de administrador, separados por coma. Por ahora los 3 usuarios son admin.
+    "ADMIN_EMAILS": "carlos.edufl.pz@gmail.com",
+    "APP_ENV": "production"
+  },
+
+  "observability": { "enabled": true }
+}
