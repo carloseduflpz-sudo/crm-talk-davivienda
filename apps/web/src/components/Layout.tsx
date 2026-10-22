@@ -1,7 +1,7 @@
 import { CAMPAIGNS } from "@crm/core";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Search, Settings, Sparkles, Sun, Upload, Users, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ChevronDown, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pin, PinOff, Search, Settings, Sparkles, Sun, Upload, Users, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 import { api, type Me } from "../lib/api";
 import { useTheme } from "../lib/theme";
@@ -114,17 +114,86 @@ function AccountMenu({ me }: { me: Me }) {
   );
 }
 
+const PIN_KEY = "crm:menu-fijo";
+const readPin = () => {
+  try {
+    return localStorage.getItem(PIN_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Pantalla completa para la información: el menú se esconde y aparece al acercar el mouse al
+ * borde izquierdo (o con el botón de menú, en celular o con teclado). Se puede fijar.
+ */
 export function Layout() {
-  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(readPin);
+  const [open, setOpen] = useState<null | "hover" | "click">(null);
+  const timer = useRef<number | undefined>(undefined);
   const { theme, toggle } = useTheme();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
 
+  const later = (fn: () => void, ms: number) => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(fn, ms);
+  };
+  const opening = useRef(false);
+  // Solo con movimiento real del mouse (no si la página carga con el cursor ya en el borde).
+  const showOnHover = () => {
+    if (opening.current) return;
+    opening.current = true;
+    later(() => {
+      opening.current = false;
+      setOpen((o) => o ?? "hover");
+    }, 90);
+  };
+  const hideAfterHover = () => {
+    opening.current = false;
+    later(() => setOpen((o) => (o === "hover" ? null : o)), 280);
+  };
+  const close = () => {
+    window.clearTimeout(timer.current);
+    setOpen(null);
+  };
+  const togglePin = () => {
+    const next = !pinned;
+    setPinned(next);
+    setOpen(null);
+    try {
+      localStorage.setItem(PIN_KEY, next ? "1" : "0");
+    } catch {
+      /* sin almacenamiento: queda solo para esta visita */
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const slide = open ? "translate-x-0" : pinned ? "-translate-x-full lg:translate-x-0" : "-translate-x-full";
+  const floating = open && !(pinned && window.matchMedia?.("(min-width: 1024px)").matches);
+
   return (
-    <div className="min-h-dvh lg:grid lg:grid-cols-[256px_1fr]">
-      {/* Menú lateral (en celular se abre como panel) */}
+    <div className={`min-h-dvh ${pinned ? "lg:pl-64" : ""}`}>
+      {/* Zona invisible en el borde izquierdo: al acercar el mouse aparece el menú. */}
+      {!pinned && (
+        <>
+          <div className="fixed inset-y-0 left-0 z-30 hidden w-3 lg:block" onMouseMove={showOnHover} onMouseLeave={hideAfterHover} aria-hidden />
+          <span className={`pointer-events-none fixed top-1/2 left-1 z-30 hidden h-14 w-1 -translate-y-1/2 rounded-full bg-ink-faint/40 transition-opacity lg:block ${open ? "opacity-0" : "opacity-100"}`} aria-hidden />
+        </>
+      )}
+
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 overflow-y-auto border-r border-slate-200 bg-white px-3 py-5 transition-transform dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0 ${
-          open ? "translate-x-0" : "-translate-x-full"
+        onMouseEnter={() => open === "hover" && window.clearTimeout(timer.current)}
+        onMouseLeave={() => open === "hover" && hideAfterHover()}
+        aria-hidden={!open && !pinned}
+        className={`fixed inset-y-0 left-0 z-40 w-64 overflow-y-auto border-r border-hair bg-white px-3 py-5 transition-transform duration-200 ease-out dark:bg-slate-900 ${slide} ${
+          floating ? "shadow-[12px_0_40px_rgba(14,27,61,0.12)]" : ""
         }`}
       >
         <div className="mb-6 flex items-center justify-between px-3">
@@ -135,18 +204,37 @@ export function Layout() {
               <p className="text-xs text-slate-500">Davivienda</p>
             </div>
           </div>
-          <button className="rounded-lg p-1.5 lg:hidden" onClick={() => setOpen(false)} aria-label="Cerrar menú">
-            <X className="size-5" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              className="hidden rounded-lg p-1.5 text-ink-soft hover:bg-paper hover:text-ink lg:block dark:hover:bg-slate-800"
+              onClick={togglePin}
+              aria-pressed={pinned}
+              title={pinned ? "Soltar el menú: se esconde y aparece al acercar el mouse a la izquierda" : "Fijar el menú a la izquierda"}
+              aria-label={pinned ? "Soltar el menú" : "Fijar el menú"}
+            >
+              {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+            </button>
+            {(open || !pinned) && (
+              <button className="rounded-lg p-1.5 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800" onClick={close} aria-label="Cerrar menú">
+                <X className="size-5" />
+              </button>
+            )}
+          </div>
         </div>
-        <Nav onNavigate={() => setOpen(false)} />
+        <Nav onNavigate={() => !pinned && close()} />
       </aside>
-      {open && <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setOpen(false)} aria-hidden />}
+      {open === "click" && <div className="fade-in fixed inset-0 z-30 bg-[#0e1b3d]/20 backdrop-blur-[1px] dark:bg-black/40" onClick={close} aria-hidden />}
 
       <div className="flex min-w-0 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80 sm:px-6">
-          <button className="rounded-lg p-2 lg:hidden" onClick={() => setOpen(true)} aria-label="Abrir menú">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-hair bg-white/80 px-4 backdrop-blur sm:px-6 lg:px-10 dark:bg-slate-950/80">
+          <button
+            className={`flex items-center gap-2 rounded-lg p-2 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800 ${pinned ? "lg:hidden" : ""}`}
+            onClick={() => setOpen((o) => (o ? null : "click"))}
+            aria-label="Abrir menú"
+            aria-expanded={Boolean(open)}
+          >
             <Menu className="size-5" />
+            <span className="hidden text-[13px] sm:inline">Menú</span>
           </button>
           <div className="flex-1" />
           <button
@@ -158,7 +246,8 @@ export function Layout() {
           </button>
           {me.data && <AccountMenu me={me.data} />}
         </header>
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
+        {/* La información ocupa todo el ancho de la pantalla (con un tope para monitores muy anchos). */}
+        <main className="mx-auto w-full max-w-[2200px] flex-1 px-4 py-8 sm:px-6 lg:px-10 2xl:px-14">
           <Outlet />
         </main>
       </div>

@@ -557,7 +557,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
             </ChartCard>
             <ChartCard title="Intentos por cliente" note="Cuántas veces se llamó a cada cliente en el mes">
               <Columns
-                height={260}
+
                 data={l.intentos.map((i) => ({
                   key: i.intentos,
                   label: i.intentos,
@@ -601,7 +601,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
         >
           <div className="grid gap-12 xl:grid-cols-[1.4fr_1fr]">
             <AreaChart
-              height={260}
+
               seriesLabel="Ventas en el CRM"
               unit="ventas"
               compare={compareOf(prev, prev?.crm?.porDia, (d) => d.ventas)}

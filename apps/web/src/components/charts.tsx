@@ -573,7 +573,7 @@ export interface Compare {
  */
 export function AreaChart({
   data,
-  height = 300,
+  height: fixedHeight,
   seriesLabel,
   unit,
   compare,
@@ -597,6 +597,8 @@ export function AreaChart({
 }) {
   const id = useId();
   const [ref, width] = useWidth<HTMLDivElement>();
+  // Sin alto fijo, la gráfica crece con el ancho de la pantalla (entre 280 y 440 px).
+  const height = fixedHeight ?? Math.round(Math.min(440, Math.max(280, width * 0.27)));
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<{ a: number; b: number; moved: boolean } | null>(null);
   const [range, setRange] = useState<[number, number] | null>(null);
@@ -833,7 +835,7 @@ export interface ColumnDatum {
 
 export function Columns({
   data,
-  height = 270,
+  height: fixedHeight,
   legend,
   onSelect,
   selectHint,
@@ -848,6 +850,7 @@ export function Columns({
   active?: string | null;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
+  const height = fixedHeight ?? Math.round(Math.min(380, Math.max(250, width * 0.24)));
   const [tip, setTip] = useState<Tip | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
