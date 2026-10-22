@@ -409,6 +409,15 @@ export function Upload() {
     [analysis, uploads.data, month],
   );
   const isBase = analysis?.datasetId ? getCampaign(campaign).datasets.find((d) => d.id === analysis.datasetId)?.kind === "base" : false;
+  // Dos bases muy parecidas (p. ej. Primeras y Segundas Cuentas de TDC): si ni las columnas ni el nombre del
+  // archivo lo dejan claro, se pregunta en vez de adivinar.
+  const kindOf = (id: string) => getCampaign(campaign).datasets.find((d) => d.id === id)?.kind;
+  const [d0, d1] = analysis?.detections ?? [];
+  const doubt = Boolean(d0 && d1 && kindOf(d0.datasetId) === "base" && kindOf(d1.datasetId) === "base" && d0.sheet === d1.sheet && d0.score - d1.score < 3);
+  const [typeChosen, setTypeChosen] = useState(false);
+  useEffect(() => setTypeChosen(false), [analysis?.sha]);
+  // Un libro con las dos bases en hojas distintas: se avisa que la otra también se puede cargar.
+  const otherBase = analysis?.detections.find((d) => d.datasetId !== analysis.datasetId && kindOf(d.datasetId) === "base" && d.sheet !== analysis.sheet && isBase);
   // Si ya hay base ese mes, hay que elegir: sumar como adicional o reemplazar.
   const needsMode = Boolean(isBase && current);
   const [mode, setMode] = useState<null | "adicional" | "reemplazar">(null);
@@ -605,18 +614,21 @@ export function Upload() {
                     id="tipo"
                     disabled={phase.name !== "ready"}
                     value={analysis.datasetId ?? ""}
-                    onChange={(e) => void changeType(e.target.value)}
+                    onChange={(e) => {
+                      setTypeChosen(true);
+                      void changeType(e.target.value);
+                    }}
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                   >
                     {!analysis.datasetId && <option value="">Elige el tipo…</option>}
                     {getCampaign(campaign).datasets.map((d) => (
                       <option key={d.id} value={d.id}>
                         {d.label} — {d.source}
-                        {analysis.detections[0]?.datasetId === d.id ? "  ✓ reconocido" : ""}
+                        {analysis.detections[0]?.datasetId === d.id && !doubt ? "  ✓ reconocido" : ""}
                       </option>
                     ))}
                   </select>
-                  {analysis.datasetId && analysis.detections[0]?.datasetId === analysis.datasetId && (
+                  {analysis.datasetId && analysis.detections[0]?.datasetId === analysis.datasetId && !doubt && (
                     <p className="mt-1.5 flex items-center gap-1 text-xs text-emerald-600">
                       <CircleCheck className="size-3.5" aria-hidden /> Reconocido automáticamente por sus columnas.
                     </p>
@@ -672,6 +684,36 @@ export function Upload() {
                     <Stat label="Meses en el archivo" value={String(monthsInFile.length || "—")} foot={monthsInFile.slice(0, 3).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ") || "Sin fechas"} />
                   </div>
 
+                  {doubt && !typeChosen && d0 && d1 && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                      <p className="font-medium">¿Cuál base es esta?</p>
+                      <p className="mt-0.5 text-amber-800 dark:text-amber-200">Las columnas y el nombre del archivo sirven para las dos. Elige una para guardarla en su lugar.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {[d0, d1].map((d) => (
+                          <button
+                            key={d.datasetId}
+                            type="button"
+                            onClick={() => {
+                              setTypeChosen(true);
+                              if (d.datasetId !== analysis.datasetId) void changeType(d.datasetId);
+                            }}
+                            className="rounded-xl bg-white px-3.5 py-2 font-medium text-ink ring-1 ring-amber-300 hover:ring-amber-500 dark:bg-slate-900 dark:ring-amber-500/40"
+                          >
+                            {datasetLabel(d.datasetId)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {otherBase && (
+                    <p className="flex gap-2 rounded-xl bg-blue-50 px-3.5 py-2.5 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
+                      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+                      <span>
+                        Este archivo también trae la {datasetLabel(otherBase.datasetId)} (hoja «{otherBase.sheet}»). Ahora se guarda la hoja «{analysis.sheet}»; después vuelve a subir el mismo
+                        archivo y elige {datasetLabel(otherBase.datasetId)} en el tipo.
+                      </span>
+                    </p>
+                  )}
                   {monthOk && hasDates && inMonth === split.sinFecha && (
                     <div className="flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
                       <TriangleAlert className="size-4 shrink-0" aria-hidden />
@@ -711,7 +753,7 @@ export function Upload() {
                       </div>
                     </fieldset>
                   )}
-                  {needsMode && current && (
+                  {needsMode && current && !(doubt && !typeChosen) && (
                     <fieldset className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
                       <legend className="px-1 text-sm font-semibold">
                         <span className="capitalize">{monthLabel(month)}</span> ya tiene esta base ({fmt.format(current.rowsValid)} clientes, cargada el {fmtDate(current.createdAt)})
@@ -795,7 +837,7 @@ export function Upload() {
               ) : (
                 !analysis.error && (
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={save} disabled={!monthOk || toSave === 0 || (needsMode && !mode)}>
+                    <Button onClick={save} disabled={!monthOk || toSave === 0 || (needsMode && !mode) || (doubt && !typeChosen)}>
                       <CloudUpload className="size-4" aria-hidden />{" "}
                       {!monthOk
                         ? "Guardar"
@@ -803,7 +845,8 @@ export function Upload() {
                           ? `Sumar ${fmt.format(toSave)} clientes a ${monthLabel(month)}`
                           : `Guardar ${fmt.format(toSave)} filas en ${monthLabel(month)}`}
                     </Button>
-                    {!monthOk && <span className="self-center text-xs text-slate-500">Elige el mes al que corresponde.</span>}
+                    {doubt && !typeChosen && <span className="self-center text-xs text-slate-500">Elige cuál base es.</span>}
+                    {!(doubt && !typeChosen) && !monthOk && <span className="self-center text-xs text-slate-500">Elige el mes al que corresponde.</span>}
                     {monthOk && needsMode && !mode && <span className="self-center text-xs text-slate-500">Elige si es una base adicional o un reemplazo.</span>}
                   </div>
                 )

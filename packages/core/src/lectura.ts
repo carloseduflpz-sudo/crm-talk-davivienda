@@ -48,10 +48,10 @@ export type Step = (message: string) => void;
 const fmt = new Intl.NumberFormat("es-SV");
 
 /** Primer paso: libro con sus primeras filas y los tipos de archivo que coinciden. */
-export function peekWorkbook(XLSX: XLSXReader, data: Uint8Array, campaign: CampaignCode) {
+export function peekWorkbook(XLSX: XLSXReader, data: Uint8Array, campaign: CampaignCode, fileName = "") {
   const wb = XLSX.read(data, { ...LEAN, sheetRows: PEEK_ROWS });
   const reader = new WorkbookReader(XLSX, wb);
-  return { reader, detections: detectDatasets(reader, campaign) };
+  return { reader, detections: detectDatasets(reader, campaign, fileName) };
 }
 
 /** Cuántas filas tiene de verdad una hoja abierta parcialmente (SheetJS guarda el rango completo en !fullref). */

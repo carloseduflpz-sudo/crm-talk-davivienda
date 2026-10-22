@@ -65,7 +65,7 @@ export class ExcelReader {
   async open(file: File, campaign: CampaignCode, onStep: (s: string) => void) {
     const buf = await file.arrayBuffer();
     // El archivo se transfiere (no se copia): la pantalla principal no carga con él.
-    const r = await this.send({ type: "open", buf, campaign }, onStep, [buf]);
+    const r = await this.send({ type: "open", buf, campaign, fileName: file.name }, onStep, [buf]);
     return { result: r.result, sha: r.sha! };
   }
 

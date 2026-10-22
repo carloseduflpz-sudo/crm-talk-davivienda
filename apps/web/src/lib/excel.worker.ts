@@ -3,7 +3,7 @@
    tipo de archivo a mano y hay que volver a leerlo. */
 import { compactWorkbook, peekWorkbook, readDataset, type CampaignCode, type Detection, type WorkbookReader, type XLSXReader } from "@crm/core";
 
-export type WorkerRequest = { type: "open"; id: number; buf: ArrayBuffer; campaign: CampaignCode } | { type: "analyze"; id: number; datasetId: string };
+export type WorkerRequest = { type: "open"; id: number; buf: ArrayBuffer; campaign: CampaignCode; fileName?: string } | { type: "analyze"; id: number; datasetId: string };
 export type WorkerResponse =
   | { type: "step"; id: number; message: string }
   | { type: "done"; id: number; result: import("@crm/core").ExcelReading; sha?: string }
@@ -60,7 +60,7 @@ scope.onmessage = async (e) => {
         // Si no se puede compactar, se lee el archivo tal cual.
       }
       if (!compacted) step("Reconociendo el tipo de archivo…");
-      const { reader, detections } = peekWorkbook(XLSX, data, msg.campaign);
+      const { reader, detections } = peekWorkbook(XLSX, data, msg.campaign, msg.fileName ?? "");
       open = { data, campaign: msg.campaign, reader, detections, compacted };
       const result = readDataset(XLSX, data, msg.campaign, reader, detections, detections[0]?.datasetId ?? null, step, !compacted);
       scope.postMessage({ type: "done", id: msg.id, result, sha });

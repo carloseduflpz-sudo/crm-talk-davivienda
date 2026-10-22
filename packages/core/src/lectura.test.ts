@@ -110,3 +110,43 @@ describe("lectura en dos pasos", () => {
     expect(rowMonth({ niu: "6", profile: null, offer: null, extra: {} })).toBeNull();
   });
 });
+
+describe("TDC: base de primeras vs. segundas cuentas", () => {
+  const SEG = ["NIU", "DUI", "Nombre legal según IBS", "Nombre empresa", "Cargo", "Municipio", "Departamento", "TelNotificaciones", "Tipo empresa", "Perfil", "Tipo", "Marca", "Salario a Considerar", "Edad", "Perfil SS", "Condicion", "Aplica CDC", "Tipo CDC", "BASE", "ASIGNACION"];
+  const PRI = ["NIU", "DUI", "Municipio", "Departamento", "Correo", "TEL Notificaciones", "Producto Principal", "Oferta", "Monto2", "Plazo (meses)", "Tasa2", "Cuota", "Limite", "Score Tc", "Edad", "Genero", "Marca", "Tipo", "CANAL", "Estrategia", "Nombre legal según IBS", "PERFIL"];
+  const book = (sheets: [string, string[], string?][]) => {
+    const wb = XLSX.utils.book_new();
+    for (const [name, headers, niu = "123"] of sheets) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headers, headers.map((h, i) => (i === 0 ? niu : `${h} 1`))]), name);
+    return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+  const top = (bytes: Uint8Array, fileName = "") => peekWorkbook(X, bytes, "tdc", fileName).detections[0]?.datasetId;
+
+  it("las reconoce por sus columnas, aunque la hoja tenga otro nombre", () => {
+    expect(top(book([["Hoja1", SEG]]))).toBe("tdc:base:segundas");
+    expect(top(book([["Hoja1", PRI]]))).toBe("tdc:base:primeras");
+    // Pocas columnas exclusivas bastan.
+    expect(top(book([["Sheet1", ["NIU", "Nombre legal según IBS", "Perfil", "Tipo", "Salario a Considerar", "Aplica CDC"]]]))).toBe("tdc:base:segundas");
+    expect(top(book([["Sheet1", ["NIU", "Nombre legal según IBS", "Perfil", "Tipo", "Oferta", "Score Tc"]]]))).toBe("tdc:base:primeras");
+  });
+
+  it("con las mismas columnas, el nombre del archivo decide", () => {
+    const comun = book([["Sheet1", ["NIU", "DUI", "Nombre legal según IBS", "Perfil", "Tipo", "Marca", "Edad"]]]);
+    expect(top(comun, "Base 2a TDC Octubre.xlsx")).toBe("tdc:base:segundas");
+    expect(top(comun, "BASE_2DA_TDC_SEP.xlsb")).toBe("tdc:base:segundas");
+    expect(top(comun, "Base BAU Oct26.xlsx")).toBe("tdc:base:primeras");
+    expect(top(comun, "Primeras cuentas septiembre.xlsx")).toBe("tdc:base:primeras");
+  });
+
+  it("un libro con las dos bases: cada tipo lee su propia hoja", () => {
+    const bytes = book([
+      ["Segundas", SEG, "222"],
+      ["Primeras", PRI, "111"],
+    ]);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    expect(detections.find((d) => d.datasetId === "tdc:base:primeras")?.sheet).toBe("Primeras");
+    expect(detections.find((d) => d.datasetId === "tdc:base:segundas")?.sheet).toBe("Segundas");
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras").rows.map((r) => r.niu)).toEqual(["111"]);
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:segundas").rows.map((r) => r.niu)).toEqual(["222"]);
+  });
+});
+

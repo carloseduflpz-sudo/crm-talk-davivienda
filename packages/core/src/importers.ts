@@ -156,6 +156,10 @@ interface Profile {
   monthField?: string;
   monthDMY?: boolean;
   multiSheet?: { sheet: string; process: string; required: (string | string[])[]; extra: Record<string, FieldSpec> }[];
+  /** Columnas que solo trae este archivo (lo distinguen de otro parecido de la misma campaña). */
+  markers?: string[];
+  /** Nombre de archivo típico ("2a TDC", "BAU"...): si coincide, casi seguro es este. */
+  fileHint?: RegExp;
 }
 
 /* ---------- perfiles ---------- */
@@ -254,6 +258,8 @@ export const PROFILES: Record<string, Profile> = {
     label: "Base Segundas Cuentas (2a TDC)",
     sheets: ["2a TDC"],
     anySheet: true,
+    markers: ["Nombre empresa", "Cargo", "Salario a Considerar", "Perfil SS", "Condicion", "Aplica CDC", "Tipo CDC", "ASIGNACION", "TelNotificaciones", "Dirección de Casa", "Dirección Lugar de Trabajo"],
+    fileHint: /segund|(^|[^0-9])2\s*(a|da|nda)?[\s_.-]*(tdc|cuentas?|tarjetas?)/i,
     required: ["NIU", "Nombre legal según IBS"],
     fields: {
       NIU: ["NIU", "niu"], DUI: ["DUI"], Nombre: ["Nombre legal según IBS"], NombreEmpresa: ["Nombre empresa"], Cargo: ["Cargo"],
@@ -267,6 +273,8 @@ export const PROFILES: Record<string, Profile> = {
     label: "Base Primeras Cuentas (BAU)",
     sheets: [],
     anySheet: true,
+    markers: ["Producto Principal", "Oferta", "Monto2", "Tasa2", "Cuota", "Limite", "Score Tc", "CANAL", "Estrategia", "Correo", "TEL Notificaciones", "Plazo (meses)"],
+    fileHint: /(^|[^a-z])bau([^a-z]|$)|primer|tarjetas?[\s_.-]*nuevas?/i,
     dashBlank: true,
     required: ["NIU", ["PERFIL", "Perfil"]],
     fields: {
@@ -574,8 +582,7 @@ export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseO
     return { rows: all, dropped, sheet: used.join(" + "), missingOptional: [] };
   }
 
-  let sn = reader.pickSheet(prof.sheets ?? []);
-  if (!sn && prof.anySheet) sn = reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required)) ?? null;
+  const sn = bestSheet(reader, prof);
   if (!sn) {
     return {
       error: `No encontré la hoja esperada (${(prof.sheets ?? []).join(", ") || "con los encabezados correctos"}). Hojas del archivo: ${reader.sheetNames.join(", ")}.`,
@@ -590,13 +597,35 @@ export function neededSheets(reader: WorkbookReader, datasetId: string): string[
   const prof = PROFILES[datasetId];
   if (!prof) return [];
   if (prof.multiSheet) return prof.multiSheet.map((p) => reader.pickSheet([p.sheet])).filter((s): s is string => Boolean(s));
+  const sn = bestSheet(reader, prof);
+  return sn ? [sn] : [];
+}
+
+/** Cuántas columnas exclusivas de este archivo trae la hoja. */
+function markerHits(rows: Cell[][], prof: Profile): number {
+  if (!prof.markers?.length) return 0;
+  const hdr = findHeader(rows, prof.required);
+  return hdr ? prof.markers.filter((m) => hdr.idx.has(normHeader(m))).length : 0;
+}
+
+/**
+ * La hoja que se lee: la del nombre esperado si trae los encabezados; si no (y se permite cualquier hoja),
+ * la que más se parece a este archivo. Así, en un libro con la base de primeras Y la de segundas,
+ * cada tipo toma su propia hoja y no la primera que encuentre.
+ */
+function bestSheet(reader: WorkbookReader, prof: Profile): string | null {
   const named = reader.pickSheet(prof.sheets ?? []);
-  if (named) return [named];
-  if (prof.anySheet) {
-    const found = reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required));
-    return found ? [found] : [];
+  if (named && findHeader(reader.rows(named), prof.required)) return named;
+  if (!prof.anySheet) return named;
+  let best: string | null = null;
+  let bestScore = -1;
+  for (const cand of reader.sheetNames) {
+    const rows = reader.rows(cand);
+    if (!findHeader(rows, prof.required)) continue;
+    const score = coverage(rows, prof, prof.required) + markerHits(rows, prof);
+    if (score > bestScore) (best = cand), (bestScore = score);
   }
-  return [];
+  return best ?? named;
 }
 
 /* ---------- reconocimiento automático ---------- */
@@ -619,7 +648,7 @@ function coverage(rows: Cell[][], prof: Profile, required: (string | string[])[]
 }
 
 /** Qué tipos de archivo de la campaña coinciden con el libro, del más probable al menos. */
-export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode): Detection[] {
+export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode, fileName = ""): Detection[] {
   const found: Detection[] = [];
   for (const ds of getCampaign(campaign).datasets) {
     const prof = PROFILES[ds.id];
@@ -633,14 +662,16 @@ export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode): 
       continue;
     }
     const named = reader.pickSheet(prof.sheets ?? []);
-    const sheet =
-      named && findHeader(reader.rows(named), prof.required)
-        ? named
-        : prof.anySheet
-          ? (reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required)) ?? null)
-          : null;
-    if (!sheet) continue;
-    const score = (sheet === named ? 10 : 0) + prof.required.length * 2 + coverage(reader.rows(sheet), prof, prof.required) * 5;
+    const sheet = bestSheet(reader, prof);
+    if (!sheet || !findHeader(reader.rows(sheet), prof.required)) continue;
+    const rows = reader.rows(sheet);
+    // Hoja con el nombre esperado, columnas obligatorias, parecido general, columnas exclusivas y nombre del archivo.
+    const score =
+      (sheet === named ? 10 : 0) +
+      prof.required.length * 2 +
+      coverage(rows, prof, prof.required) * 5 +
+      markerHits(rows, prof) * 3 +
+      (fileName && prof.fileHint?.test(fileName) ? 15 : 0);
     found.push({ datasetId: ds.id, label: ds.label, sheet, score });
   }
   return found.sort((a, b) => b.score - a.score);
