@@ -1,6 +1,7 @@
 /* API del CRM. Todas las rutas viven bajo /api y responden JSON en español. */
 import { CAMPAIGNS, ROLES, permissionsOf, type Role } from "@crm/core";
 import { audit } from "./audit";
+import { registerCargas } from "./cargas";
 import {
   LOCK_MINUTES,
   MAX_FAILED_ATTEMPTS,
@@ -13,7 +14,7 @@ import {
 import { HttpError, Router, json, readJson, requireString } from "./http";
 import { hashPassword, passwordProblem, timingSafeEqualText, verifyPassword } from "./password";
 
-export const VERSION = "2.0.0-fase0.1";
+export const VERSION = "2.0.0-fase1";
 
 const INVALID_LOGIN = "Usuario o contraseña incorrectos.";
 
@@ -308,6 +309,8 @@ export function createApp(): Router {
     await audit(env, user.username, "clave_restablecida", `usuario:${target.username}`);
     return json({ ok: true });
   });
+
+  registerCargas(r);
 
   return r;
 }

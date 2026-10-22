@@ -50,15 +50,19 @@ interface Route {
   access: Access;
   /** Se permite aunque el usuario deba cambiar su contraseña. */
   duringPasswordChange: boolean;
+  /** Cuerpo binario (archivo) en lugar de JSON. */
+  raw: boolean;
   handler: (ctx: Ctx) => Promise<Response> | Response;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** Lee el cuerpo JSON de la petición (máximo 64 KB). */
-export async function readJson(req: Request): Promise<Record<string, unknown>> {
+/** Lee el cuerpo JSON de la petición (por defecto, máximo 64 KB). */
+export async function readJson(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > maxBytes) throw new HttpError(413, "La solicitud es demasiado grande.");
   const text = await req.text();
-  if (text.length > MAX_BODY_BYTES) throw new HttpError(413, "La solicitud es demasiado grande.");
+  if (text.length > maxBytes) throw new HttpError(413, "La solicitud es demasiado grande.");
   try {
     const value: unknown = text ? JSON.parse(text) : {};
     if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -78,7 +82,7 @@ export function requireString(body: Record<string, unknown>, key: string, label:
 export class Router {
   private routes: Route[] = [];
 
-  on(method: string, path: string, access: Access, handler: Route["handler"], opts: { duringPasswordChange?: boolean } = {}): this {
+  on(method: string, path: string, access: Access, handler: Route["handler"], opts: { duringPasswordChange?: boolean; raw?: boolean } = {}): this {
     const keys: string[] = [];
     const pattern = new RegExp(
       "^" +
@@ -88,7 +92,7 @@ export class Router {
         }) +
         "/?$",
     );
-    this.routes.push({ method, pattern, keys, access, handler, duringPasswordChange: opts.duringPasswordChange ?? false });
+    this.routes.push({ method, pattern, keys, access, handler, duringPasswordChange: opts.duringPasswordChange ?? false, raw: opts.raw ?? false });
     return this;
   }
 
@@ -102,10 +106,15 @@ export class Router {
       if (!route) throw new HttpError(405, "Método no permitido.");
 
       // Protección contra peticiones desde otros sitios (CSRF): toda escritura debe ser JSON
+      // (o, para archivos, llevar una cabecera propia que un formulario ajeno no puede poner)
       // y, si el navegador indica el origen, debe ser este mismo sitio.
       if (req.method !== "GET" && req.method !== "HEAD") {
         const ct = req.headers.get("content-type") ?? "";
-        if (!ct.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Las escrituras deben enviarse como JSON.");
+        if (route.raw) {
+          if (req.headers.get("x-crm-archivo") !== "1") throw new HttpError(400, "Falta la cabecera del archivo.");
+        } else if (!ct.toLowerCase().startsWith("application/json")) {
+          throw new HttpError(415, "Las escrituras deben enviarse como JSON.");
+        }
         const origin = req.headers.get("origin");
         if (origin && origin !== url.origin) throw new HttpError(403, "Origen no permitido.");
       }

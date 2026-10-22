@@ -1,0 +1,761 @@
+/* ==================================================================
+   LECTORES DE EXCEL — leen los archivos reales de cada campaña y los
+   convierten en filas listas para guardar.
+   Portado de la versión 1 (public/js/importers.js) sin cambiar las reglas:
+   - Nunca se inventa un dato. Si falta una columna obligatoria, la lectura
+     se detiene y se dice cuál falta.
+   - Las filas sin NIU se descartan y se reportan.
+   Tipos de archivo: base · sabana · tipif (VICI) · ventas (CRM TALK)
+   ================================================================== */
+import { getCampaign, type CampaignCode, type UploadKind } from "./campaigns";
+
+/* ---------- lo mínimo de SheetJS que se usa (se inyecta, no se importa) ---------- */
+export interface WorkBookLike {
+  SheetNames: string[];
+  Sheets: Record<string, unknown>;
+}
+export interface XLSXLike {
+  utils: { sheet_to_json(ws: unknown, opts: Record<string, unknown>): unknown[][] };
+}
+
+type Cell = unknown;
+export type RawRecord = Record<string, string | number | null>;
+
+/* ---------- utilidades ---------- */
+export function normHeader(h: unknown): string {
+  return String(h ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+const isBlank = (v: Cell) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+interface DateParts {
+  y: number;
+  m: number;
+  d: number;
+  H?: number;
+  M?: number;
+  S?: number;
+}
+
+function fromSerial(n: number): DateParts {
+  const d = new Date(Math.round((n - 25569) * 86400 * 1000));
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), H: d.getUTCHours(), M: d.getUTCMinutes(), S: d.getUTCSeconds() };
+}
+
+/** Cualquier fecha a partes {y,m,d}. dmyHint=true → "05/06/2026" es 5 de junio (reportes del banco). */
+export function dateParts(v: Cell, dmyHint = false): DateParts | null {
+  if (isBlank(v)) return null;
+  if (v instanceof Date && !isNaN(v.getTime())) return { y: v.getFullYear(), m: v.getMonth() + 1, d: v.getDate(), H: v.getHours(), M: v.getMinutes(), S: v.getSeconds() };
+  if (typeof v === "number" && v > 20000 && v < 80000) return fromSerial(v);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) return { y: +m[1]!, m: +m[2]!, d: +m[3]!, H: +(m[4] ?? 0), M: +(m[5] ?? 0), S: +(m[6] ?? 0) };
+  m = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) {
+    const a = +m[1]!,
+      b = +m[2]!;
+    let y = +m[3]!;
+    if (y < 100) y += 2000;
+    let d: number, mo: number;
+    if (dmyHint) {
+      d = a;
+      mo = b;
+      if (mo > 12 && d <= 12) [d, mo] = [mo, d];
+    } else {
+      mo = a;
+      d = b;
+      if (mo > 12 && d <= 12) [d, mo] = [mo, d];
+    }
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return { y, m: mo, d, H: +(m[4] ?? 0), M: +(m[5] ?? 0), S: +(m[6] ?? 0) };
+  }
+  return null;
+}
+
+export function toISODate(v: Cell, dmy = false): string {
+  const p = dateParts(v, dmy);
+  return p ? `${p.y}-${pad2(p.m)}-${pad2(p.d)}` : "";
+}
+function toISODateTime(v: Cell, dmy = false): string {
+  const p = dateParts(v, dmy);
+  if (!p) return "";
+  const base = `${p.y}-${pad2(p.m)}-${pad2(p.d)}`;
+  return p.H || p.M || p.S ? `${base}T${pad2(p.H ?? 0)}:${pad2(p.M ?? 0)}:${pad2(p.S ?? 0)}` : base;
+}
+function toDMY(v: Cell, dmy = false): string {
+  const p = dateParts(v, dmy);
+  return p ? `${pad2(p.d)}/${pad2(p.m)}/${p.y}` : "";
+}
+
+export function niuOf(v: Cell): string {
+  if (isBlank(v)) return "";
+  let s = String(v).trim();
+  if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, "");
+  if (/^\d+(\.\d+)?e\+?\d+$/i.test(s)) s = String(Math.round(Number(s)));
+  s = s.replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(s)) return "";
+  return s.replace(/^0+(?=\d)/, "");
+}
+function numOf(v: Cell): number | null {
+  if (isBlank(v)) return null;
+  if (typeof v === "number") return v;
+  const s = String(v)
+    .replace(/[$,\s]/g, "")
+    .replace(/^\((.*)\)$/, "-$1");
+  if (s === "" || s === "-") return null;
+  const n = Number(s.replace("%", ""));
+  return isNaN(n) ? null : s.endsWith("%") ? n / 100 : n;
+}
+function strOf(v: Cell): string {
+  if (isBlank(v)) return "";
+  if (v instanceof Date) return toISODate(v);
+  const s = String(v).trim();
+  return /^null$/i.test(s) ? "" : s; // el banco escribe "NULL" en celdas vacías
+}
+
+/* ---------- tipos de campo ---------- */
+const T = {
+  niu: (v: Cell) => niuOf(v),
+  str: (v: Cell) => strOf(v),
+  num: (v: Cell) => numOf(v),
+  int: (v: Cell) => {
+    const n = numOf(v);
+    return n == null ? null : Math.round(n);
+  },
+  iso: (v: Cell) => toISODate(v, false),
+  isoDMY: (v: Cell) => toISODate(v, true),
+  isoDateTime: (v: Cell) => toISODateTime(v, false),
+  dmy: (v: Cell) => toDMY(v, true),
+  upper: (v: Cell) => strOf(v).toUpperCase(),
+  /** fecha → ISO; si no es fecha se conserva el texto tal cual (ej. "-") */
+  isoKeep: (v: Cell) => toISODate(v, false) || strOf(v),
+  /** texto tal como viene; si Excel lo guardó como número de fecha → d/m/aaaa */
+  rawdate: (v: Cell) => (typeof v === "number" ? toDMY(v, true) : strOf(v)),
+} as const;
+type FieldType = keyof typeof T;
+type FieldSpec = [string | string[], FieldType?];
+
+interface Profile {
+  label: string;
+  sheets?: string[];
+  anySheet?: boolean;
+  required: (string | string[])[];
+  fields: Record<string, FieldSpec>;
+  /** Campo que debe tener valor para conservar la fila (por defecto NIU). */
+  keyField?: string;
+  constants?: RawRecord;
+  dashBlank?: boolean;
+  transform?: (rec: RawRecord) => void;
+  keep?: (rec: RawRecord) => boolean;
+  monthField?: string;
+  monthDMY?: boolean;
+  multiSheet?: { sheet: string; process: string; required: (string | string[])[]; extra: Record<string, FieldSpec> }[];
+}
+
+/* ---------- perfiles ---------- */
+const VICI: Profile = {
+  label: "Tipificaciones (VICI)",
+  sheets: ["Worksheet", "Hoja1", "Sheet1"],
+  anySheet: true,
+  required: ["id_base", "categoria", "tipologia", "full_name", "call_date"],
+  fields: {
+    NIU: ["id_base", "niu"],
+    Categoria: ["categoria"],
+    Tipologia: ["tipologia"],
+    Subtipologia: ["subtipologia"],
+    Agente: ["full_name"],
+    Fecha: ["call_date", "isoDateTime"],
+  },
+  transform(rec) {
+    if (!rec.Categoria) rec.Categoria = "Sin Tipificar";
+    if (!rec.Tipologia) rec.Tipologia = "Sin Tipificar";
+    if (!rec.Subtipologia) rec.Subtipologia = rec.Tipologia;
+  },
+  // Una llamada sin NIU se conserva (cuenta para contactabilidad); sin fecha se descarta.
+  keyField: "Fecha",
+  monthField: "Fecha",
+};
+
+const VENTAS_CRM: Profile = {
+  label: "Ventas (CRM TALK)",
+  sheets: ["Ventas"],
+  anySheet: true,
+  required: ["niu", "agente", ["fecha_ingreso", "fecha"]],
+  fields: {
+    NIU: ["niu", "niu"],
+    Nombre: ["nombre_solicitante"],
+    Agente: ["agente"],
+    Fecha: [["fecha_ingreso", "fecha"], "iso"],
+    FechaHora: [["fecha_ingreso"], "isoDateTime"],
+    Producto: [["tarjeta_solicitada", "producto", "tipo_producto"]],
+    Monto: [["monto_tarjeta_credito", "monto"], "num"],
+    Perfil: [["perfil_campania", "perfil"]],
+    Documentacion: [["tipo_documentacion"]],
+    EstadoBackoffice: [["tipologia"]],
+    Backoffice: [["backoffice"]],
+    IdCRM: [["id"]],
+  },
+  transform(rec) {
+    if (!rec.EstadoBackoffice) rec.EstadoBackoffice = "Sin procesar";
+  },
+  monthField: "Fecha",
+};
+
+const cols = (names: string[], niuName = "NIU", types: Record<string, FieldType> = {}): Record<string, FieldSpec> =>
+  Object.fromEntries(names.map((h) => [h, [h, h === niuName ? "niu" : (types[h] ?? "str")] as FieldSpec]));
+
+const TDC_DATE_COLS = [
+  "F INGRESO CREACION DE EMPRESA",
+  "F DE RECEPCIÓN DE DOCUMENTO(S)",
+  "F DE REINGRESO PCBM",
+  "F RESOLUCION PCBM",
+  "F EMBOZO",
+  "F DEVOLUCION",
+  "F ENTREGA",
+];
+const TDC_SABANA_COLS = [
+  "VENTA", "MES VENTA", "AÑO VENTA", "NOMBRE", "DUI OK", "Departamento", "BASE", "TC OFERTADA", "MARCA", "EJECUTIVO",
+  "CORREO ELECTRONICO", "DOCUMENTACION", "TEL. VENTA REALIZADA", "CELULAR CLIENTE", "CASO SIGMA", "PENDIENTE POR REQUISITO",
+  "SEGMENTO", "ASIGNACION", "PRI - SEG / CUENTA", "PSS", "CALIFICACION", "MARCA TDC", "FECHA VIGENCIA BASE", "VALIDADOR VIGENCIA",
+  "RECHAZO HOMOLOGADO", "DIGITOS", "GRABADAS", "ZONA", "MOTIVO DEVOLUCION/OBSERVACIONES EXTRARREQUISITO/COMENTARIO GENERAL",
+  "DETALLE DE LA DEVOLUCIÓN", "SUBETAPA", "ETAPA PRIMARIA", ...TDC_DATE_COLS,
+];
+
+export const PROFILES: Record<string, Profile> = {
+  /* ===== TDC ===== */
+  "tdc:sabana": {
+    label: "Sábana TDC (Consolidado de ventas)",
+    sheets: ["CONSOLIDADO DE VENTAS"],
+    required: ["NIU", "VENTA", "SUBETAPA", "EJECUTIVO"],
+    fields: {
+      NIU: ["NIU", "niu"],
+      ...Object.fromEntries(
+        TDC_SABANA_COLS.map((h) => [
+          h,
+          [h, h === "VENTA" ? "dmy" : h === "FECHA VIGENCIA BASE" ? "iso" : TDC_DATE_COLS.includes(h) ? "isoKeep" : h === "MES VENTA" || h === "AÑO VENTA" ? "int" : "str"] as FieldSpec,
+        ]),
+      ),
+      "CONTADOR DIAS": ["CONTADOR DIAS", "str"],
+    },
+    monthField: "VENTA",
+    monthDMY: true,
+  },
+  "tdc:base:segundas": {
+    label: "Base Segundas Cuentas (2a TDC)",
+    sheets: ["2a TDC"],
+    anySheet: true,
+    required: ["NIU", "Nombre legal según IBS"],
+    fields: {
+      NIU: ["NIU", "niu"], DUI: ["DUI"], Nombre: ["Nombre legal según IBS"], NombreEmpresa: ["Nombre empresa"], Cargo: ["Cargo"],
+      Municipio: ["Municipio"], Departamento: ["Departamento"], TelNotif: ["TelNotificaciones"], DireccionCasa: ["Dirección de Casa"],
+      DireccionTrabajo: ["Dirección Lugar de Trabajo"], TipoEmpresa: ["Tipo empresa"], Perfil: ["Perfil"], Tipo: ["Tipo"], Marca: ["Marca"],
+      Salario: ["Salario a Considerar", "num"], Edad: ["Edad", "int"], PerfilSS: ["Perfil SS"], CI: [["CI", "Condicion"]], AplicaCDC: ["Aplica CDC"],
+      TipoCDC: ["Tipo CDC"], BASE: ["BASE"], ASIGNACION: ["ASIGNACION"],
+    },
+  },
+  "tdc:base:primeras": {
+    label: "Base Primeras Cuentas (BAU)",
+    sheets: [],
+    anySheet: true,
+    dashBlank: true,
+    required: ["NIU", ["PERFIL", "Perfil"]],
+    fields: {
+      NIU: ["NIU", "niu"], DUI: ["DUI"], Municipio: ["Municipio"], Departamento: ["Departamento"], Correo: ["Correo"],
+      "TEL Notificaciones": ["TEL Notificaciones"], "Producto Principal": ["Producto Principal"], Oferta: ["Oferta"],
+      Monto2: [["Monto2", "Monto"], "num"], "Plazo (meses)": [["Plazo (meses)", "Plazo"]], Tasa2: [["Tasa2", "Tasa"]], Cuota: ["Cuota", "num"],
+      Limite: [["Limite", "Límite"], "num"], "Score Tc": ["Score Tc"], Edad: ["Edad", "int"], Genero: [["Genero", "Género"]], Marca: ["Marca"], Tipo: ["Tipo"],
+      CANAL: ["CANAL"], Estrategia: ["Estrategia"], Nombre: ["Nombre legal según IBS"], Perfil: [["PERFIL", "Perfil"]], Segmento: [["Tipo empresa", "Segmento"]],
+    },
+  },
+  "tdc:tipif": VICI,
+  "tdc:ventas": VENTAS_CRM,
+
+  /* ===== Extrafinanciamiento ===== */
+  "extrafin:sabana": {
+    label: "Sábana Extrafinanciamiento (Base + Extra Online)",
+    required: [],
+    multiSheet: [
+      { sheet: "BASE", process: "BASE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA (ADP)"], extra: { Etapa: ["ETAPA (ADP)"], Dias: ["Días en proceso", "int"], Motivo: ["MOTIVO"] } },
+      { sheet: "EXTRA ONLINE", process: "ONLINE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA"], extra: { Etapa: ["ETAPA"], Dias: ["__no__"], Motivo: ["__no__"] } },
+    ],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA VENTA", "isoDMY"], Nombre: ["Nombre del cliente"], DUI: ["DUI"], Ejecutivo: ["EJECUTIVO"],
+      Tarjeta: ["TIPO TC"], Monto: ["MONTO A DESEMBOLSAR", "num"],
+    },
+    monthField: "Fecha",
+  },
+  "extrafin:base": {
+    label: "Base Extrafinanciamiento",
+    sheets: [],
+    anySheet: true,
+    required: ["NIU", ["Perfil", "PERFIL"]],
+    fields: {
+      NIU: ["NIU", "niu"], Nombre: [["Nombre", "Nombre Completo", "Nombre legal según IBS"]], DUI: [["DUI", "Dui"]], Municipio: ["Municipio"],
+      Departamento: ["Departamento"], Correo: [["Correo", "Correo Electrónico"]], Telefono: [["TelNotificaciones", "Telefono", "Teléfono"]],
+      Perfil: [["Perfil", "PERFIL"]], Segmento: [["Segmento", "Segmento Empresa", "Tipo empresa"]], Monto: [["Monto", "Monto Oferta", "Monto Extra"], "num"],
+      Plazo: ["Plazo"], Tasa: ["Tasa"], Pago: [["Pago", "Cuota"]], Tarjeta: [["Tarjeta", "Tipo de Producto", "Tipo Tarjeta"]], Edad: ["Edad", "int"],
+      ClasifRiesgo: [["Clasificación Riesgo", "ClasifRiesgo", "Riesgo"]], AplicaCDC: ["Aplica CDC"], TipoCDC: ["Tipo CDC"], Base: [["BASE", "Base"]],
+    },
+  },
+  "extrafin:tipif": VICI,
+  "extrafin:ventas": VENTAS_CRM,
+
+  /* ===== Compra de Cartera ===== */
+  "cdc:sabana": {
+    label: "Sábana Compra de Cartera",
+    sheets: ["BASE"],
+    required: ["NIU", "FECHA VENTA", "OPERADOR", "STATUS"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA VENTA", "isoDMY"], Nombre: ["NOMBRE DEL CLIENTE"], Ejecutivo: ["OPERADOR"],
+      Monto: ["MONTO APLICADO", "num"], MontoConsolidado: ["MONTO RECIBIDO EN CONSOLIDADO", "num"], Status: ["STATUS"],
+      Base: ["BASE"], TipoCDC: ["TIPO CDC"], TipoAplicacion: ["TIPO APLICACION"], Comentarios: ["COMENTARIOS"],
+    },
+    monthField: "Fecha",
+  },
+  "cdc:base:cdc": {
+    label: "Base Compra de Cartera",
+    sheets: ["CDC"],
+    required: ["NIU", "Tipo CDC", "Perfil"],
+    fields: cols([
+      "NIU", "Premium", "DUI", "Segmento Empresa", "Tipo de Producto", "Tipo de Oferta", "TC Competencia", "Deuda Comercial", "Perfil", "Tipo CDC",
+      "Tasa CDC", "Límite CDC a trasladar", "Estatus", "Limite", "Disponible", "Genero", "Edad", "Nombre Completo", "TelNotificaciones", "Celular",
+      "BASE", "CANAL", "Probabilidad de venta CDC",
+    ]),
+  },
+  "cdc:base:bienvenida": {
+    label: "Base Bienvenida",
+    sheets: [],
+    anySheet: true,
+    required: ["Niu Cliente", "Origen de Base"],
+    keyField: "Niu Cliente",
+    fields: cols(
+      [
+        "Niu Cliente", "Portafolio", "Premium", "Segmento Empresa", "Segmento Cliente", "Domiciliación", "Origen de Base", "Producto", "Límite",
+        "Saldo Actual", "Disponible", "DUI", "Nombre Completo", "Edad", "TelNotificaciones", "Correo", "Municipio", "Perfil", "Potencial de CDC",
+        "Posee CDC", "Salario", "Fecha de Entrega", "Canal",
+      ],
+      "Niu Cliente",
+      { "Fecha de Entrega": "iso" },
+    ),
+  },
+  "cdc:tipif": VICI,
+  "cdc:ventas": VENTAS_CRM,
+
+  /* ===== UPIN ===== */
+  "upin:sabana": {
+    label: "Sábana UPIN (Incrementos + Upgrades)",
+    required: [],
+    multiSheet: [
+      { sheet: "INCREMENTOS", process: "INCREMENTO", required: ["n", "FECHA", "EJECUTIVO", "STATUS TALK AMERICA"], extra: { NIU: ["n", "niu"] } },
+      { sheet: "UPGRADES", process: "UPGRADE", required: ["B", "FECHA", "EJECUTIVO", "STATUS TALK AMERICA"], extra: { NIU: ["B", "niu"] } },
+    ],
+    fields: {
+      Fecha: ["FECHA", "iso"], Nombre: ["NOMBRE DE CLIENTE"], Ejecutivo: ["EJECUTIVO"],
+      Limite: ["LIMITE A OTORGAR", "num"], Status: ["STATUS TALK AMERICA", "upper"], Base: ["BASE"],
+    },
+    monthField: "Fecha",
+  },
+  "upin:base": {
+    label: "Base Upgrade e Incrementos",
+    sheets: ["UPIN"],
+    anySheet: true,
+    required: ["NIUCliente", "Tipo de Iniciativa"],
+    keyField: "NIUCliente",
+    fields: cols(
+      [
+        "NIUCliente", "Perfil", "Tipo de Iniciativa", "Límite Actual", "Mejor Límite", "Límite Máximo", "Clasificación Riesgo", "NombreSociedad",
+        "NumeroDUI", "Municipio", "Departamento", "Correo", "TelNotificaciones", "Tel. 1", "Cluster_TC", "Premium", "Tipo Tarjeta", "BASE",
+      ],
+      "NIUCliente",
+    ),
+  },
+  "upin:tipif": VICI,
+  "upin:ventas": VENTAS_CRM,
+
+  /* ===== Seguros ===== */
+  "seguros:sabana": {
+    label: "Sábana Seguros",
+    sheets: ["BASE"],
+    required: ["NIU", "EJECUTIVO", "STATUS", "TIPO DE SEGURO"],
+    fields: {
+      NIU: ["NIU", "niu"], Nombre: ["NOMBRE"], Ejecutivo: ["EJECUTIVO"], Fecha: ["FECHA", "isoDMY"],
+      TipoSeguro: ["TIPO DE SEGURO"], Plan: ["PLAN"], Tarjeta: ["TARJETA"], Status: ["STATUS"],
+    },
+    monthField: "Fecha",
+  },
+  "seguros:base": {
+    label: "Base Compras y Retiros Protegidos",
+    sheets: [],
+    anySheet: true,
+    required: ["NIU", "Oferta Todo Protegido"],
+    fields: cols([
+      "NIU", "Nombre", "Dui", "Edad", "Rango Ingresos", "Perfil", "Segmento Empresa", "Correo Electrónico", "TelNotificaciones", "Tel.1", "Genero",
+      "Contratacion_Seguro_Todo_Protegido", "Oferta Todo Protegido", "Cluster TC", "BASE", "Tipo de TC",
+    ]),
+  },
+  "seguros:tipif": VICI,
+  "seguros:ventas": VENTAS_CRM,
+
+  /* ===== Domiciliaciones ===== */
+  "domi:sabana": {
+    label: "Sábana Domiciliaciones",
+    sheets: ["TALK AMERICAS"],
+    required: ["NIU", "Usuarios", "COLECTOR"],
+    fields: {
+      NIU: ["NIU", "niu"], Nombre: ["NOMBRE"], Usuario: ["Usuarios"], Colector: ["COLECTOR"], Fecha: ["FECHA", "rawdate"],
+      Monto: ["MONTO A PAGAR", "str"], Status: [["COMENTARIO BANCO", "STATUS DOMI SEGUN SISTEMA", "STATUS"], "upper"],
+    },
+    monthField: "Fecha",
+    monthDMY: true,
+  },
+  "domi:base:domi": {
+    label: "Base Domiciliaciones",
+    sheets: ["Domiciliaciones", "Hoja1"],
+    anySheet: true,
+    required: ["NIU", "Colectores que paga"],
+    fields: cols([
+      "NIU", "Nombre", "DUI", "Perfil", "Segmento Empresa", "Edad", "Municipio", "Departamento", "Correo", "TelNotificaciones", "Tel.1",
+      "Domi Activa", "Colectores que paga", "Base", "Mayor Prob. Aceptación", "Limite",
+    ]),
+  },
+  "domi:base:piloto": {
+    label: "Base Piloto (mes vencido)",
+    sheets: ["Complementarios TALK"],
+    anySheet: true,
+    required: ["F. Embozo", "NIU", "Estado"],
+    fields: {
+      FEmbozo: ["F. Embozo", "iso"], Cliente: ["Cliente"], NIU: ["NIU", "niu"], Cuenta: ["Cuenta"], Telefono: ["Telefono"],
+      Telefono2: ["Telefono2"], Telefono3: ["Telefono3"], Estado: ["Estado"], Fecha: ["Fecha/Hora", "iso"], Hora: ["HORA"],
+    },
+    monthField: "FEmbozo",
+  },
+  "domi:tipif": VICI,
+  "domi:ventas": VENTAS_CRM,
+};
+
+/* ---------- lectura ---------- */
+
+/** Libro con sus hojas ya convertidas a filas (se convierte una sola vez por hoja). */
+export class WorkbookReader {
+  private cache = new Map<string, Cell[][]>();
+  constructor(
+    private XLSX: XLSXLike,
+    readonly wb: WorkBookLike,
+  ) {}
+  get sheetNames() {
+    return this.wb.SheetNames;
+  }
+  rows(sheet: string): Cell[][] {
+    let r = this.cache.get(sheet);
+    if (!r) {
+      r = this.XLSX.utils.sheet_to_json(this.wb.Sheets[sheet], { header: 1, raw: true, defval: null, blankrows: false }) as Cell[][];
+      this.cache.set(sheet, r);
+    }
+    return r;
+  }
+  pickSheet(names: string[]): string | null {
+    const want = names.map(normHeader);
+    return this.wb.SheetNames.find((sn) => want.includes(normHeader(sn))) ?? null;
+  }
+}
+
+interface HeaderHit {
+  at: number;
+  idx: Map<string, number>;
+}
+
+/** Fila de encabezados: la primera (de las 15 primeras) que tenga TODOS los obligatorios. */
+function findHeader(rows: Cell[][], required: (string | string[])[]): HeaderHit | null {
+  const req = required.map((r) => (Array.isArray(r) ? r.map(normHeader) : [normHeader(r)]));
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const idx = new Map<string, number>();
+    (rows[i] ?? []).forEach((c, j) => {
+      const k = normHeader(c);
+      if (k && !idx.has(k)) idx.set(k, j);
+    });
+    if (req.every((alts) => alts.some((a) => idx.has(a)))) return { at: i, idx };
+  }
+  return null;
+}
+
+export interface ParseResult {
+  rows: RawRecord[];
+  /** Filas descartadas por no tener NIU (o fecha, en VICI). */
+  dropped: number;
+  sheet: string;
+  /** Columnas opcionales que el archivo no trae. */
+  missingOptional: string[];
+}
+export type ParseOutcome = ParseResult | { error: string };
+
+const labelOf = (r: string | string[]) => (Array.isArray(r) ? r[0]! : r);
+
+function readWithProfile(reader: WorkbookReader, prof: Profile, sheet: string): ParseOutcome {
+  const rows = reader.rows(sheet);
+  const hdr = findHeader(rows, prof.required);
+  if (!hdr) return { error: `En la hoja "${sheet}" no encontré los encabezados obligatorios: ${prof.required.map(labelOf).join(", ")}.` };
+
+  const colOf: Record<string, number> = {};
+  const missingOptional: string[] = [];
+  for (const [dest, spec] of Object.entries(prof.fields)) {
+    const cands = (Array.isArray(spec[0]) ? spec[0] : [spec[0]]).map(normHeader);
+    const found = cands.find((c) => hdr.idx.has(c));
+    if (found !== undefined) colOf[dest] = hdr.idx.get(found)!;
+    else if (spec[0] !== "__no__") missingOptional.push(dest);
+  }
+
+  const out: RawRecord[] = [];
+  let dropped = 0;
+  const key = prof.keyField ?? "NIU";
+  for (let i = hdr.at + 1; i < rows.length; i++) {
+    const r = rows[i] ?? [];
+    if (r.every(isBlank)) continue;
+    const rec: RawRecord = {};
+    for (const [dest, spec] of Object.entries(prof.fields)) {
+      const type = spec[1] ?? "str";
+      const raw = colOf[dest] === undefined ? null : r[colOf[dest]!];
+      let val: string | number | null = T[type](raw);
+      if (prof.dashBlank && (val === "-" || val === "--")) val = "";
+      rec[dest] = val === null ? (type === "num" || type === "int" ? null : "") : val;
+    }
+    if (prof.constants) Object.assign(rec, prof.constants);
+    prof.transform?.(rec);
+    if (!rec[key] || (prof.keep && !prof.keep(rec))) {
+      dropped++;
+      continue;
+    }
+    out.push(rec);
+  }
+  return { rows: out, dropped, sheet, missingOptional };
+}
+
+/** Lee un libro con el perfil del conjunto de datos indicado (p. ej. "tdc:sabana"). */
+export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseOutcome {
+  const prof = PROFILES[datasetId];
+  if (!prof) return { error: `Tipo de archivo desconocido: ${datasetId}` };
+
+  if (prof.multiSheet) {
+    const all: RawRecord[] = [];
+    let dropped = 0;
+    const used: string[] = [];
+    for (const part of prof.multiSheet) {
+      const sn = reader.pickSheet([part.sheet]);
+      if (!sn) continue;
+      const sub: Profile = { ...prof, required: part.required, fields: { ...prof.fields, ...part.extra }, constants: { Proceso: part.process } };
+      const r = readWithProfile(reader, sub, sn);
+      if ("error" in r) return r;
+      all.push(...r.rows);
+      dropped += r.dropped;
+      used.push(sn);
+    }
+    if (!used.length) return { error: `No encontré las hojas ${prof.multiSheet.map((p) => `"${p.sheet}"`).join(" ni ")} en el archivo.` };
+    return { rows: all, dropped, sheet: used.join(" + "), missingOptional: [] };
+  }
+
+  let sn = reader.pickSheet(prof.sheets ?? []);
+  if (!sn && prof.anySheet) sn = reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required)) ?? null;
+  if (!sn) {
+    return {
+      error: `No encontré la hoja esperada (${(prof.sheets ?? []).join(", ") || "con los encabezados correctos"}). Hojas del archivo: ${reader.sheetNames.join(", ")}.`,
+    };
+  }
+  return readWithProfile(reader, prof, sn);
+}
+
+/* ---------- reconocimiento automático ---------- */
+
+export interface Detection {
+  datasetId: string;
+  label: string;
+  sheet: string;
+  /** Más alto = más seguro. Coincidir el nombre de la hoja pesa más que solo los encabezados. */
+  score: number;
+}
+
+/** Qué parte de las columnas del perfil trae la hoja (0 a 1): desempata perfiles parecidos. */
+function coverage(rows: Cell[][], prof: Profile, required: (string | string[])[]): number {
+  const hdr = findHeader(rows, required);
+  if (!hdr) return 0;
+  const specs = Object.values(prof.fields).filter((s) => s[0] !== "__no__");
+  const hit = specs.filter((s) => (Array.isArray(s[0]) ? s[0] : [s[0]]).some((c) => hdr.idx.has(normHeader(c)))).length;
+  return specs.length ? hit / specs.length : 0;
+}
+
+/** Qué tipos de archivo de la campaña coinciden con el libro, del más probable al menos. */
+export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode): Detection[] {
+  const found: Detection[] = [];
+  for (const ds of getCampaign(campaign).datasets) {
+    const prof = PROFILES[ds.id];
+    if (!prof) continue;
+    if (prof.multiSheet) {
+      const parts = prof.multiSheet.filter((p) => {
+        const sn = reader.pickSheet([p.sheet]);
+        return sn && findHeader(reader.rows(sn), p.required);
+      });
+      if (parts.length) found.push({ datasetId: ds.id, label: ds.label, sheet: parts.map((p) => p.sheet).join(" + "), score: 20 + parts.length * 5 });
+      continue;
+    }
+    const named = reader.pickSheet(prof.sheets ?? []);
+    const sheet =
+      named && findHeader(reader.rows(named), prof.required)
+        ? named
+        : prof.anySheet
+          ? (reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required)) ?? null)
+          : null;
+    if (!sheet) continue;
+    const score = (sheet === named ? 10 : 0) + prof.required.length * 2 + coverage(reader.rows(sheet), prof, prof.required) * 5;
+    found.push({ datasetId: ds.id, label: ds.label, sheet, score });
+  }
+  return found.sort((a, b) => b.score - a.score);
+}
+
+/** Mes (AAAA-MM) más frecuente en los registros, para sugerir el mes de la carga. */
+export function dominantMonth(rows: RawRecord[], datasetId: string): { month: string; share: number; byMonth: Record<string, number> } | null {
+  const prof = PROFILES[datasetId];
+  const f = prof?.monthField;
+  if (!f || !rows.length) return null;
+  const count: Record<string, number> = {};
+  for (const r of rows) {
+    const p = dateParts(r[f], Boolean(prof.monthDMY));
+    if (p) {
+      const k = `${p.y}-${pad2(p.m)}`;
+      count[k] = (count[k] ?? 0) + 1;
+    }
+  }
+  const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  return best ? { month: best[0], share: best[1] / rows.length, byMonth: count } : null;
+}
+
+/* ---------- normalización a las tablas de la base ---------- */
+
+type Extra = Record<string, string | number>;
+export interface BaseRow {
+  niu: string;
+  profile: string | null;
+  offer: string | null;
+  extra: Extra;
+}
+export interface SaleRow {
+  niu: string;
+  process: string | null;
+  saleDate: string | null;
+  executive: string | null;
+  statusRaw: string | null;
+  reason: string | null;
+  daysInProcess: number | null;
+  amount: number | null;
+  extra: Extra;
+}
+export interface CallRow {
+  niu: string;
+  agent: string | null;
+  calledAt: string | null;
+  category: string | null;
+  tipologia: string | null;
+  extra: Extra;
+}
+export interface CrmRow {
+  niu: string;
+  agent: string | null;
+  enteredAt: string | null;
+  product: string | null;
+  extra: Extra;
+}
+export type NormalizedRow = BaseRow | SaleRow | CallRow | CrmRow;
+
+/** Qué columna del archivo alimenta cada campo de la tabla, por conjunto de datos. */
+interface SaleMap {
+  status: string;
+  date: string;
+  dateDMY?: boolean;
+  executive: string;
+  reason?: string;
+  days?: string;
+  amount?: string;
+  process?: string;
+}
+const SALE_MAP: Record<CampaignCode, SaleMap> = {
+  tdc: { status: "SUBETAPA", date: "VENTA", dateDMY: true, executive: "EJECUTIVO", reason: "RECHAZO HOMOLOGADO", days: "CONTADOR DIAS" },
+  extrafin: { status: "Etapa", date: "Fecha", executive: "Ejecutivo", reason: "Motivo", days: "Dias", amount: "Monto", process: "Proceso" },
+  cdc: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Monto" },
+  upin: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Limite", process: "Proceso" },
+  seguros: { status: "Status", date: "Fecha", executive: "Ejecutivo" },
+  domi: { status: "Status", date: "Fecha", dateDMY: true, executive: "Usuario" },
+};
+const BASE_MAP: Record<string, { niu?: string; profile?: string; offer?: string }> = {
+  "tdc:base:primeras": { profile: "Perfil", offer: "Oferta" },
+  "tdc:base:segundas": { profile: "Perfil", offer: "Tipo" },
+  "extrafin:base": { profile: "Perfil", offer: "Tarjeta" },
+  "cdc:base:cdc": { profile: "Perfil", offer: "Tipo CDC" },
+  "cdc:base:bienvenida": { niu: "Niu Cliente", profile: "Perfil", offer: "Producto" },
+  "upin:base": { niu: "NIUCliente", profile: "Perfil", offer: "Tipo de Iniciativa" },
+  "seguros:base": { profile: "Perfil", offer: "Oferta Todo Protegido" },
+  "domi:base:domi": { profile: "Perfil", offer: "Colectores que paga" },
+  "domi:base:piloto": { offer: "Estado" },
+};
+
+const text = (v: unknown): string | null => (v === null || v === undefined || v === "" ? null : String(v));
+const intOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(String(v).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** Todo lo que el archivo trae y no tiene columna propia, sin celdas vacías. */
+function extraOf(rec: RawRecord, used: (string | undefined)[]): Extra {
+  const skip = new Set(used.filter(Boolean));
+  const out: Extra = {};
+  for (const [k, v] of Object.entries(rec)) if (!skip.has(k) && v !== null && v !== "") out[k] = v;
+  return out;
+}
+
+export function normalizeRow(datasetId: string, kind: UploadKind, campaign: CampaignCode, rec: RawRecord): NormalizedRow {
+  switch (kind) {
+    case "base": {
+      const m = BASE_MAP[datasetId] ?? { profile: "Perfil" };
+      const niuKey = m.niu ?? "NIU";
+      return { niu: String(rec[niuKey] ?? ""), profile: m.profile ? text(rec[m.profile]) : null, offer: m.offer ? text(rec[m.offer]) : null, extra: extraOf(rec, [niuKey, m.profile, m.offer]) };
+    }
+    case "sabana": {
+      const m = SALE_MAP[campaign];
+      return {
+        niu: String(rec.NIU ?? ""),
+        process: m.process ? text(rec[m.process]) : null,
+        saleDate: toISODate(rec[m.date], m.dateDMY) || null,
+        executive: text(rec[m.executive]),
+        statusRaw: text(rec[m.status]),
+        reason: m.reason ? text(rec[m.reason]) : null,
+        daysInProcess: m.days ? intOrNull(rec[m.days]) : null,
+        amount: m.amount ? numOrNull(rec[m.amount]) : null,
+        extra: extraOf(rec, ["NIU", m.process, m.executive, m.status, m.reason, m.days, m.amount]),
+      };
+    }
+    case "tipif":
+      return {
+        niu: String(rec.NIU ?? ""),
+        agent: text(rec.Agente),
+        calledAt: text(rec.Fecha),
+        category: text(rec.Categoria),
+        tipologia: text(rec.Tipologia),
+        extra: extraOf(rec, ["NIU", "Agente", "Fecha", "Categoria", "Tipologia"]),
+      };
+    case "ventas":
+      return {
+        niu: String(rec.NIU ?? ""),
+        agent: text(rec.Agente),
+        enteredAt: text(rec.FechaHora) ?? text(rec.Fecha),
+        product: text(rec.Producto),
+        extra: extraOf(rec, ["NIU", "Agente", "FechaHora", "Fecha", "Producto"]),
+      };
+  }
+}
+
+/** Campos que nunca se muestran en la vista previa (información sensible). */
+export const PREVIEW_HIDDEN: Record<string, string[]> = { "domi:sabana": ["Monto"] };

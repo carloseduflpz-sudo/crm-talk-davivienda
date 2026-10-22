@@ -64,6 +64,43 @@ export interface UserAccount {
   createdAt: number;
 }
 
+export interface UploadInfo {
+  id: string;
+  campaign: string;
+  dataset: string;
+  kind: "base" | "sabana" | "tipif" | "ventas";
+  month: string;
+  version: number;
+  isCurrent: boolean;
+  status: "validando" | "vigente" | "reemplazada" | "descartada";
+  fileName: string;
+  hasFile: boolean;
+  rowsTotal: number;
+  rowsValid: number;
+  rowsDiscarded: number;
+  createdBy: string;
+  createdAt: number;
+}
+
+/** Sube el Excel original como respaldo (cuerpo binario, no JSON). */
+async function putFile(id: string, file: File): Promise<void> {
+  const res = await fetch(`/api/cargas/${id}/archivo`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "content-type": file.type || "application/octet-stream", "x-crm-archivo": "1" },
+    body: file,
+  });
+  if (!res.ok) {
+    let msg = `Error ${res.status}`;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? msg;
+    } catch {
+      // sin JSON
+    }
+    throw new ApiError(msg, res.status);
+  }
+}
+
 export const api = {
   health: () => get<Health>("/health"),
   me: () => get<Me>("/me"),
@@ -79,4 +116,13 @@ export const api = {
   createUser: (b: { username: string; displayName: string; role: Role; password: string }) => post("/usuarios", b),
   updateUser: (id: number, b: Partial<{ displayName: string; role: Role; active: boolean; unlock: boolean }>) => patch(`/usuarios/${id}`, b),
   resetPassword: (id: number, password: string) => post(`/usuarios/${id}/clave`, { password }),
+
+  uploads: (campaign?: string) => get<{ uploads: UploadInfo[] }>(`/cargas${campaign ? `?campana=${campaign}` : ""}`).then((r) => r.uploads),
+  createUpload: (b: { campaign: string; dataset: string; month: string; fileName: string; fileSha256: string; rowsTotal: number; rowsValid: number; rowsDiscarded: number }) =>
+    post<{ id: string; version: number; maxRowsPerChunk: number }>("/cargas", b),
+  sendRows: (id: string, seq: number, rows: unknown[]) => post<{ duplicate?: boolean }>(`/cargas/${id}/filas`, { seq, rows }),
+  putFile,
+  confirmUpload: (id: string) => post<{ upload: UploadInfo }>(`/cargas/${id}/confirmar`),
+  discardUpload: (id: string) => post(`/cargas/${id}/descartar`),
+  activateUpload: (id: string) => post(`/cargas/${id}/activar`),
 };

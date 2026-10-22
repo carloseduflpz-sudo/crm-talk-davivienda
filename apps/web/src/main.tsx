@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { FileText, Search, ShieldAlert, Sparkles, Upload } from "lucide-react";
+import { FileText, Search, ShieldAlert, Sparkles } from "lucide-react";
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
@@ -12,6 +12,7 @@ import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { Placeholder } from "./pages/Placeholder";
 import { Settings } from "./pages/Settings";
+import { Upload } from "./pages/Upload";
 import { Users } from "./pages/Users";
 import "./styles.css";
 
@@ -32,6 +33,9 @@ queryClient.getQueryCache().subscribe((e) => {
     void queryClient.invalidateQueries({ queryKey: ["me"] });
   }
 });
+
+/* Un archivo soltado fuera de una zona de carga no debe abrirse ni descargarse en el navegador. */
+for (const type of ["dragover", "drop"] as const) window.addEventListener(type, (e) => e.preventDefault());
 
 /** Muestra el login si no hay sesión y la pantalla de cambio de contraseña si es obligatoria. */
 function SessionGate({ children }: { children: ReactNode }) {
@@ -81,14 +85,7 @@ const router = createBrowserRouter([
           </Placeholder>
         ),
       },
-      {
-        path: "carga",
-        element: (
-          <Placeholder title="Centro de carga" subtitle="Sábanas, bases, tipificaciones y ventas de cada mes." icon={Upload} phase="Fase 1">
-            Arrastras el Excel, la app valida columnas, muestra una vista previa y las diferencias contra la versión anterior antes de guardar.
-          </Placeholder>
-        ),
-      },
+      { path: "carga", element: <Upload /> },
       {
         path: "reportes",
         element: (

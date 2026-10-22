@@ -146,6 +146,8 @@ export const uploads = sqliteTable(
     rowsTotal: integer("rows_total").notNull().default(0),
     rowsValid: integer("rows_valid").notNull().default(0),
     rowsDiscarded: integer("rows_discarded").notNull().default(0),
+    /** Lotes de filas ya recibidos (evita duplicar un lote reenviado). */
+    chunksReceived: integer("chunks_received").notNull().default(0),
     createdBy: text("created_by").notNull(),
     createdAt: integer("created_at").notNull().default(now),
   },

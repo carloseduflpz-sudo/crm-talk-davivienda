@@ -1,6 +1,6 @@
 import { getCampaign, isCampaignCode } from "@crm/core";
 import { BarChart3, Database, PhoneCall, Target, TrendingUp } from "lucide-react";
-import { NavLink, Navigate, useParams } from "react-router";
+import { Link, NavLink, Navigate, useParams } from "react-router";
 import { EmptyState, PageHeader } from "../components/ui";
 
 export const CAMPAIGN_TABS = [
@@ -41,9 +41,12 @@ export function Campaign() {
           </NavLink>
         ))}
       </div>
-      <EmptyState icon={current.icon} title={`${current.label}: llega en la Fase 2`}>
-        Se alimenta de: <strong className="font-medium text-slate-700 dark:text-slate-200">{needed.join(", ")}</strong>. Cuando esos archivos estén cargados en el
-        Centro de carga (Fase 1), aquí aparecen los análisis.
+      <EmptyState icon={current.icon} title={`${current.label}: los análisis llegan en la Fase 2`}>
+        Se alimenta de: <strong className="font-medium text-slate-700 dark:text-slate-200">{needed.join(", ")}</strong>. Ya puedes cargar esos archivos en el{" "}
+        <Link to={`/carga?campana=${code}`} className="font-medium text-brand-600 hover:underline">
+          Centro de carga
+        </Link>
+        .
       </EmptyState>
     </>
   );
