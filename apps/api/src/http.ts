@@ -139,7 +139,20 @@ export class Router {
     } catch (err) {
       if (err instanceof HttpError) return json({ ok: false, error: err.message, ...err.extra }, err.status);
       console.error("API error", err);
-      return json({ ok: false, error: "Error interno. Ya quedó registrado; intenta de nuevo." }, 500);
+      const detail = err instanceof Error ? err.message : String(err);
+      // Límites de Cloudflare D1 (filas escritas por día, tamaño, tiempo): se explica qué pasó en vez de un error genérico.
+      if (/D1|SQLITE/i.test(detail) && /exceed|limit|quota|too (many|big|large)|reset because/i.test(detail)) {
+        return json(
+          {
+            ok: false,
+            code: "limite_cloudflare",
+            error: "Cloudflare rechazó la operación por un límite de la base de datos (en el plan gratuito: 100 000 filas escritas por día). Revisa el plan de Workers en Cloudflare.",
+            detail: detail.slice(0, 300),
+          },
+          503,
+        );
+      }
+      return json({ ok: false, error: "Error interno. Ya quedó registrado; intenta de nuevo.", detail: detail.slice(0, 300) }, 500);
     }
   }
 }

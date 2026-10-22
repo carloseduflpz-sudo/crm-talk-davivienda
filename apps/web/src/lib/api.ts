@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { DatasetDef, Permission, Role } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, Permission, Role } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -24,7 +24,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   } catch {
     // respuesta sin JSON
   }
-  if (!res.ok) throw new ApiError(typeof data.error === "string" ? data.error : `Error ${res.status}`, res.status, data);
+  if (!res.ok) {
+    if (typeof data.error === "string") throw new ApiError(data.error, res.status, data);
+    // Sin JSON: la respuesta la cortó Cloudflare antes de llegar a la app (por ejemplo, límite de tiempo de CPU).
+    throw new ApiError(
+      res.status >= 500 ? `Cloudflare cortó la petición antes de terminar (error ${res.status}). Suele pasar cuando se excede un límite del plan.` : `Error ${res.status}`,
+      res.status,
+      data,
+    );
+  }
   return data as T;
 }
 
@@ -125,4 +133,8 @@ export const api = {
   confirmUpload: (id: string) => post<{ upload: UploadInfo }>(`/cargas/${id}/confirmar`),
   discardUpload: (id: string) => post(`/cargas/${id}/descartar`),
   activateUpload: (id: string) => post(`/cargas/${id}/activar`),
+
+  analysis: (campaign: string, month?: string | null) =>
+    get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${month ? `?mes=${month}` : ""}`).then((r) => r.analysis),
+  setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null }) => request("PUT", "/metas", b),
 };

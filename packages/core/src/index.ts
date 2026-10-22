@@ -4,3 +4,5 @@ export * from "./text";
 export * from "./tipologias";
 export * from "./roles";
 export * from "./importers";
+export * from "./analysis";
+export * from "./lectura";

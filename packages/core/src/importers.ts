@@ -568,6 +568,21 @@ export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseO
   return readWithProfile(reader, prof, sn);
 }
 
+/** Hojas que `parseWorkbook` va a leer para ese tipo de archivo. Basta con los encabezados, así que
+    funciona con un libro abierto solo con sus primeras filas: después se lee completo SOLO lo necesario. */
+export function neededSheets(reader: WorkbookReader, datasetId: string): string[] {
+  const prof = PROFILES[datasetId];
+  if (!prof) return [];
+  if (prof.multiSheet) return prof.multiSheet.map((p) => reader.pickSheet([p.sheet])).filter((s): s is string => Boolean(s));
+  const named = reader.pickSheet(prof.sheets ?? []);
+  if (named) return [named];
+  if (prof.anySheet) {
+    const found = reader.sheetNames.find((cand) => findHeader(reader.rows(cand), prof.required));
+    return found ? [found] : [];
+  }
+  return [];
+}
+
 /* ---------- reconocimiento automático ---------- */
 
 export interface Detection {

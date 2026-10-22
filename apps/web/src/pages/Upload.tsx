@@ -1,51 +1,26 @@
 /* Centro de carga: arrastrar el Excel → la app lo reconoce y lo valida → vista previa →
    se guarda por lotes con versión, sin borrar la versión anterior. */
-import {
-  CAMPAIGNS,
-  PREVIEW_HIDDEN,
-  WorkbookReader,
-  detectDatasets,
-  dominantMonth,
-  getCampaign,
-  isCampaignCode,
-  normalizeRow,
-  parseWorkbook,
-  type CampaignCode,
-  type Detection,
-  type NormalizedRow,
-  type UploadKind,
-} from "@crm/core";
+import { CAMPAIGNS, PREVIEW_HIDDEN, getCampaign, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, CloudUpload, Download, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
-import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router";
 import { Button, ErrorMessage } from "../components/form";
 import { Badge, Card, PageHeader } from "../components/ui";
 import { ApiError, api, type UploadInfo } from "../lib/api";
-import { loadXLSX, monthLabel, sha256Hex, type XLSXLib } from "../lib/xlsx";
+import { ExcelReader, ReadCancelled } from "../lib/excel";
+import { monthLabel } from "../lib/xlsx";
 
 const ACCEPT = ".xlsx,.xlsb,.xls,.csv";
-/* Lotes moderados: cada uno es una petición corta, dentro de los límites de Cloudflare. */
-const MAX_CHUNK_ROWS = 500;
-const MAX_CHUNK_CHARS = 700_000;
 const MAX_BACKUP_BYTES = 60 * 1024 * 1024;
 
-interface Analysis {
+/** Lo que devolvió el lector en segundo plano, más el archivo y su huella. */
+interface Analysis extends ExcelReading {
   file: File;
   sha: string;
-  reader: WorkbookReader;
-  detections: Detection[];
-  datasetId: string | null;
-  error: string | null;
-  rows: NormalizedRow[];
-  raw: Record<string, unknown>[];
-  dropped: number;
-  sheet: string;
-  missingOptional: string[];
-  month: { month: string; share: number; byMonth: Record<string, number> } | null;
 }
 
-type Phase = { name: "idle" } | { name: "reading"; fileName: string } | { name: "ready" } | { name: "saving"; done: number; total: number; step: string } | { name: "done"; upload: UploadInfo; warning?: string };
+type Phase = { name: "idle" } | { name: "reading"; fileName: string; step: string } | { name: "ready" } | { name: "saving"; done: number; total: number; step: string } | { name: "done"; upload: UploadInfo; warning?: string };
 
 const fmt = new Intl.NumberFormat("es-SV");
 const fmtDate = (ms: number) => new Intl.DateTimeFormat("es-SV", { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms));
@@ -54,48 +29,6 @@ const datasetLabel = (id: string) => {
   const [c] = id.split(":");
   return (isCampaignCode(c ?? "") ? getCampaign(c as CampaignCode).datasets.find((d) => d.id === id)?.label : null) ?? id;
 };
-
-function analyze(reader: WorkbookReader, campaign: CampaignCode, datasetId: string | null, file: File, sha: string, detections: Detection[]): Analysis {
-  const base = { file, sha, reader, detections, datasetId, rows: [], raw: [], dropped: 0, sheet: "", missingOptional: [], month: null };
-  if (!datasetId) {
-    return {
-      ...base,
-      error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Revisa que sea el archivo correcto o elige el tipo a mano.`,
-    };
-  }
-  const res = parseWorkbook(reader, datasetId);
-  if ("error" in res) return { ...base, error: res.error };
-  const kind = getCampaign(campaign).datasets.find((d) => d.id === datasetId)!.kind as UploadKind;
-  return {
-    ...base,
-    error: res.rows.length ? null : "El archivo no tiene filas válidas: todas están vacías o sin NIU.",
-    rows: res.rows.map((r) => normalizeRow(datasetId, kind, campaign, r)),
-    raw: res.rows,
-    dropped: res.dropped,
-    sheet: res.sheet,
-    missingOptional: res.missingOptional,
-    month: dominantMonth(res.rows, datasetId),
-  };
-}
-
-/** Lotes de hasta 500 filas y ~700 KB. */
-function chunk(rows: NormalizedRow[]): NormalizedRow[][] {
-  const out: NormalizedRow[][] = [];
-  let cur: NormalizedRow[] = [];
-  let chars = 0;
-  for (const r of rows) {
-    const size = JSON.stringify(r).length + 1;
-    if (cur.length && (cur.length >= MAX_CHUNK_ROWS || chars + size > MAX_CHUNK_CHARS)) {
-      out.push(cur);
-      cur = [];
-      chars = 0;
-    }
-    cur.push(r);
-    chars += size;
-  }
-  if (cur.length) out.push(cur);
-  return out;
-}
 
 async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   for (let i = 1; ; i++) {
@@ -192,7 +125,7 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
     setError("");
     try {
       await fn();
-      await qc.invalidateQueries({ queryKey: ["uploads"] });
+      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] })]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo completar la acción.");
     } finally {
@@ -300,9 +233,18 @@ export function Upload() {
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const xlsxRef = useRef<XLSXLib | null>(null);
+  const excelRef = useRef<ExcelReader | null>(null);
+
+  // Al salir de la pantalla se cierra el lector y se libera su memoria.
+  useEffect(() => () => excelRef.current?.close(), []);
+
+  const closeReader = () => {
+    excelRef.current?.close();
+    excelRef.current = null;
+  };
 
   const reset = () => {
+    closeReader();
     setPhase({ name: "idle" });
     setAnalysis(null);
     setError("");
@@ -322,32 +264,45 @@ export function Upload() {
         setError("Ese archivo no es un Excel. Usa .xlsx, .xlsb, .xls o .csv.");
         return;
       }
-      setPhase({ name: "reading", fileName: file.name });
+      // Un lector nuevo por archivo; el anterior se cierra y suelta su memoria.
+      closeReader();
+      const excel = new ExcelReader();
+      excelRef.current = excel;
+      const onStep = (step: string) => setPhase({ name: "reading", fileName: file.name, step });
+      onStep("Abriendo el archivo…");
       try {
-        const XLSX = (xlsxRef.current ??= await loadXLSX());
-        const buf = await file.arrayBuffer();
-        await new Promise((r) => setTimeout(r, 30)); // deja que se pinte el estado "Leyendo…"
-        const [sha, wb] = await Promise.all([sha256Hex(buf), Promise.resolve(XLSX.read(buf, { type: "array", cellDates: false }))]);
-        const reader = new WorkbookReader(XLSX, wb);
-        const detections = detectDatasets(reader, campaign);
-        const a = analyze(reader, campaign, detections[0]?.datasetId ?? null, file, sha, detections);
-        setAnalysis(a);
-        setMonth(a.month?.month ?? currentMonth());
+        const { result, sha } = await excel.open(file, campaign, onStep);
+        setAnalysis({ ...result, file, sha });
+        setMonth(result.month?.month ?? currentMonth());
         setPhase({ name: "ready" });
       } catch (e) {
+        if (e instanceof ReadCancelled) return;
         console.error(e);
-        setError("No pude leer el archivo. Si está protegido con contraseña o abierto en Excel, ciérralo y vuelve a intentarlo.");
+        closeReader();
+        setError(e instanceof Error ? e.message : "No pude leer el archivo.");
         setPhase({ name: "idle" });
       }
     },
     [campaign],
   );
 
-  const changeType = (datasetId: string) => {
-    if (!analysis) return;
-    const a = analyze(analysis.reader, campaign, datasetId, analysis.file, analysis.sha, analysis.detections);
-    setAnalysis(a);
-    setMonth(a.month?.month ?? month);
+  const changeType = async (datasetId: string) => {
+    const prev = analysis;
+    const excel = excelRef.current;
+    if (!prev || !excel) return;
+    setError("");
+    const onStep = (step: string) => setPhase({ name: "reading", fileName: prev.file.name, step });
+    onStep("Leyendo el archivo como " + datasetLabel(datasetId) + "…");
+    try {
+      const result = await excel.analyze(datasetId, onStep);
+      setAnalysis({ ...result, file: prev.file, sha: prev.sha });
+      setMonth(result.month?.month ?? month);
+      setPhase({ name: "ready" });
+    } catch (e) {
+      if (e instanceof ReadCancelled) return;
+      setError(e instanceof Error ? e.message : "No pude leer el archivo.");
+      setPhase({ name: "ready" });
+    }
   };
 
   const onDrop = (e: DragEvent) => {
@@ -365,7 +320,7 @@ export function Upload() {
   const save = async () => {
     if (!analysis?.datasetId) return;
     const a = analysis;
-    const chunks = chunk(a.rows);
+    const chunks = a.chunkEnds.map((end, i) => a.rows.slice(i ? a.chunkEnds[i - 1] : 0, end));
     let uploadId: string | null = null;
     setError("");
     try {
@@ -401,7 +356,8 @@ export function Upload() {
       }
       setPhase({ name: "saving", done, total: a.rows.length, step: "Verificando y activando la versión…" });
       const { upload } = await api.confirmUpload(c.id);
-      await qc.invalidateQueries({ queryKey: ["uploads"] });
+      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] })]);
+      closeReader(); // ya no hace falta el archivo en memoria
       setPhase({ name: "done", upload, warning });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "No se pudo guardar.";
@@ -445,7 +401,7 @@ export function Upload() {
       {canUpload && phase.name !== "done" && (
         <Card className="mb-6">
           {/* Zona para soltar */}
-          {(phase.name === "idle" || phase.name === "reading") && (
+          {(phase.name === "idle" || (phase.name === "reading" && !analysis)) && (
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -461,8 +417,21 @@ export function Upload() {
               {phase.name === "reading" ? (
                 <>
                   <LoaderCircle className="mb-3 size-10 animate-spin text-brand-500" aria-hidden />
-                  <p className="font-medium">Leyendo {phase.fileName}…</p>
-                  <p className="mt-1 text-sm text-slate-500">Los archivos grandes pueden tardar unos segundos.</p>
+                  <p className="font-medium break-all">{phase.fileName}</p>
+                  <p className="mt-1 text-sm text-slate-500" aria-live="polite">
+                    {phase.step}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">La pantalla sigue respondiendo. Si sales del Centro de carga, la lectura se cancela.</p>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      reset();
+                    }}
+                    className="mt-4 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"
+                  >
+                    Cancelar
+                  </button>
                 </>
               ) : (
                 <>
@@ -489,7 +458,7 @@ export function Upload() {
           {error && phase.name === "idle" && <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div>}
 
           {/* Resultado de la lectura */}
-          {analysis && (phase.name === "ready" || phase.name === "saving") && (
+          {analysis && (phase.name === "ready" || phase.name === "saving" || phase.name === "reading") && (
             <div className="space-y-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -517,9 +486,9 @@ export function Upload() {
                   </label>
                   <select
                     id="tipo"
-                    disabled={phase.name === "saving"}
+                    disabled={phase.name !== "ready"}
                     value={analysis.datasetId ?? ""}
-                    onChange={(e) => changeType(e.target.value)}
+                    onChange={(e) => void changeType(e.target.value)}
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                   >
                     {!analysis.datasetId && <option value="">Elige el tipo…</option>}
@@ -556,7 +525,7 @@ export function Upload() {
                 </div>
               </div>
 
-              {analysis.error ? (
+              {phase.name === "reading" ? null : analysis.error ? (
                 <ErrorMessage>{analysis.error}</ErrorMessage>
               ) : (
                 <>
@@ -601,7 +570,11 @@ export function Upload() {
 
               {error && <ErrorMessage>{error}</ErrorMessage>}
 
-              {phase.name === "saving" ? (
+              {phase.name === "reading" ? (
+                <p className="flex items-center gap-2 text-sm text-slate-500" aria-live="polite">
+                  <LoaderCircle className="size-4 animate-spin text-brand-500" aria-hidden /> {phase.step}
+                </p>
+              ) : phase.name === "saving" ? (
                 <div>
                   <div className="mb-2 flex justify-between text-sm">
                     <span className="font-medium">{phase.step}</span>

@@ -27,10 +27,12 @@ function sample(header: string, type: string | undefined, i: number): unknown {
   return `${header} ${i}`;
 }
 
-/** Libro de Excel con la hoja y encabezados que espera el perfil, más una fila sin NIU. */
-export function workbookFor(datasetId: string) {
+/** Bytes de un libro de Excel con la hoja y encabezados que espera el perfil, más una fila sin NIU.
+    `rowsPerSheet` agrega filas; `extraSheet` agrega una hoja ajena al perfil (como las tablas dinámicas de los archivos reales). */
+export function workbookBytes(datasetId: string, opts: { bookType?: "xlsx" | "xlsb"; rowsPerSheet?: number; extraSheet?: boolean } = {}): Uint8Array {
   const prof = PROFILES[datasetId]!;
   const wb = XLSX.utils.book_new();
+  if (opts.extraSheet) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Resumen"], ["Total", 1], ...Array.from({ length: 300 }, (_, i) => [`Fila ${i}`, i])]), "Resumen");
   const parts = prof.multiSheet
     ? prof.multiSheet.map((p) => ({ sheet: p.sheet, fields: { ...prof.fields, ...p.extra } }))
     : [{ sheet: prof.sheets?.[0] ?? "Hoja1", fields: prof.fields }];
@@ -38,12 +40,14 @@ export function workbookFor(datasetId: string) {
     const specs = Object.values(part.fields).filter((s) => s[0] !== "__no__");
     const headers = specs.map((s) => (Array.isArray(s[0]) ? s[0][0]! : s[0]));
     const rows: unknown[][] = [["Reporte generado para pruebas"], headers];
-    for (let i = 0; i < 3; i++) rows.push(specs.map((s, j) => sample(headers[j]!, s[1], i)));
+    for (let i = 0; i < (opts.rowsPerSheet ?? 3); i++) rows.push(specs.map((s, j) => sample(headers[j]!, s[1], i)));
     rows.push(specs.map((s, j) => (s[1] === "niu" ? "" : sample(headers[j]!, s[1], 9)))); // sin NIU
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), part.sheet);
   }
-  // Ida y vuelta por un .xlsx real, como cuando el usuario sube el archivo.
-  const bytes = XLSX.write(wb, { type: "array", bookType: "xlsx" });
-  return new WorkbookReader(XLSX, XLSX.read(new Uint8Array(bytes), { type: "array", cellDates: false }));
+  return new Uint8Array(XLSX.write(wb, { type: "array", bookType: opts.bookType ?? "xlsx" }));
 }
 
+/** Libro ya abierto, como cuando el usuario sube el archivo (ida y vuelta por un .xlsx real). */
+export function workbookFor(datasetId: string) {
+  return new WorkbookReader(XLSX, XLSX.read(workbookBytes(datasetId), { type: "array", cellDates: false }));
+}
