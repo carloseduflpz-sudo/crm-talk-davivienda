@@ -191,6 +191,21 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 40, agents: 2 });
   });
 
+  it("CDC y Extra: la meta se mide en dólares (monto de lo aplicado o desembolsado)", async () => {
+    await load("cdc:sabana", "2026-09", [
+      { niu: "1", saleDate: "2026-09-01", executive: "Ana", statusRaw: "APLICADA", amount: 1000 },
+      { niu: "2", saleDate: "2026-09-02", executive: "Ana", statusRaw: "APLICADA", amount: 2500.5 },
+      { niu: "3", saleDate: "2026-09-03", executive: "Luis", statusRaw: "APLICADA", amount: 500 },
+      { niu: "4", saleDate: "2026-09-03", executive: "Luis", statusRaw: "NO APLICA", amount: 900 },
+    ]);
+    expect((await call("PUT", "/metas", { campaign: "cdc", month: "2026-09", salesGoal: 10000.5, agents: 2 })).status).toBe(200);
+    const c = ((await call("GET", "/analisis/cdc?mes=2026-09")).data.analysis as CampaignAnalysis).cumplimiento;
+    expect(c).toMatchObject({ unidad: "monto", meta: 10000.5, ventas: 4000.5, ventasTotales: 4900.5, operaciones: 3, operacionesTotales: 4 });
+    expect(c.porAgente.find((x) => x.agent === "Ana")).toMatchObject({ ventas: 3500.5, operaciones: 2, total: 3500.5 });
+    expect(c.estatusDisponibles.find((e) => e.label === "NO APLICA")).toMatchObject({ value: 1, monto: 900, cuenta: false });
+    expect(a.cumplimiento.unidad).toBe("ventas"); // TDC se mide en ventas
+  });
+
   it("validaciones de la meta", async () => {
     expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, workDays: [] })).status).toBe(400);
     expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, holidays: ["2026-10-01"] })).status).toBe(400);

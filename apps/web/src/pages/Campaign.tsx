@@ -22,6 +22,7 @@ import {
   dayLabel,
   deltaOf,
   fmtInt,
+  fmtMoney,
   fmtNum,
   fmtPct,
   intOf,
@@ -608,6 +609,11 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
 
   const meta = c.meta;
   const esperado = c.esperado ?? 0;
+  // CDC y Extra se miden en dólares; las demás campañas, en número de ventas.
+  const money = c.unidad === "monto";
+  const val = (x: number | null) => (money ? fmtMoney(x) : fmtNum(x, 1));
+  const valInt = (x: number) => (money ? fmtMoney(x) : fmtInt.format(Math.round(x)));
+  const unit = money ? "" : " ventas";
   const adelante = c.ventas >= esperado;
   const corte = c.fechaCorte ? dayLabel(c.fechaCorte) : null;
   const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
@@ -626,7 +632,13 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             label: a.agente ? `Avance de ${a.agente}` : "Avance de la meta",
             num: c.avance ?? 0,
             format: pct1,
-            foot: (
+            foot: money ? (
+              <>
+                {fmtMoney(c.ventas)} de {fmtMoney(meta)} en {fmtInt.format(c.operaciones)} {c.operaciones === 1 ? "operación" : "operaciones"} que cuentan
+                {c.ventasTotales !== c.ventas && <> ({fmtMoney(c.ventasTotales)} en la sábana)</>}
+                {!a.agente && c.agentes ? `, ${c.agentes} agentes con ${fmtMoney(c.metaPorAgente)} cada uno` : ""}
+              </>
+            ) : (
               <>
                 {fmtInt.format(c.ventas)} de {a.agente ? fmtNum(meta) : fmtInt.format(meta)} ventas que cuentan
                 {c.ventasTotales !== c.ventas && <> ({fmtInt.format(c.ventasTotales)} en la sábana)</>}
@@ -638,30 +650,30 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           {
             label: "Faltan",
             num: c.faltan ?? 0,
-            format: num1,
-            foot: c.faltan === 0 ? "Meta alcanzada" : "Ventas para llegar a la meta",
+            format: money ? fmtMoney : num1,
+            foot: c.faltan === 0 ? "Meta alcanzada" : money ? "Monto para llegar a la meta" : "Ventas para llegar a la meta",
             tone: c.faltan === 0 ? "good" : undefined,
           },
-          { label: "Ritmo actual", num: c.ritmoDiario, format: num1, foot: `Ventas por día hábil, en ${c.diaDelMes} de ${c.diasDelMes} días hábiles` },
+          { label: "Ritmo actual", num: c.ritmoDiario, format: money ? fmtMoney : num1, foot: `${money ? "Dólares" : "Ventas"} por día hábil, en ${c.diaDelMes} de ${c.diasDelMes} días hábiles` },
           c.ritmoNecesario === null
             ? { label: "Ritmo necesario", value: "—", foot: "Ya no quedan días hábiles" }
             : {
                 label: "Ritmo necesario",
                 num: c.ritmoNecesario,
-                format: num1,
+                format: money ? fmtMoney : num1,
                 foot: `Por día hábil en los ${c.diasRestantes} que quedan`,
                 tone: c.ritmoNecesario > c.ritmoDiario ? ("warn" as const) : undefined,
               },
-          { label: "Proyección al cierre", num: c.proyeccion, format: intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta al ritmo actual`, tone: c.proyeccion >= meta ? "good" : "bad" },
+          { label: "Proyección al cierre", num: c.proyeccion, format: money ? fmtMoney : intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta al ritmo actual`, tone: c.proyeccion >= meta ? "good" : "bad" },
         ]}
       >
-        <Meter thick value={c.ventas} max={meta} mark={esperado} markLabel={`Esperado al ${corte ?? "corte"}: ${fmtNum(esperado, 0)} ventas`} label="Avance contra la meta" />
+        <Meter thick value={c.ventas} max={meta} mark={esperado} markLabel={`Esperado al ${corte ?? "corte"}: ${valInt(esperado)}${unit}`} label="Avance contra la meta" />
         <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
           {corte ? (
             <>
-              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca indica lo esperado a esa fecha: {fmtNum(esperado, 0)} ventas.{" "}
+              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca indica lo esperado a esa fecha: {valInt(esperado)}{unit}.{" "}
               <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
-                {adelante ? `Van ${fmtNum(c.ventas - esperado, 0)} por encima.` : `Van ${fmtNum(esperado - c.ventas, 0)} por debajo.`}
+                {adelante ? `Van ${valInt(c.ventas - esperado)} por encima.` : `Van ${valInt(esperado - c.ventas)} por debajo.`}
               </span>
             </>
           ) : (
@@ -678,7 +690,11 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
 
       <ChartCard
         title="Gap por agente"
-        note={c.metaPorAgente === null ? "Registra el número de agentes para calcular la meta individual" : `Cada agente tiene una meta de ${fmtNum(c.metaPorAgente)} ventas que cuentan. Clic en un agente para filtrar la campaña.`}
+        note={
+          c.metaPorAgente === null
+            ? "Registra el número de agentes para calcular la meta individual"
+            : `Cada agente tiene una meta de ${money ? fmtMoney(c.metaPorAgente) : `${fmtNum(c.metaPorAgente)} ventas`} que cuentan. Clic en un agente para filtrar la campaña.`
+        }
       >
         <DataTable
           rows={c.porAgente}
@@ -688,15 +704,16 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           isActive={(r) => r.agent === a.agente}
           cols={[
             { key: "agent", label: "Agente", render: (r) => r.agent, sort: (r) => r.agent },
-            { key: "ventas", label: "Cuentan", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
-            { key: "total", label: "En la sábana", align: "right", render: (r) => fmtInt.format(r.total), sort: (r) => r.total },
-            { key: "meta", label: "Meta", align: "right", render: (r) => fmtNum(r.meta) },
+            { key: "ventas", label: money ? "Monto que cuenta" : "Cuentan", align: "right", render: (r) => valInt(r.ventas), sort: (r) => r.ventas },
+            ...(money ? [{ key: "operaciones", label: "Operaciones", align: "right" as const, render: (r: (typeof c.porAgente)[number]) => fmtInt.format(r.operaciones), sort: (r: (typeof c.porAgente)[number]) => r.operaciones }] : []),
+            { key: "total", label: "En la sábana", align: "right", render: (r) => valInt(r.total), sort: (r) => r.total },
+            { key: "meta", label: "Meta", align: "right", render: (r) => val(r.meta) },
             {
               key: "gap",
               label: "Gap",
               align: "right",
               render: (r) =>
-                r.gap === null ? "—" : <span className={r.gap > 0 ? "text-[var(--st-critical)]" : "text-[var(--st-good)]"}>{r.gap > 0 ? `−${fmtNum(r.gap)}` : `+${fmtNum(-r.gap)}`}</span>,
+                r.gap === null ? "—" : <span className={r.gap > 0 ? "text-[var(--st-critical)]" : "text-[var(--st-good)]"}>{r.gap > 0 ? `−${val(r.gap)}` : `+${val(-r.gap)}`}</span>,
               sort: (r) => r.gap ?? 0,
             },
             {

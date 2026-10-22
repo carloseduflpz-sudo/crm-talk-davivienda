@@ -110,10 +110,15 @@ export interface CampaignAnalysis {
     meta: number | null;
     agentes: number | null;
     metaPorAgente: number | null;
-    /** Ventas que cuentan para la meta (solo los estatus de `config.estatus`). */
+    /** "ventas" = se mide en número de ventas; "monto" = en dólares (CDC y Extra). */
+    unidad: "ventas" | "monto";
+    /** Lo que cuenta para la meta (solo los estatus de `config.estatus`): ventas o dólares según `unidad`. */
     ventas: number;
-    /** Todas las ventas de la sábana del mes, cuenten o no. */
+    /** Lo mismo con todas las ventas de la sábana del mes, cuenten o no. */
     ventasTotales: number;
+    /** Número de ventas que cuentan y total de la sábana (útil cuando la meta es en dólares). */
+    operaciones: number;
+    operacionesTotales: number;
     aprobadas: number;
     avance: number | null;
     faltan: number | null;
@@ -124,13 +129,13 @@ export interface CampaignAnalysis {
     /** Días hábiles del mes. */
     diasDelMes: number;
     diasRestantes: number;
-    /** Ventas por día hábil. */
+    /** Ventas (o dólares) por día hábil. */
     ritmoDiario: number;
     proyeccion: number;
     ritmoNecesario: number | null;
     /** Lo que se esperaba llevar a la fecha de corte, repartiendo la meta por días hábiles. */
     esperado: number | null;
-    porAgente: { agent: string; ventas: number; total: number; aprobadas: number; meta: number | null; gap: number | null; avance: number | null }[];
+    porAgente: { agent: string; ventas: number; total: number; operaciones: number; aprobadas: number; meta: number | null; gap: number | null; avance: number | null }[];
     /** Configuración de la meta del mes (o la sugerida si aún no hay meta). */
     config: {
       /** Estatus de la sábana que cuentan para la meta. */
@@ -142,7 +147,7 @@ export interface CampaignAnalysis {
       feriados: string[];
     };
     /** Estatus de la sábana del mes, con cuántas ventas tiene cada uno y si cuenta. */
-    estatusDisponibles: { label: string; value: number; cuenta: boolean }[];
+    estatusDisponibles: { label: string; value: number; monto: number; cuenta: boolean }[];
     feriadosSugeridos: { date: string; name: string }[];
   };
 }

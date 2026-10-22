@@ -7,7 +7,7 @@
    - Penetración = clientes con venta en VICI ÷ clientes únicos de la base del mes.
    - Cumplimiento = ventas de la sábana del mes ÷ meta; ritmo = ventas ÷ día del mes de la
      última venta; proyección = ritmo × días del mes. */
-import { DEFAULT_WORK_DAYS, businessDays, countsForGoal, isCampaignCode, suggestedHolidays, type CampaignAnalysis, type CampaignCode, type Count } from "@crm/core";
+import { DEFAULT_WORK_DAYS, GOAL_UNIT, businessDays, countsForGoal, isCampaignCode, suggestedHolidays, type CampaignAnalysis, type CampaignCode, type Count } from "@crm/core";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -92,8 +92,11 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       meta: null,
       agentes: null,
       metaPorAgente: null,
+      unidad: isCampaignCode(campaign) ? GOAL_UNIT[campaign] : "ventas",
       ventas: 0,
       ventasTotales: 0,
+      operaciones: 0,
+      operacionesTotales: 0,
       aprobadas: 0,
       avance: null,
       faltan: null,
@@ -383,27 +386,32 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
     if (sabana) {
       const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
       const { results: estatus } = await db
-        .prepare(`SELECT ${label} AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
+        .prepare(`SELECT ${label} AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
         .bind(sabana.id, ...fb)
-        .all<{ label: string; n: number }>();
+        .all<{ label: string; n: number; monto: number }>();
       const cuenta = (l: string) => (savedStatuses ? savedStatuses.includes(l) : countsForGoal(campaign as CampaignCode, l));
-      c.estatusDisponibles = estatus.map((r) => ({ label: r.label, value: n(r.n), cuenta: cuenta(r.label) }));
+      c.estatusDisponibles = estatus.map((r) => ({ label: r.label, value: n(r.n), monto: n(r.monto), cuenta: cuenta(r.label) }));
       // Los guardados se respetan aunque este mes no aparezcan; los de la regla, solo los presentes.
       c.config.estatus = savedStatuses ?? c.estatusDisponibles.filter((e) => e.cuenta).map((e) => e.label);
       const counted = c.config.estatus;
       const inList = counted.length ? `${label} IN (${placeholders(counted.length)})` : "0";
+      // CDC y Extra se miden en dólares: se suma el monto de la sábana en vez de contar ventas.
+      const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
       const [porAgente, porDia] = await db.batch([
         db
           .prepare(
-            `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS total, SUM(${inList}) AS ventas, SUM(status_class = 'aprobado') AS aprobadas
+            `SELECT ${agentLabel("executive")} AS agent, SUM(${measure}) AS total, SUM(CASE WHEN ${inList} THEN ${measure} ELSE 0 END) AS ventas,
+                    SUM(${inList}) AS operaciones, COUNT(*) AS operaciones_total, SUM(status_class = 'aprobado') AS aprobadas
                FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC, total DESC`,
           )
-          .bind(...counted, sabana.id, ...fb),
+          .bind(...counted, ...counted, sabana.id, ...fb), // la lista aparece dos veces en el SELECT
         db.prepare(`SELECT MAX(sale_date) AS corte FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`).bind(sabana.id, ...fb, `${month}%`),
       ]);
-      const agentes = porAgente!.results as { agent: string; total: number; ventas: number; aprobadas: number }[];
+      const agentes = porAgente!.results as { agent: string; total: number; ventas: number; operaciones: number; operaciones_total: number; aprobadas: number }[];
       c.ventas = agentes.reduce((sum, r) => sum + n(r.ventas), 0);
       c.ventasTotales = agentes.reduce((sum, r) => sum + n(r.total), 0);
+      c.operaciones = agentes.reduce((sum, r) => sum + n(r.operaciones), 0);
+      c.operacionesTotales = agentes.reduce((sum, r) => sum + n(r.operaciones_total), 0);
       c.aprobadas = agentes.reduce((sum, r) => sum + n(r.aprobadas), 0);
       c.fechaCorte = (porDia!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
       c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
@@ -414,6 +422,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         agent: r.agent,
         ventas: n(r.ventas),
         total: n(r.total),
+        operaciones: n(r.operaciones),
         aprobadas: n(r.aprobadas),
         meta: c.metaPorAgente,
         gap: c.metaPorAgente !== null ? c.metaPorAgente - n(r.ventas) : null,
@@ -466,7 +475,8 @@ export function registerAnalisis(r: Router): void {
     if (!Array.isArray(holidays) || holidays.length > 31 || holidays.some((d) => typeof d !== "string" || !d.startsWith(month) || !/^\d{4}-\d{2}-\d{2}$/.test(d))) {
       throw new HttpError(400, "Los feriados deben ser fechas del mismo mes.");
     }
-    if (typeof goal !== "number" || !Number.isInteger(goal) || goal < 0 || goal > 1_000_000) throw new HttpError(400, "La meta debe ser un número entero.");
+    // CDC y Extra ponen la meta en dólares: se permiten montos grandes y centavos.
+    if (typeof goal !== "number" || !Number.isFinite(goal) || goal < 0 || goal > 1_000_000_000) throw new HttpError(400, "La meta debe ser un número positivo.");
     if (agents !== null && (typeof agents !== "number" || !Number.isInteger(agents) || agents < 1 || agents > 1000)) {
       throw new HttpError(400, "El número de agentes debe ser un entero mayor que cero.");
     }

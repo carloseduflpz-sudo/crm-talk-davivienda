@@ -5,6 +5,10 @@
      sin los feriados del mes. */
 import type { CampaignCode } from "./campaigns";
 
+/** Cómo se mide la meta: en número de ventas o en dólares (CDC y Extra se miden por monto). */
+export type GoalUnit = "ventas" | "monto";
+export const GOAL_UNIT: Record<CampaignCode, GoalUnit> = { tdc: "ventas", extrafin: "monto", cdc: "monto", upin: "ventas", seguros: "ventas", domi: "ventas" };
+
 /** Estatus de la sábana que cuentan para la meta, por campaña (se comparan por inicio: "ENTREGADA POR COURIER" cuenta). */
 export const GOAL_STATUS_PREFIXES: Record<CampaignCode, readonly string[]> = {
   tdc: ["ENTREGAD"],

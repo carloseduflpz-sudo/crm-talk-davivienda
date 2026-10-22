@@ -12,6 +12,9 @@ export const fmtPct = (v: number | null | undefined, digits = 1) => (v === null 
 export const fmtNum = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined || !Number.isFinite(v) ? "—" : new Intl.NumberFormat("es-SV", { maximumFractionDigits: digits }).format(v);
 export const intOf = (n: number) => fmtInt.format(Math.round(n));
+const MONEY = new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+/** "$1,234,568" (dólares sin centavos, para metas y montos). */
+export const fmtMoney = (n: number | null | undefined) => (n === null || n === undefined || !Number.isFinite(n) ? "—" : MONEY.format(n));
 
 const DAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];

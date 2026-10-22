@@ -6,7 +6,7 @@ import { GOAL_STATUS_PREFIXES, businessDays, daysInMonth, type CampaignAnalysis,
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { monthLabel } from "../lib/xlsx";
-import { fmtInt, fmtNum } from "./charts";
+import { fmtInt, fmtMoney, fmtNum } from "./charts";
 import { Button, ErrorMessage } from "./form";
 
 const WEEK = [
@@ -47,6 +47,8 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
   const c = a.cumplimiento;
   const month = a.month!;
   const campaign = a.campaign as CampaignCode;
+  // CDC y Extra: la meta es en dólares.
+  const money = c.unidad === "monto";
   const [meta, setMeta] = useState(c.meta !== null && !a.agente ? String(c.meta) : "");
   const [agentes, setAgentes] = useState(c.agentes?.toString() ?? "");
   const [statuses, setStatuses] = useState<string[]>(c.config.estatus);
@@ -57,7 +59,9 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
   const [saving, setSaving] = useState(false);
 
   const habiles = useMemo(() => businessDays(month, workDays, holidays), [month, workDays, holidays]);
-  const counted = c.estatusDisponibles.filter((e) => statuses.includes(e.label)).reduce((s, e) => s + e.value, 0);
+  const countedOps = c.estatusDisponibles.filter((e) => statuses.includes(e.label)).reduce((s, e) => s + e.value, 0);
+  const countedMoney = c.estatusDisponibles.filter((e) => statuses.includes(e.label)).reduce((s, e) => s + e.monto, 0);
+  const totalMoney = c.estatusDisponibles.reduce((s, e) => s + e.monto, 0);
   const pendingSuggested = c.feriadosSugeridos.filter((h) => !holidays.includes(h.date));
 
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -98,9 +102,12 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
   return (
     <form onSubmit={submit} className="space-y-8">
       <div className="flex flex-wrap items-end gap-4">
-        <label className="block w-44 text-[13px]">
-          <span className="mb-1.5 block text-ink-soft">Meta de ventas</span>
-          <input className={input} type="number" min={0} step={1} required value={meta} onChange={(e) => setMeta(e.target.value)} />
+        <label className={`block text-[13px] ${money ? "w-52" : "w-44"}`}>
+          <span className="mb-1.5 block text-ink-soft">{money ? "Meta en dólares" : "Meta de ventas"}</span>
+          <span className="relative block">
+            {money && <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[14px] text-ink-soft">$</span>}
+            <input className={`${input} ${money ? "pl-7" : ""}`} type="number" min={0} step={money ? 0.01 : 1} required value={meta} onChange={(e) => setMeta(e.target.value)} />
+          </span>
         </label>
         <label className="block w-44 text-[13px]">
           <span className="mb-1.5 block text-ink-soft">Agentes</span>
@@ -108,7 +115,7 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
         </label>
         {meta && agentes && Number(agentes) > 0 && (
           <p className="pb-3 text-[13px] text-ink-soft">
-            {fmtNum(Number(meta) / Number(agentes))} ventas por agente
+            {money ? `${fmtMoney(Number(meta) / Number(agentes))} por agente` : `${fmtNum(Number(meta) / Number(agentes))} ventas por agente`}
           </p>
         )}
       </div>
@@ -117,7 +124,7 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
         title="Qué cuenta para la meta"
         hint={
           c.estatusDisponibles.length
-            ? "Solo las ventas con estos estatus del banco suman al avance. Por defecto: lo entregado, desembolsado, aplicado o activo."
+            ? `Solo las ventas con estos estatus del banco suman al avance${money ? ", con su monto" : ""}. Por defecto: lo entregado, desembolsado, aplicado o activo.`
             : `Cuando cargues la sábana de ${monthLabel(month)} podrás elegir los estatus. Mientras tanto cuentan los que empiezan con: ${prefixesText(campaign)}`
         }
       >
@@ -141,13 +148,21 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
                   >
                     <span className={`size-2 rounded-full ${on ? "bg-[var(--st-good)]" : "bg-hair"}`} aria-hidden />
                     <span className="first-letter:uppercase">{e.label.toLowerCase()}</span>
-                    <span className="text-ink-faint tabular-nums">{fmtInt.format(e.value)}</span>
+                    <span className="text-ink-faint tabular-nums">{money ? `${fmtInt.format(e.value)}, ${fmtMoney(e.monto)}` : fmtInt.format(e.value)}</span>
                   </button>
                 );
               })}
             </div>
             <p className="mt-3 text-[13px] text-ink-soft">
-              Con esta selección cuentan <span className="font-medium text-ink tabular-nums">{fmtInt.format(counted)}</span> de {fmtInt.format(c.ventasTotales)} ventas de la sábana.
+              {money ? (
+                <>
+                  Con esta selección cuentan <span className="font-medium text-ink tabular-nums">{fmtMoney(countedMoney)}</span> de {fmtMoney(totalMoney)} ({fmtInt.format(countedOps)} operaciones).
+                </>
+              ) : (
+                <>
+                  Con esta selección cuentan <span className="font-medium text-ink tabular-nums">{fmtInt.format(countedOps)}</span> de {fmtInt.format(c.operacionesTotales)} ventas de la sábana.
+                </>
+              )}
               {statusesTouched && (
                 <>
                   {" "}

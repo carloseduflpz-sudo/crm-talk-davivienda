@@ -27,6 +27,7 @@ export const DETAIL_SOURCES: Record<string, Source> = {
       ["executive", "Ejecutivo"],
       ["status_raw", "Estatus del banco"],
       ["reason", "Motivo"],
+      ["amount", "Monto"],
       ["process", "Proceso"],
     ],
     order: "sale_date, niu",
