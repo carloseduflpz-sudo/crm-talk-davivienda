@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+/* Modo oscuro por clase en <html> (se guarda la preferencia de cada usuario). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Tokens de diseño. Base profesional y minimalista con los colores de Talk;
+   la pasada de diseño completa es la Fase 3. */
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-brand-50: #eef5ff;
+  --color-brand-100: #d9e8ff;
+  --color-brand-500: #086dff;
+  --color-brand-600: #0058d6;
+  --color-brand-900: #04248b;
+  --color-accent-500: #eb622e;
+  --color-accent-400: #ff7e33;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum" 1; /* cifras tabulares: las columnas de números se alinean */
+  }
+  body {
+    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+}

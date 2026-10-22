@@ -1,0 +1,31 @@
+{
+  "name": "crm-talk-davivienda",
+  "private": true,
+  "version": "2.0.0",
+  "description": "CRM Talk América · Davivienda — consola de las 6 campañas en Cloudflare Workers + D1 + R2",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @crm/web && wrangler dev",
+    "dev:web": "npm run dev -w @crm/web",
+    "build": "npm run build -w @crm/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "db:migrate:local": "wrangler d1 migrations apply crm-talk --local",
+    "db:migrate:remote": "wrangler d1 migrations apply crm-talk --remote",
+    "deploy": "npm run build && wrangler d1 migrations apply crm-talk --remote && wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
