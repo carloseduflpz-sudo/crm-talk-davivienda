@@ -3,7 +3,7 @@
    Solo filtros de una lista cerrada (nunca SQL armado con texto del usuario) y siempre sobre
    los archivos VIGENTES del mes. */
 import { isCampaignCode } from "@crm/core";
-import { agentLabel } from "./analisis";
+import { loadAgentNaming } from "./agentes";
 import { HttpError, json, type Router } from "./http";
 
 interface Source {
@@ -108,7 +108,7 @@ export function registerDetalle(r: Router): void {
     };
 
     const agente = text("agente");
-    if (agente && src.agent) add(`${agentLabel(src.agent)} = ?`, agente);
+    if (agente && src.agent) add(`${(await loadAgentNaming(env, campaign)).sql(src.agent)} = ?`, agente);
 
     const dia = text("dia");
     const desde = text("desde");

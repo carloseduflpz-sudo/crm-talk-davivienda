@@ -127,6 +127,28 @@ describe("centro de carga", () => {
     expect(n?.n).toBe(3);
   });
 
+  it("eliminar: también la vigente; borra sus filas, su respaldo y deja de contar", async () => {
+    const v1 = await upload("tdc:sabana", "2026-09", saleRows(3));
+    await call("POST", `/cargas/${v1.id}/confirmar`, {});
+    const v2 = await upload("tdc:sabana", "2026-09", saleRows(4, 10));
+    await call("POST", `/cargas/${v2.id}/confirmar`, {});
+    const del: string[] = [];
+    (env.FILES as unknown as { delete: (k: string) => Promise<void> }).delete = async (k) => void del.push(k);
+    await env.DB.prepare("UPDATE uploads SET file_key = 'respaldo/v2.xlsx' WHERE id = ?").bind(v2.id).run();
+
+    expect((await call("POST", `/cargas/${v2.id}/eliminar`, {})).status).toBe(200);
+    expect(del).toEqual(["respaldo/v2.xlsx"]);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM bank_sales").first<{ n: number }>();
+    expect(n?.n).toBe(3); // quedan las de la versión 1
+    const list = (await call("GET", "/cargas?campana=tdc")).data.uploads as { id: string; isCurrent: boolean; status: string }[];
+    expect(list.find((u) => u.id === v2.id)).toBe(undefined);
+    expect(list.find((u) => u.id === v1.id)).toMatchObject({ isCurrent: false, status: "reemplazada" });
+    // Sin sábana vigente el mes ya no tiene ventas; la versión anterior se puede volver a activar.
+    expect(((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as { ventas: unknown }).ventas).toBeNull();
+    expect((await call("POST", `/cargas/${v1.id}/activar`, {})).status).toBe(200);
+    expect((await call("POST", `/cargas/${v2.id}/eliminar`, {})).status).toBe(400);
+  });
+
   it("clasifica las llamadas de VICI con las tipologías de la campaña y acepta llamadas sin NIU", async () => {
     const rows = [
       { niu: "123", agent: "Ana", calledAt: "2026-09-10T10:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },

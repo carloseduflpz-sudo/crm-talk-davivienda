@@ -59,6 +59,8 @@ export interface CampaignAnalysis {
   agente: string | null;
   /** Agentes que aparecen en la sábana, VICI o el CRM del mes (para el filtro). */
   agentes: string[];
+  /** Agentes cuyo nombre viene escrito de varias formas y la herramienta unió solo. */
+  agentesUnidos: { nombre: string; variantes: string[] }[];
   /** Archivos vigentes del mes elegido, por tipo. */
   loaded: { dataset: string; kind: string; rows: number; version: number; createdAt: number; createdBy: string }[];
   /** Fechas de los datos del mes: hasta qué día llegan y si algún archivo trae filas con fecha de otro mes. */

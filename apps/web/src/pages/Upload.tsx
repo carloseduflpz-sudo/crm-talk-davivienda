@@ -2,7 +2,7 @@
    se guarda por lotes con versión, sin borrar la versión anterior. */
 import { CAMPAIGNS, PREVIEW_HIDDEN, chunkEnds, getCampaign, onlyMonth, rowsByMonth, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, CloudUpload, Download, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, CircleCheck, CloudUpload, Download, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router";
 import { Button, ErrorMessage } from "../components/form";
@@ -127,6 +127,23 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
   const uploads = useQuery({ queryKey: ["uploads", campaign], queryFn: () => api.uploads(campaign) });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // Una sección desplegable por mes; el más reciente abierto.
+  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
+  const byMonth = useMemo(() => {
+    const m = new Map<string, UploadInfo[]>();
+    for (const u of uploads.data ?? []) m.set(u.month, [...(m.get(u.month) ?? []), u]);
+    return [...m].sort(([a], [b]) => b.localeCompare(a));
+  }, [uploads.data]);
+  /** Qué pasa al eliminar, dicho antes de hacerlo. */
+  const deleteMessage = (u: UploadInfo) => {
+    const what = `${datasetLabel(u.dataset)}${u.isAddition && u.label ? ` "${u.label}"` : ""} de ${monthLabel(u.month)} (versión ${u.version}, ${fmt.format(u.rowsValid)} filas)`;
+    if (!u.isCurrent) return `¿Eliminar ${what}? No está vigente: se borran sus filas. No se puede deshacer.`;
+    if (u.isAddition) return `¿Eliminar ${what}? Deja de sumarse a la base de ${monthLabel(u.month)} y se borran sus filas. No se puede deshacer.`;
+    const older = uploads.data?.some((x) => x.dataset === u.dataset && x.month === u.month && x.id !== u.id && !x.isAddition && x.status === "reemplazada");
+    return `¿Eliminar ${what}? Es el archivo vigente: se borran sus filas y ${monthLabel(u.month)} se queda sin este archivo hasta que cargues otro${
+      older ? " o vuelvas a activar una versión anterior" : ""
+    }. No se puede deshacer.`;
+  };
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id);
     setError("");
@@ -144,94 +161,145 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
     <Card className="p-0">
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
         <h2 className="font-semibold">Historial de cargas · {getCampaign(campaign).shortName}</h2>
-        {uploads.data && <span className="text-sm text-slate-500">{uploads.data.length === 1 ? "1 versión" : `${uploads.data.length} versiones`}</span>}
+        {uploads.data && (
+          <span className="flex items-center gap-3 text-sm text-slate-500">
+            {byMonth.length === 1 ? "1 mes" : `${byMonth.length} meses`} · {uploads.data.length === 1 ? "1 archivo" : `${uploads.data.length} archivos`}
+            {byMonth.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const allOpen = byMonth.every(([m], i) => openMonths[m] ?? i === 0);
+                  setOpenMonths(Object.fromEntries(byMonth.map(([m]) => [m, !allOpen])));
+                }}
+                className="rounded-lg px-2 py-1 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-500/10"
+              >
+                {byMonth.every(([m], i) => openMonths[m] ?? i === 0) ? "Cerrar todos" : "Abrir todos"}
+              </button>
+            )}
+          </span>
+        )}
       </div>
       {error && <div className="px-5 pt-4"><ErrorMessage>{error}</ErrorMessage></div>}
       {uploads.isPending && <p className="p-5 text-sm text-slate-500">Cargando historial…</p>}
       {uploads.isError && <p className="p-5 text-sm text-red-600">{uploads.error.message}</p>}
       {uploads.data?.length === 0 && <p className="p-5 text-sm text-slate-500">Todavía no hay archivos cargados para esta campaña.</p>}
       {!!uploads.data?.length && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-slate-500 uppercase">
-              <tr className="border-b border-slate-200 dark:border-slate-800">
-                <th className="px-5 py-2.5 font-semibold">Archivo</th>
-                <th className="px-3 py-2.5 font-semibold">Mes</th>
-                <th className="px-3 py-2.5 font-semibold">Versión</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Filas</th>
-                <th className="px-3 py-2.5 font-semibold">Estado</th>
-                <th className="px-3 py-2.5 font-semibold">Cargado</th>
-                <th className="px-5 py-2.5" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {uploads.data.map((u) => (
-                <tr key={u.id} className={u.isCurrent ? "" : "text-slate-500"}>
-                  <td className="px-5 py-3">
-                    <p className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
-                      {datasetLabel(u.dataset)}
-                      {u.isAddition && <Badge tone="accent">{u.label || "Adicional"}</Badge>}
-                    </p>
-                    <p className="max-w-64 truncate text-xs text-slate-500" title={u.fileName}>
-                      {u.fileName}
-                    </p>
-                  </td>
-                  <td className="px-3 py-3 whitespace-nowrap capitalize">{monthLabel(u.month)}</td>
-                  <td className="px-3 py-3">v{u.version}</td>
-                  <td className="px-3 py-3 text-right tabular-nums">{fmt.format(u.rowsValid)}</td>
-                  <td className="px-3 py-3">
-                    {u.isAddition && u.status === "reemplazada" ? <Badge tone="neutral">Quitada del mes</Badge> : <Badge tone={STATUS_BADGE[u.status].tone}>{STATUS_BADGE[u.status].label}</Badge>}
-                  </td>
-                  <td className="px-3 py-3 text-xs whitespace-nowrap">
-                    {u.createdBy}
-                    <br />
-                    {fmtDate(u.createdAt)}
-                  </td>
-                  <td className="px-5 py-3">
-                    <div className="flex justify-end gap-1">
-                      {u.hasFile && (
-                        <a href={`/api/cargas/${u.id}/archivo`} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" title="Descargar el Excel original">
-                          <Download className="size-4" aria-label="Descargar el Excel original" />
-                        </a>
-                      )}
-                      {u.isAddition && u.isCurrent && canRestore && (
-                        <button
-                          disabled={busy === u.id}
-                          onClick={() => confirm(`¿Quitar "${u.label || "la base adicional"}" del análisis de ${monthLabel(u.month)}? Sus filas se conservan y se puede volver a sumar.`) && act(u.id, () => api.removeAddition(u.id))}
-                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800"
-                        >
-                          Quitar del mes
-                        </button>
-                      )}
-                      {u.status === "reemplazada" && canRestore && (
-                        <button
-                          disabled={busy === u.id}
-                          onClick={() =>
-                            confirm(u.isAddition ? `¿Volver a sumar "${u.label || "la base adicional"}" a ${monthLabel(u.month)}?` : `¿Volver a dejar vigente la versión ${u.version} de ${monthLabel(u.month)}?`) &&
-                            act(u.id, () => api.activateUpload(u.id))
-                          }
-                          className={`rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800 ${u.isAddition ? "px-2.5 py-1.5 text-xs font-medium" : "p-2"}`}
-                          title={u.isAddition ? "Volver a sumar esta base al mes" : "Volver a esta versión"}
-                        >
-                          {u.isAddition ? "Volver a sumar" : <RotateCcw className="size-4" aria-label="Volver a esta versión" />}
-                        </button>
-                      )}
-                      {!u.isCurrent && (
-                        <button
-                          disabled={busy === u.id}
-                          onClick={() => confirm(`¿Descartar la versión ${u.version}? Sus filas se borran de la base.`) && act(u.id, () => api.discardUpload(u.id))}
-                          className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-500/10"
-                          title="Descartar"
-                        >
-                          <Trash2 className="size-4" aria-label="Descartar" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          {byMonth.map(([month, list], i) => {
+            const isOpen = openMonths[month] ?? i === 0;
+            const vigentes = list.filter((u) => u.isCurrent);
+            const anteriores = list.length - vigentes.length;
+            return (
+              <details key={month} open={isOpen} onToggle={(e) => {
+                  const open = (e.currentTarget as HTMLDetailsElement).open;
+                  if (open !== isOpen) setOpenMonths((o) => ({ ...o, [month]: open }));
+                }} className="group">
+                <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-4 gap-y-1.5 px-5 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 [&::-webkit-details-marker]:hidden">
+                  <ChevronRight className="size-4 shrink-0 text-slate-400 transition-transform group-open:rotate-90" aria-hidden />
+                  <span className="font-semibold capitalize">{monthLabel(month)}</span>
+                  <span className="flex flex-1 flex-wrap gap-1.5">
+                    {vigentes.map((u) => (
+                      <span key={u.id} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        {u.isAddition ? u.label || "Base adicional" : datasetLabel(u.dataset)}
+                      </span>
+                    ))}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    {vigentes.length === 1 ? "1 vigente" : `${vigentes.length} vigentes`}
+                    {anteriores > 0 && ` · ${anteriores === 1 ? "1 anterior" : `${anteriores} anteriores`}`}
+                  </span>
+                </summary>
+                <div className="overflow-x-auto pb-2">
+                  <table className="w-full min-w-[720px] table-fixed text-left text-sm">
+                    <colgroup>
+                      <col />
+                      <col className="w-20" />
+                      <col className="w-24" />
+                      <col className="w-36" />
+                      <col className="w-44" />
+                      <col className="w-48" />
+                    </colgroup>
+                    <thead className="text-xs text-slate-500 uppercase">
+                      <tr className="border-y border-slate-100 dark:border-slate-800">
+                        <th className="px-5 py-2 pl-14 font-semibold">Archivo</th>
+                        <th className="px-3 py-2 font-semibold">Versión</th>
+                        <th className="px-3 py-2 text-right font-semibold">Filas</th>
+                        <th className="px-3 py-2 font-semibold">Estado</th>
+                        <th className="px-3 py-2 font-semibold">Cargado</th>
+                        <th className="px-5 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {list.map((u) => (
+                    <tr key={u.id} className={u.isCurrent ? "" : "text-slate-500"}>
+                      <td className="px-5 py-3 pl-14">
+                        <p className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
+                          {datasetLabel(u.dataset)}
+                          {u.isAddition && <Badge tone="accent">{u.label || "Adicional"}</Badge>}
+                        </p>
+                        <p className="max-w-64 truncate text-xs text-slate-500" title={u.fileName}>
+                          {u.fileName}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3">v{u.version}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">{fmt.format(u.rowsValid)}</td>
+                      <td className="px-3 py-3">
+                        {u.isAddition && u.status === "reemplazada" ? <Badge tone="neutral">Quitada del mes</Badge> : <Badge tone={STATUS_BADGE[u.status].tone}>{STATUS_BADGE[u.status].label}</Badge>}
+                      </td>
+                      <td className="px-3 py-3 text-xs whitespace-nowrap">
+                        {u.createdBy}
+                        <br />
+                        {fmtDate(u.createdAt)}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex justify-end gap-1">
+                          {u.hasFile && (
+                            <a href={`/api/cargas/${u.id}/archivo`} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" title="Descargar el Excel original">
+                              <Download className="size-4" aria-label="Descargar el Excel original" />
+                            </a>
+                          )}
+                          {u.isAddition && u.isCurrent && canRestore && (
+                            <button
+                              disabled={busy === u.id}
+                              onClick={() => confirm(`¿Quitar "${u.label || "la base adicional"}" del análisis de ${monthLabel(u.month)}? Sus filas se conservan y se puede volver a sumar.`) && act(u.id, () => api.removeAddition(u.id))}
+                              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800"
+                            >
+                              Quitar del mes
+                            </button>
+                          )}
+                          {u.status === "reemplazada" && canRestore && (
+                            <button
+                              disabled={busy === u.id}
+                              onClick={() =>
+                                confirm(u.isAddition ? `¿Volver a sumar "${u.label || "la base adicional"}" a ${monthLabel(u.month)}?` : `¿Volver a dejar vigente la versión ${u.version} de ${monthLabel(u.month)}?`) &&
+                                act(u.id, () => api.activateUpload(u.id))
+                              }
+                              className={`rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800 ${u.isAddition ? "px-2.5 py-1.5 text-xs font-medium" : "p-2"}`}
+                              title={u.isAddition ? "Volver a sumar esta base al mes" : "Volver a esta versión"}
+                            >
+                              {u.isAddition ? "Volver a sumar" : <RotateCcw className="size-4" aria-label="Volver a esta versión" />}
+                            </button>
+                          )}
+                          {(canRestore || !u.isCurrent) && (
+                            <button
+                              disabled={busy === u.id}
+                              onClick={() => confirm(deleteMessage(u)) && act(u.id, () => (canRestore ? api.deleteUpload(u.id) : api.discardUpload(u.id)))}
+                              className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-500/10"
+                              title="Eliminar este archivo"
+                            >
+                              <Trash2 className="size-4" aria-label="Eliminar este archivo" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            );
+          })}
         </div>
       )}
     </Card>
@@ -421,7 +489,7 @@ export function Upload() {
 
   return (
     <>
-      <PageHeader title="Centro de carga" subtitle="Sábanas, bases, tipificaciones y ventas de cada mes. Nada se borra: cada carga es una versión nueva." />
+      <PageHeader title="Centro de carga" subtitle="Sábanas, bases, tipificaciones y ventas de cada mes. Cada carga es una versión nueva y la anterior queda de respaldo." />
 
       {/* Campaña */}
       <div role="tablist" aria-label="Campaña" className="mb-5 flex flex-wrap gap-2">

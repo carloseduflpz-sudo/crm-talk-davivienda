@@ -1190,7 +1190,7 @@ export function Campaign() {
       {a && a.months.length > 0 && (
         <div className="-mt-2 mb-10 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <AgentPicker agents={a.agentes} value={agent} onChange={(x) => setQuery({ agente: x })} />
+            <AgentPicker agents={a.agentes} merged={a.agentesUnidos} value={agent} onChange={(x) => setQuery({ agente: x })} />
             <MonthStatus a={a} />
           </div>
           <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Mes">

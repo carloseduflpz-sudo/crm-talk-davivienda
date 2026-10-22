@@ -152,6 +152,8 @@ export const api = {
   putFile,
   confirmUpload: (id: string) => post<{ upload: UploadInfo }>(`/cargas/${id}/confirmar`),
   discardUpload: (id: string) => post(`/cargas/${id}/descartar`),
+  /** Elimina un archivo cargado (también el vigente): sus filas y su respaldo se borran. */
+  deleteUpload: (id: string) => post(`/cargas/${id}/eliminar`),
   activateUpload: (id: string) => post(`/cargas/${id}/activar`),
   removeAddition: (id: string) => post(`/cargas/${id}/quitar`),
 

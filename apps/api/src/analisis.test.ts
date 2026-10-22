@@ -388,3 +388,35 @@ describe("filas con fecha de otro mes", () => {
     expect(oct.fechas).toEqual({ hasta: "2026-10-05", fuera: [{ kind: "sabana", filas: 3, meses: ["2026-08", "2026-09"] }] });
   });
 });
+
+describe("homologación de agentes", () => {
+  it("une los nombres escritos distinto en la sábana, VICI y el CRM, sin que nadie los corrija", async () => {
+    const S = (niu: string, executive: string) => ({ niu, saleDate: "2026-09-10", executive, statusRaw: "APLICADA" });
+    await load("cdc:sabana", "2026-09", [S("1", "MARIA JOSE LOPEZ RIVERA"), S("2", "MARIA JOSE LOPEZ RIVERA"), S("3", "JOSE MARTINES"), S("4", "O'BRIEN KARLA")]);
+    await load("cdc:tipif", "2026-09", [
+      { niu: "1", agent: "María López", calledAt: "2026-09-01T09:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },
+      { niu: "3", agent: "José Martínez", calledAt: "2026-09-01T10:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },
+      { niu: "5", agent: "jose martinez", calledAt: "2026-09-02T10:00:00", category: "No contacto", tipologia: "No contesta" },
+      { niu: "6", agent: "Karla O'Brien", calledAt: "2026-09-02T11:00:00", category: "No contacto", tipologia: "No contesta" },
+    ]);
+    const r = await call("GET", "/analisis/cdc?mes=2026-09");
+    expect(r.status, String(r.data.error)).toBe(200);
+    const x = r.data.analysis as CampaignAnalysis;
+    expect(x.agentes).toEqual(["José Martínez", "Karla O'Brien", "María Jose López Rivera"]);
+    expect(x.ventas!.porEjecutivo.map((e) => [e.agent, e.ventas]).sort((p, q) => q[1] - p[1] || String(p[0]).localeCompare(String(q[0])))).toEqual([
+      ["María Jose López Rivera", 2],
+      ["José Martínez", 1],
+      ["Karla O'Brien", 1],
+    ] as [string, number][]);
+    expect(x.llamadas!.porAgente.find((a) => a.agent === "José Martínez")?.llamadas).toBe(2);
+    expect([...x.agentesUnidos.find((g) => g.nombre === "José Martínez")!.variantes].sort()).toEqual(["JOSE MARTINES", "José Martínez", "jose martinez"].sort());
+
+    // El filtro y el detalle usan el nombre homologado.
+    const f = (await call("GET", "/analisis/cdc?mes=2026-09&agente=" + encodeURIComponent("José Martínez"))).data.analysis as CampaignAnalysis;
+    expect(f.ventas!.total).toBe(1);
+    expect(f.llamadas!.total).toBe(2);
+    const d = await call("GET", "/analisis/cdc/detalle?fuente=llamadas&mes=2026-09&agente=" + encodeURIComponent("José Martínez"));
+    expect(d.data.total).toBe(2);
+  });
+});
+

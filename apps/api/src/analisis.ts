@@ -20,6 +20,7 @@ import {
   type Count,
   type MonthSummary,
 } from "@crm/core";
+import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -65,8 +66,6 @@ function parseDays(v: string | null | undefined): number[] {
 }
 const n = (v: unknown) => Number(v ?? 0);
 const placeholders = (k: number) => Array.from({ length: k }, () => "?").join(", ");
-/** Nombre del agente tal como se agrupa en todos los análisis (vacío = "Sin asignar"). */
-export const agentLabel = (col: string) => `COALESCE(NULLIF(TRIM(${col}), ''), 'Sin asignar')`;
 
 /** Ventas y monto acumulados por día del mes (solo fechas de ese mes). */
 function acumulado(month: string, porDia: { date: string; ventas: number; monto: number }[]): { ventas: number[]; monto: number[] } {
@@ -84,6 +83,9 @@ function acumulado(month: string, porDia: { date: string; ventas: number; monto:
 
 export async function analyzeCampaign(env: Env, campaign: string, requestedMonth: string | null, agente: string | null = null): Promise<CampaignAnalysis> {
   const db = env.DB;
+  // Nombre homologado del agente (la herramienta une sola las formas distintas de escribir a la misma persona).
+  const naming = await loadAgentNaming(env, campaign);
+  const agentLabel = naming.sql;
   // Filtro opcional por agente: se agrega a cada consulta de ventas, llamadas y CRM.
   const fa = (col: string) => (agente ? ` AND ${agentLabel(col)} = ?` : "");
   const fb: string[] = agente ? [agente] : [];
@@ -111,6 +113,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
     months,
     agente,
     agentes: [],
+    agentesUnidos: [],
     loaded: ofMonth.map((u) => ({ dataset: u.dataset, kind: u.kind, rows: u.rows_valid, version: u.version, createdAt: u.created_at, createdBy: u.created_by })),
     fechas: { hasta: null, fuera: [] },
     ventas: null,
@@ -190,7 +193,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         .bind(id, ...fb),
       db
         .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(executive), ''), 'Sin asignar') AS agent, COUNT(*) AS ventas,
+          `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS ventas,
                   SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
                   COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
              FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC`,
@@ -370,7 +373,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''`).bind(id, ...fb),
       db
         .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(agent), ''), 'Sin asignar') AS agent, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS registros,
+          `SELECT ${agentLabel("agent")} AS agent, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS registros,
                   SUM(${efectivoSql}) AS efectivos, SUM(call_class = 'venta') AS ventas, SUM(call_class = 'no_contacto') AS no_contacto
              FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY llamadas DESC`,
         )
@@ -448,7 +451,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
   if (crm) {
     const [tot, agentes, dias, match] = await db.batch([
       db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")}`).bind(crm.id, ...fb),
-      db.prepare(`SELECT COALESCE(NULLIF(TRIM(agent), ''), 'Sin asignar') AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
+      db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
       db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
       sabana
         ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fa("c.agent")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
@@ -476,6 +479,11 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       .all<{ a: string }>();
     out.agentes = results.map((r) => r.a).sort((x, y) => x.localeCompare(y, "es"));
   }
+  // Para que se vea qué nombres se unieron (solo los agentes de este mes).
+  const present = new Set(out.agentes);
+  out.agentesUnidos = naming.groups
+    .filter((g) => present.has(g.name) && (g.variants.length > 1 || g.variants[0] !== g.name))
+    .map((g) => ({ nombre: g.name, variantes: g.variants }));
 
   /* ---------- cumplimiento ---------- */
   if (month) {

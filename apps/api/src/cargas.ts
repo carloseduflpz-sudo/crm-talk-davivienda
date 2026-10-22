@@ -19,6 +19,7 @@ import {
   type SaleClass,
   type UploadKind,
 } from "@crm/core";
+import { recordAgentNames } from "./agentes";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -336,6 +337,8 @@ export function registerCargas(r: Router): void {
       ...(u.is_addition ? [] : [env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE dataset = ? AND month = ? AND is_current = 1 AND is_addition = 0").bind(u.dataset, u.month)]),
       env.DB.prepare("UPDATE uploads SET is_current = 1, status = 'vigente' WHERE id = ?").bind(u.id),
       env.DB.prepare("INSERT OR IGNORE INTO periods (campaign, month) VALUES (?, ?)").bind(u.campaign, u.month),
+      // Cómo vienen escritos los agentes: la herramienta los homologa sola al analizar.
+      ...[recordAgentNames(env, u)].filter((x): x is D1PreparedStatement => x !== null),
     ]);
     await audit(env, user.username, u.is_addition ? "base_adicional_confirmada" : "carga_confirmada", `${u.dataset}:${u.month}:v${u.version}`, {
       filas: u.rows_valid,
@@ -350,9 +353,33 @@ export function registerCargas(r: Router): void {
     if (u.is_current) throw new HttpError(400, "No se puede descartar la versión vigente. Activa otra versión primero.");
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM ${TABLE[u.kind]} WHERE upload_id = ?`).bind(u.id),
+      env.DB.prepare("DELETE FROM agent_names WHERE upload_id = ?").bind(u.id),
       env.DB.prepare("UPDATE uploads SET status = 'descartada' WHERE id = ?").bind(u.id),
     ]);
     await audit(env, user.username, "carga_descartada", `${u.dataset}:${u.month}:v${u.version}`);
+    return json({ ok: true });
+  });
+
+  /**
+   * Elimina un archivo cargado, también el vigente: se borran sus filas y su Excel de respaldo, y deja de
+   * contar en el mes. Las otras versiones de ese archivo no se tocan (una anterior se puede volver a activar).
+   */
+  r.on("POST", "/cargas/:id/eliminar", "datos:restaurar", async ({ env, params, user }) => {
+    const u = await getUpload(env, params.id!);
+    if (u.status === "descartada") throw new HttpError(400, "Este archivo ya se eliminó.");
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM ${TABLE[u.kind]} WHERE upload_id = ?`).bind(u.id),
+      env.DB.prepare("DELETE FROM agent_names WHERE upload_id = ?").bind(u.id),
+      env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'descartada', file_key = NULL WHERE id = ?").bind(u.id),
+    ]);
+    if (u.file_key) {
+      try {
+        await env.FILES.delete(u.file_key);
+      } catch {
+        /* el registro ya no apunta al archivo: si R2 falla, solo queda un archivo huérfano */
+      }
+    }
+    await audit(env, user.username, "carga_eliminada", `${u.dataset}:${u.month}:v${u.version}`, { vigente: Boolean(u.is_current), filas: u.rows_valid, archivo: u.file_name });
     return json({ ok: true });
   });
 

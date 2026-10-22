@@ -106,6 +106,20 @@ export const agentAliases = sqliteTable("agent_aliases", {
     .references(() => agents.id),
 });
 
+/** Cómo vienen escritos los agentes en cada carga; la herramienta los homologa sola al analizar. */
+export const agentNames = sqliteTable(
+  "agent_names",
+  {
+    uploadId: text("upload_id")
+      .notNull()
+      .references(() => uploads.id, { onDelete: "cascade" }),
+    campaign: text("campaign").notNull(),
+    raw: text("raw").notNull(),
+    rows: integer("rows").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.uploadId, t.raw] }), index("agent_names_campaign_idx").on(t.campaign)],
+);
+
 /** Estatus de la sábana del banco → aprobado | rechazado | en_proceso. */
 export const statusMap = sqliteTable(
   "status_map",

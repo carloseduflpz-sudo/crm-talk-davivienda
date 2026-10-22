@@ -8,3 +8,4 @@ export * from "./analysis";
 export * from "./lectura";
 export * from "./compactar";
 export * from "./metas";
+export * from "./agentes";

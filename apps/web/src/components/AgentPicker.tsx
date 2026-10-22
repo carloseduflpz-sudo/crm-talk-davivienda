@@ -9,16 +9,29 @@ const norm = (s: string) =>
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
 
-export function AgentPicker({ agents, value, onChange }: { agents: string[]; value: string | null; onChange: (a: string | null) => void }) {
+export function AgentPicker({
+  agents,
+  value,
+  onChange,
+  merged = [],
+}: {
+  agents: string[];
+  value: string | null;
+  onChange: (a: string | null) => void;
+  /** Agentes cuyo nombre viene escrito de varias formas y la herramienta unió sola. */
+  merged?: { nombre: string; variantes: string[] }[];
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  // Otras formas en que viene escrito cada agente (sin repetir el nombre que se muestra).
+  const aka = useMemo(() => new Map(merged.map((g) => [g.nombre, g.variantes.filter((v) => v !== g.nombre)])), [merged]);
   const list = useMemo(() => {
     const k = norm(q.trim());
-    return agents.filter((a) => !k || norm(a).includes(k));
-  }, [agents, q]);
+    return agents.filter((a) => !k || norm(a).includes(k) || (aka.get(a) ?? []).some((v) => norm(v).includes(k)));
+  }, [agents, q, aka]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,7 +116,14 @@ export function AgentPicker({ agents, value, onChange }: { agents: string[]; val
                     onPointerEnter={() => setCursor(i)}
                     className={`flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-[13.5px] ${i === cursor ? "bg-paper dark:bg-slate-800" : ""} ${a === null ? "text-ink-soft" : "text-ink"}`}
                   >
-                    <span className="truncate">{a ?? "Todos los agentes"}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate">{a ?? "Todos los agentes"}</span>
+                      {a && !!aka.get(a)?.length && (
+                        <span className="block truncate text-[11.5px] text-ink-faint" title={aka.get(a)!.join(" · ")}>
+                          También como {aka.get(a)!.join(", ")}
+                        </span>
+                      )}
+                    </span>
                     {selected && <Check className="size-4 shrink-0 text-brand-600" aria-hidden />}
                   </button>
                 </li>
@@ -111,6 +131,11 @@ export function AgentPicker({ agents, value, onChange }: { agents: string[]; val
             })}
             {list.length === 0 && <li className="px-4 py-2 text-[13px] text-ink-faint">Ningún agente coincide.</li>}
           </ul>
+          {merged.length > 0 && (
+            <p className="border-t border-hair px-4 py-2.5 text-[12px] leading-snug text-ink-faint">
+              {merged.length === 1 ? "1 agente venía" : `${merged.length} agentes venían`} escrito de varias formas en los archivos; se unieron solos.
+            </p>
+          )}
         </div>
       )}
     </div>
