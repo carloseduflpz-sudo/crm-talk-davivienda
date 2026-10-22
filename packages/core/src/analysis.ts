@@ -12,6 +12,9 @@ export interface SalesAgentRow {
   rechazadas: number;
   /** aprobadas ÷ (aprobadas + rechazadas), en %. */
   aprobacion: number;
+  /** Suma del monto de la sábana (CDC, Extra, UPIN traen monto) y de lo aprobado. */
+  monto: number;
+  montoAprobado: number;
 }
 
 export interface MonthlySalesRow {
@@ -21,6 +24,8 @@ export interface MonthlySalesRow {
   rechazadas: number;
   enProceso: number;
   aprobacion: number;
+  monto: number;
+  montoAprobado: number;
 }
 
 export interface CallAgentRow {
@@ -63,10 +68,12 @@ export interface CampaignAnalysis {
     rechazadas: number;
     enProceso: number;
     aprobacion: number;
-    porEstatus: (Count & { class: string })[];
+    /** Montos en dólares (0 si la sábana no trae monto). */
+    monto: { total: number; aprobado: number; rechazado: number; enProceso: number };
+    porEstatus: (Count & { class: string; monto: number })[];
     porEjecutivo: SalesAgentRow[];
-    rechazoPorMotivo: Count[];
-    porDia: { date: string; ventas: number; aprobadas: number }[];
+    rechazoPorMotivo: (Count & { monto: number })[];
+    porDia: { date: string; ventas: number; aprobadas: number; monto: number; montoAprobado: number }[];
     porProceso: Count[];
     mensual: MonthlySalesRow[];
   };
@@ -133,9 +140,25 @@ export interface CampaignAnalysis {
     ritmoDiario: number;
     proyeccion: number;
     ritmoNecesario: number | null;
-    /** Lo que se esperaba llevar a la fecha de corte, repartiendo la meta por días hábiles. */
+    /** Meta MTD: lo que se esperaba llevar a la fecha de corte, repartiendo la meta por días hábiles. */
     esperado: number | null;
-    porAgente: { agent: string; ventas: number; total: number; operaciones: number; aprobadas: number; meta: number | null; gap: number | null; avance: number | null }[];
+    /** Cumplimiento MTD: ventas ÷ meta MTD, en %. */
+    avanceMTD: number | null;
+    porAgente: {
+      agent: string;
+      ventas: number;
+      total: number;
+      operaciones: number;
+      aprobadas: number;
+      /** Meta del mes del agente (meta ÷ HC). */
+      meta: number | null;
+      gap: number | null;
+      avance: number | null;
+      /** Meta MTD del agente y su cumplimiento a la fecha de corte. */
+      metaMTD: number | null;
+      gapMTD: number | null;
+      avanceMTD: number | null;
+    }[];
     /** Configuración de la meta del mes (o la sugerida si aún no hay meta). */
     config: {
       /** Estatus de la sábana que cuentan para la meta. */

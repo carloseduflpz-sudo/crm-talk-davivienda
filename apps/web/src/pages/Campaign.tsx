@@ -3,7 +3,7 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode } from "@crm/core";
+import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, PhoneCall, Target, TrendingUp, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
@@ -112,47 +112,70 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   if (!v) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={TrendingUp} />;
   const p = prev?.ventas;
   const vs = vsLabel(prev);
+  // CDC y Extra: los indicadores van en dólares (con la cantidad de ventas como referencia).
+  const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
     key: k,
     label: SALE_LABEL[k]!,
-    value: k === "aprobado" ? v.aprobadas : k === "rechazado" ? v.rechazadas : v.enProceso,
+    value: money
+      ? k === "aprobado"
+        ? v.monto.aprobado
+        : k === "rechazado"
+          ? v.monto.rechazado
+          : v.monto.enProceso
+      : k === "aprobado"
+        ? v.aprobadas
+        : k === "rechazado"
+          ? v.rechazadas
+          : v.enProceso,
     color: SALE_COLORS[k]!,
   }));
+  const ventasN = (n: number) => `${fmtInt.format(n)} ${n === 1 ? "venta" : "ventas"}`;
   return (
     <Stack>
       <FigureStrip
         figures={[
-          {
-            label: `Ventas de ${monthLabel(a.month!)}`,
-            num: v.total,
-            format: intOf,
-            foot: "Todas las de la sábana del banco",
-            delta: deltaOf(v.total, p?.total, vs),
-            spark: v.porDia.map((d) => d.ventas),
-            onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
-          },
+          money
+            ? {
+                label: `Monto de ${monthLabel(a.month!)}`,
+                num: v.monto.total,
+                format: fmtMoney,
+                foot: `${ventasN(v.total)} en la sábana del banco`,
+                delta: deltaOf(v.monto.total, p?.monto.total, vs),
+                spark: v.porDia.map((d) => d.monto),
+                onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
+              }
+            : {
+                label: `Ventas de ${monthLabel(a.month!)}`,
+                num: v.total,
+                format: intOf,
+                foot: "Todas las de la sábana del banco",
+                delta: deltaOf(v.total, p?.total, vs),
+                spark: v.porDia.map((d) => d.ventas),
+                onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
+              },
           {
             label: "Aprobadas",
-            num: v.aprobadas,
-            format: intOf,
-            foot: `${fmtPct(share(v.aprobadas, v.total))} del total`,
-            delta: deltaOf(v.aprobadas, p?.aprobadas, vs),
+            num: money ? v.monto.aprobado : v.aprobadas,
+            format: money ? fmtMoney : intOf,
+            foot: money ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto` : `${fmtPct(share(v.aprobadas, v.total))} del total`,
+            delta: money ? deltaOf(v.monto.aprobado, p?.monto.aprobado, vs) : deltaOf(v.aprobadas, p?.aprobadas, vs),
             onOpen: () => open({ fuente: "ventas", title: "Ventas aprobadas", filters: { clase: "aprobado" } }),
           },
           {
             label: "Rechazadas",
-            num: v.rechazadas,
-            format: intOf,
-            foot: `${fmtPct(share(v.rechazadas, v.total))} del total`,
-            delta: deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
+            num: money ? v.monto.rechazado : v.rechazadas,
+            format: money ? fmtMoney : intOf,
+            foot: money ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto` : `${fmtPct(share(v.rechazadas, v.total))} del total`,
+            delta: money ? deltaOf(v.monto.rechazado, p?.monto.rechazado, vs, { upIsGood: false }) : deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
             onOpen: () => open({ fuente: "ventas", title: "Ventas rechazadas", filters: { clase: "rechazado" } }),
           },
           {
             label: "En proceso",
-            num: v.enProceso,
-            format: intOf,
-            foot: "Sin resolución del banco",
-            delta: deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
+            num: money ? v.monto.enProceso : v.enProceso,
+            format: money ? fmtMoney : intOf,
+            foot: money ? `${ventasN(v.enProceso)} sin resolución del banco` : "Sin resolución del banco",
+            delta: money ? deltaOf(v.monto.enProceso, p?.monto.enProceso, vs, { upIsGood: null }) : deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
             onOpen: () => open({ fuente: "ventas", title: "Ventas en proceso", filters: { clase: "en_proceso" } }),
           },
           { label: "Aprobación", num: v.aprobacion, format: pct1, foot: "Sobre las ya resueltas", delta: deltaOf(v.aprobacion, p?.aprobacion, vs, { rate: true }) },
@@ -160,17 +183,32 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
       >
         <ShareBar
           parts={parts}
-          label="Composición de las ventas por estatus del banco"
+          format={money ? fmtMoney : intOf}
+          label={money ? "Composición del monto por estatus del banco" : "Composición de las ventas por estatus del banco"}
           onSelect={(x) => open({ fuente: "ventas", title: `Ventas ${x.label.toLowerCase()}`, filters: { clase: parts.find((q) => q.label === x.label)!.key } })}
         />
       </FigureStrip>
 
-      <ChartCard title="Ventas por día" note="Fecha de venta según la sábana. Haz clic en un día para ver sus ventas o arrastra para elegir varios.">
+      <ChartCard title={money ? "Monto por día" : "Ventas por día"} note="Fecha de venta según la sábana. Haz clic en un día para ver sus ventas o arrastra para elegir varios.">
         <AreaChart
-          seriesLabel="Ventas"
-          unit="ventas"
-          compare={compareOf(prev, p?.porDia, (d) => d.ventas)}
-          data={v.porDia.map((d) => ({ key: d.date, day: dayNum(d.date), label: String(dayNum(d.date)), title: dayLabel(d.date), value: d.ventas, extra: [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }] }))}
+          seriesLabel={money ? "Monto" : "Ventas"}
+          unit={money ? "monto" : "ventas"}
+          format={money ? fmtMoney : undefined}
+          tickPrefix={money ? "$" : ""}
+          compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
+          data={v.porDia.map((d) => ({
+            key: d.date,
+            day: dayNum(d.date),
+            label: String(dayNum(d.date)),
+            title: dayLabel(d.date),
+            value: money ? d.monto : d.ventas,
+            extra: money
+              ? [
+                  { label: "aprobado", value: fmtMoney(d.montoAprobado) },
+                  { label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) },
+                ]
+              : [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }],
+          }))}
           onOpenDay={(d) => open({ fuente: "ventas", title: `Ventas del ${d.title}`, filters: { dia: d.key } })}
           onOpenRange={(f, t) => open({ fuente: "ventas", title: `Ventas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
         />
@@ -179,15 +217,21 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
       <Pair>
         <ChartCard title="Estatus del banco" note="Tal como viene en la sábana. Clic para ver las ventas.">
           <BarList
-            rows={v.porEstatus.map((s) => ({ label: s.label, value: s.value, color: SALE_COLORS[s.class] }))}
-            total={v.total}
+            rows={v.porEstatus.map((s) =>
+              money
+                ? { label: s.label, value: s.monto, display: fmtMoney(s.monto), note: ventasN(s.value), color: SALE_COLORS[s.class] }
+                : { label: s.label, value: s.value, color: SALE_COLORS[s.class] },
+            )}
+            total={money ? v.monto.total : v.total}
             onSelect={(r) => open({ fuente: "ventas", title: `Estatus ${lower(r.label)}`, filters: { estatus: r.label } })}
           />
         </ChartCard>
         <ChartCard title="Motivos de rechazo" note={`${fmtInt.format(v.rechazadas)} ventas rechazadas. Clic para ver cuáles.`}>
           <BarList
-            rows={v.rechazoPorMotivo.map((m) => ({ label: m.label, value: m.value, color: "var(--st-critical)" }))}
-            total={v.rechazadas}
+            rows={v.rechazoPorMotivo.map((m) =>
+              money ? { label: m.label, value: m.monto, display: fmtMoney(m.monto), note: ventasN(m.value), color: "var(--st-critical)" } : { label: m.label, value: m.value, color: "var(--st-critical)" },
+            )}
+            total={money ? v.monto.rechazado : v.rechazadas}
             onSelect={(r) => open({ fuente: "ventas", title: `Rechazadas por ${lower(r.label)}`, filters: { motivo: r.label } })}
           />
         </ChartCard>
@@ -211,6 +255,12 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
             { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas), sort: (r) => r.aprobadas },
             { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas), sort: (r) => r.rechazadas },
+            ...(money
+              ? [
+                  { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.monto), sort: (r: (typeof v.porEjecutivo)[number]) => r.monto },
+                  { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.montoAprobado), sort: (r: (typeof v.porEjecutivo)[number]) => r.montoAprobado },
+                ]
+              : []),
             { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => <PctCell value={r.aprobacion} />, sort: (r) => r.aprobacion },
           ]}
         />
@@ -247,6 +297,12 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas) },
                 { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas) },
                 { key: "enProceso", label: "En proceso", align: "right", render: (r) => fmtInt.format(r.enProceso) },
+                ...(money
+                  ? [
+                      { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.monto) },
+                      { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.montoAprobado) },
+                    ]
+                  : []),
                 { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
               ]}
             />
@@ -585,7 +641,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           title={c.meta === null ? `Meta de ${mes}` : `Editar la meta de ${mes}`}
           note={
             a.agente
-              ? `Para ver la meta individual de ${a.agente}, registra la meta del mes y el número de agentes con el filtro quitado.`
+              ? `Para ver la meta individual de ${a.agente}, registra la meta del mes y el HC (agentes autorizados) con el filtro quitado.`
               : c.meta === null
                 ? "Todavía no hay meta para este mes. Con la meta se calculan el avance, el ritmo en días hábiles y el gap por agente."
                 : undefined
@@ -608,15 +664,17 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   if (!a.ventas) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={Target} />;
 
   const meta = c.meta;
-  const esperado = c.esperado ?? 0;
+  const metaMTD = c.esperado ?? 0;
+  const adelante = c.ventas >= metaMTD;
   // CDC y Extra se miden en dólares; las demás campañas, en número de ventas.
   const money = c.unidad === "monto";
   const val = (x: number | null) => (money ? fmtMoney(x) : fmtNum(x, 1));
-  const valInt = (x: number) => (money ? fmtMoney(x) : fmtInt.format(Math.round(x)));
+  const valInt = (x: number | null) => (x === null ? "—" : money ? fmtMoney(x) : fmtInt.format(Math.round(x)));
   const unit = money ? "" : " ventas";
-  const adelante = c.ventas >= esperado;
   const corte = c.fechaCorte ? dayLabel(c.fechaCorte) : null;
   const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
+  const mtdTone = c.avanceMTD === null ? undefined : c.avanceMTD >= 100 ? ("good" as const) : c.avanceMTD >= 90 ? ("warn" as const) : ("bad" as const);
+  type Row = (typeof c.porAgente)[number];
   return (
     <Stack>
       <FigureStrip
@@ -629,51 +687,45 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         }
         figures={[
           {
-            label: a.agente ? `Avance de ${a.agente}` : "Avance de la meta",
-            num: c.avance ?? 0,
+            label: a.agente ? `Cumplimiento MTD de ${a.agente}` : "Cumplimiento MTD",
+            num: c.avanceMTD ?? 0,
             format: pct1,
-            foot: money ? (
+            tone: mtdTone,
+            foot: (
               <>
-                {fmtMoney(c.ventas)} de {fmtMoney(meta)} en {fmtInt.format(c.operaciones)} {c.operaciones === 1 ? "operación" : "operaciones"} que cuentan
-                {c.ventasTotales !== c.ventas && <> ({fmtMoney(c.ventasTotales)} en la sábana)</>}
-                {!a.agente && c.agentes ? `, ${c.agentes} agentes con ${fmtMoney(c.metaPorAgente)} cada uno` : ""}
-              </>
-            ) : (
-              <>
-                {fmtInt.format(c.ventas)} de {a.agente ? fmtNum(meta) : fmtInt.format(meta)} ventas que cuentan
-                {c.ventasTotales !== c.ventas && <> ({fmtInt.format(c.ventasTotales)} en la sábana)</>}
-                {!a.agente && c.agentes ? `, ${c.agentes} agentes con ${fmtNum(c.metaPorAgente)} cada uno` : ""}
+                {valInt(c.ventas)}
+                {unit} de una meta MTD de {valInt(metaMTD)}
+                {unit}, al día hábil {c.diaDelMes} de {c.diasDelMes}
+                {money && <> ({fmtInt.format(c.operaciones)} operaciones)</>}
               </>
             ),
-            tone: c.faltan === 0 ? "good" : undefined,
           },
           {
-            label: "Faltan",
+            label: "Avance del mes",
+            num: c.avance ?? 0,
+            format: pct1,
+            tone: c.faltan === 0 ? "good" : undefined,
+            foot: `${valInt(c.ventas)} de ${a.agente ? val(meta) : valInt(meta)}${unit}${!a.agente && c.agentes ? `, HC ${c.agentes} (${val(c.metaPorAgente)} c/u)` : ""}`,
+          },
+          {
+            label: "Faltan para la meta",
             num: c.faltan ?? 0,
             format: money ? fmtMoney : num1,
-            foot: c.faltan === 0 ? "Meta alcanzada" : money ? "Monto para llegar a la meta" : "Ventas para llegar a la meta",
-            tone: c.faltan === 0 ? "good" : undefined,
+            foot: c.faltan === 0 ? "Meta alcanzada" : c.ritmoNecesario !== null ? `${val(c.ritmoNecesario)} por día hábil en los ${c.diasRestantes} que quedan` : "Ya no quedan días hábiles",
+            tone: c.faltan === 0 ? "good" : c.ritmoNecesario !== null && c.ritmoNecesario > c.ritmoDiario ? "warn" : undefined,
           },
-          { label: "Ritmo actual", num: c.ritmoDiario, format: money ? fmtMoney : num1, foot: `${money ? "Dólares" : "Ventas"} por día hábil, en ${c.diaDelMes} de ${c.diasDelMes} días hábiles` },
-          c.ritmoNecesario === null
-            ? { label: "Ritmo necesario", value: "—", foot: "Ya no quedan días hábiles" }
-            : {
-                label: "Ritmo necesario",
-                num: c.ritmoNecesario,
-                format: money ? fmtMoney : num1,
-                foot: `Por día hábil en los ${c.diasRestantes} que quedan`,
-                tone: c.ritmoNecesario > c.ritmoDiario ? ("warn" as const) : undefined,
-              },
+          { label: "Ritmo actual", num: c.ritmoDiario, format: money ? fmtMoney : num1, foot: `${money ? "Dólares" : "Ventas"} por día hábil` },
           { label: "Proyección al cierre", num: c.proyeccion, format: money ? fmtMoney : intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta al ritmo actual`, tone: c.proyeccion >= meta ? "good" : "bad" },
         ]}
       >
-        <Meter thick value={c.ventas} max={meta} mark={esperado} markLabel={`Esperado al ${corte ?? "corte"}: ${valInt(esperado)}${unit}`} label="Avance contra la meta" />
+        <Meter thick value={c.ventas} max={meta} mark={metaMTD} markLabel={`Meta MTD al ${corte ?? "corte"}: ${valInt(metaMTD)}${unit}`} label="Avance contra la meta del mes" />
         <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
           {corte ? (
             <>
-              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca indica lo esperado a esa fecha: {valInt(esperado)}{unit}.{" "}
+              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca es la meta MTD: {valInt(metaMTD)}
+              {unit}.{" "}
               <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
-                {adelante ? `Van ${valInt(c.ventas - esperado)} por encima.` : `Van ${valInt(esperado - c.ventas)} por debajo.`}
+                {adelante ? `Van ${valInt(c.ventas - metaMTD)} por encima.` : `Van ${valInt(metaMTD - c.ventas)} por debajo.`}
               </span>
             </>
           ) : (
@@ -681,7 +733,8 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           )}
         </p>
         <p className="mt-1.5 text-[12.5px] text-ink-faint">
-          {reglas}{" "}
+          {reglas}
+          {c.agentes ? ` HC: ${c.agentes} agentes autorizados.` : ""}{" "}
           <button type="button" onClick={openCounted} className="font-medium text-brand-600 hover:underline">
             Ver las ventas que cuentan
           </button>
@@ -692,8 +745,8 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         title="Gap por agente"
         note={
           c.metaPorAgente === null
-            ? "Registra el número de agentes para calcular la meta individual"
-            : `Cada agente tiene una meta de ${money ? fmtMoney(c.metaPorAgente) : `${fmtNum(c.metaPorAgente)} ventas`} que cuentan. Clic en un agente para filtrar la campaña.`
+            ? "Registra el HC (agentes autorizados) para calcular la meta de cada agente"
+            : `Meta del mes por agente: ${val(c.metaPorAgente)} (meta ÷ HC ${c.agentes}). La meta MTD es la parte que corresponde a ${c.diaDelMes} de ${c.diasDelMes} días hábiles. Clic en un agente para filtrar la campaña.`
         }
       >
         <DataTable
@@ -705,34 +758,35 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           cols={[
             { key: "agent", label: "Agente", render: (r) => r.agent, sort: (r) => r.agent },
             { key: "ventas", label: money ? "Monto que cuenta" : "Cuentan", align: "right", render: (r) => valInt(r.ventas), sort: (r) => r.ventas },
-            ...(money ? [{ key: "operaciones", label: "Operaciones", align: "right" as const, render: (r: (typeof c.porAgente)[number]) => fmtInt.format(r.operaciones), sort: (r: (typeof c.porAgente)[number]) => r.operaciones }] : []),
-            { key: "total", label: "En la sábana", align: "right", render: (r) => valInt(r.total), sort: (r) => r.total },
-            { key: "meta", label: "Meta", align: "right", render: (r) => val(r.meta) },
+            ...(money ? [{ key: "operaciones", label: "Operaciones", align: "right" as const, render: (r: Row) => fmtInt.format(r.operaciones), sort: (r: Row) => r.operaciones }] : []),
+            { key: "metaMTD", label: "Meta MTD", align: "right", render: (r) => val(r.metaMTD), sort: (r) => r.metaMTD ?? 0 },
             {
-              key: "gap",
-              label: "Gap",
+              key: "gapMTD",
+              label: "Gap MTD",
               align: "right",
               render: (r) =>
-                r.gap === null ? "—" : <span className={r.gap > 0 ? "text-[var(--st-critical)]" : "text-[var(--st-good)]"}>{r.gap > 0 ? `−${val(r.gap)}` : `+${val(-r.gap)}`}</span>,
-              sort: (r) => r.gap ?? 0,
+                r.gapMTD === null ? "—" : <span className={r.gapMTD > 0 ? "text-[var(--st-critical)]" : "text-[var(--st-good)]"}>{r.gapMTD > 0 ? `−${val(r.gapMTD)}` : `+${val(-r.gapMTD)}`}</span>,
+              sort: (r) => r.gapMTD ?? 0,
             },
             {
-              key: "avance",
-              label: "Avance",
+              key: "avanceMTD",
+              label: "Cumplimiento MTD",
               align: "right",
               render: (r) =>
-                r.avance === null ? (
+                r.avanceMTD === null ? (
                   "—"
                 ) : (
                   <span className="inline-flex items-center justify-end gap-3">
                     <span className="hidden w-20 sm:block">
-                      <Meter value={r.ventas} max={r.meta ?? 0} />
+                      <Meter value={r.ventas} max={r.metaMTD ?? 0} />
                     </span>
-                    <span className="w-11 tabular-nums">{fmtPct(r.avance, 0)}</span>
+                    <span className="w-12 tabular-nums">{fmtPct(r.avanceMTD, 0)}</span>
                   </span>
                 ),
-              sort: (r) => r.avance ?? 0,
+              sort: (r) => r.avanceMTD ?? 0,
             },
+            { key: "meta", label: "Meta del mes", align: "right", render: (r) => val(r.meta) },
+            { key: "avance", label: "Avance del mes", align: "right", render: (r) => (r.avance === null ? "—" : fmtPct(r.avance, 0)), sort: (r) => r.avance ?? 0 },
           ]}
         />
       </ChartCard>

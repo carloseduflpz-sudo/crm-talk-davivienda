@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+coverage/
+playwright-report/
+test-results/
+
+# ─── Nunca subir datos de clientes al repositorio ───
+*.xlsx
+*.xlsb
+*.xls
+*.csv
+*.json.gz
+*.pptx
+datos/
+seeds/
+# Los archivos de prueba con datos INVENTADOS sí se permiten:
+!tests/fixtures/**

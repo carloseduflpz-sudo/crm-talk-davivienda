@@ -109,13 +109,15 @@ export function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone:
             <input className={`${input} ${money ? "pl-7" : ""}`} type="number" min={0} step={money ? 0.01 : 1} required value={meta} onChange={(e) => setMeta(e.target.value)} />
           </span>
         </label>
-        <label className="block w-44 text-[13px]">
-          <span className="mb-1.5 block text-ink-soft">Agentes</span>
+        <label className="block w-52 text-[13px]">
+          <span className="mb-1.5 block text-ink-soft" title="Cantidad de agentes autorizados">
+            HC <span className="text-ink-faint">(agentes autorizados)</span>
+          </span>
           <input className={input} type="number" min={1} step={1} value={agentes} onChange={(e) => setAgentes(e.target.value)} placeholder="Opcional" />
         </label>
         {meta && agentes && Number(agentes) > 0 && (
           <p className="pb-3 text-[13px] text-ink-soft">
-            {money ? `${fmtMoney(Number(meta) / Number(agentes))} por agente` : `${fmtNum(Number(meta) / Number(agentes))} ventas por agente`}
+            Meta por agente: {money ? fmtMoney(Number(meta) / Number(agentes)) : `${fmtNum(Number(meta) / Number(agentes))} ventas`}
           </p>
         )}
       </div>

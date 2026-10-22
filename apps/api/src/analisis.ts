@@ -108,6 +108,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       proyeccion: 0,
       ritmoNecesario: null,
       esperado: null,
+      avanceMTD: null,
       porAgente: [],
       config: { estatus: [], estatusPorDefecto: true, diasSemana: [...DEFAULT_WORK_DAYS], feriados: [] },
       estatusDisponibles: [],
@@ -119,34 +120,37 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
   if (sabana) {
     const id = sabana.id;
     const [totals, estatus, ejecutivos, motivos, dias, procesos, mensual] = await db.batch([
-      db.prepare(`SELECT status_class AS c, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY status_class`).bind(id, ...fb),
+      db.prepare(`SELECT status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY status_class`).bind(id, ...fb),
       db
         .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
+          `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
         )
         .bind(id, ...fb),
       db
         .prepare(
           `SELECT COALESCE(NULLIF(TRIM(executive), ''), 'Sin asignar') AS agent, COUNT(*) AS ventas,
-                  SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas
+                  SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
+                  COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
              FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC`,
         )
         .bind(id, ...fb),
       db
         .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
+          `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
         )
         .bind(id, ...fb),
       db
         .prepare(
-          `SELECT sale_date AS d, COUNT(*) AS ventas, SUM(status_class = 'aprobado') AS aprobadas FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
+          `SELECT sale_date AS d, COUNT(*) AS ventas, SUM(status_class = 'aprobado') AS aprobadas, COALESCE(SUM(amount), 0) AS monto,
+                  COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
         )
         .bind(id, ...fb),
       db.prepare(`SELECT process AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} AND process IS NOT NULL GROUP BY process ORDER BY n DESC`).bind(id, ...fb),
       db
         .prepare(
           `SELECT u.month AS month, COUNT(*) AS ventas, SUM(b.status_class = 'aprobado') AS aprobadas,
-                  SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso
+                  SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso,
+                  COALESCE(SUM(b.amount), 0) AS monto, COALESCE(SUM(CASE WHEN b.status_class = 'aprobado' THEN b.amount END), 0) AS monto_aprobado
              FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
             WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}
             GROUP BY u.month ORDER BY u.month`,
@@ -154,6 +158,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         .bind(campaign, ...fb),
     ]);
     const byClass = Object.fromEntries((totals!.results as { c: string; n: number }[]).map((r) => [r.c, n(r.n)]));
+    const montoByClass = Object.fromEntries((totals!.results as { c: string; m: number }[]).map((r) => [r.c, n(r.m)]));
     const aprobadas = byClass.aprobado ?? 0;
     const rechazadas = byClass.rechazado ?? 0;
     const enProceso = byClass.en_proceso ?? 0;
@@ -164,24 +169,40 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       rechazadas,
       enProceso,
       aprobacion: pct(aprobadas, aprobadas + rechazadas),
-      porEstatus: (estatus!.results as { label: string; c: string; n: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n) })),
-      porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number }[]).map((r) => ({
+      monto: {
+        total: Object.values(montoByClass).reduce((x, y) => x + y, 0),
+        aprobado: montoByClass.aprobado ?? 0,
+        rechazado: montoByClass.rechazado ?? 0,
+        enProceso: montoByClass.en_proceso ?? 0,
+      },
+      porEstatus: (estatus!.results as { label: string; c: string; n: number; m: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n), monto: n(r.m) })),
+      porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
         agent: r.agent,
         ventas: n(r.ventas),
         aprobadas: n(r.aprobadas),
         rechazadas: n(r.rechazadas),
         aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+        monto: n(r.monto),
+        montoAprobado: n(r.monto_aprobado),
       })),
-      rechazoPorMotivo: (motivos!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) })),
-      porDia: (dias!.results as { d: string; ventas: number; aprobadas: number }[]).map((r) => ({ date: r.d, ventas: n(r.ventas), aprobadas: n(r.aprobadas) })),
+      rechazoPorMotivo: (motivos!.results as { label: string; n: number; m: number }[]).map((r) => ({ label: r.label, value: n(r.n), monto: n(r.m) })),
+      porDia: (dias!.results as { d: string; ventas: number; aprobadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+        date: r.d,
+        ventas: n(r.ventas),
+        aprobadas: n(r.aprobadas),
+        monto: n(r.monto),
+        montoAprobado: n(r.monto_aprobado),
+      })),
       porProceso: (procesos!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) })),
-      mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; en_proceso: number }[]).map((r) => ({
+      mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; en_proceso: number; monto: number; monto_aprobado: number }[]).map((r) => ({
         month: r.month,
         ventas: n(r.ventas),
         aprobadas: n(r.aprobadas),
         rechazadas: n(r.rechazadas),
         enProceso: n(r.en_proceso),
         aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+        monto: n(r.monto),
+        montoAprobado: n(r.monto_aprobado),
       })),
     };
   }
@@ -427,6 +448,9 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         meta: c.metaPorAgente,
         gap: c.metaPorAgente !== null ? c.metaPorAgente - n(r.ventas) : null,
         avance: c.metaPorAgente ? pct(n(r.ventas), c.metaPorAgente) : null,
+        metaMTD: null,
+        gapMTD: null,
+        avanceMTD: null,
       }));
     } else {
       c.config.estatus = savedStatuses ?? [];
@@ -435,7 +459,16 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       c.avance = pct(c.ventas, c.meta);
       c.faltan = Math.max(0, c.meta - c.ventas);
       c.ritmoNecesario = c.diasRestantes > 0 ? c.faltan / c.diasRestantes : null;
+      // MTD: la meta repartida por días hábiles hasta la fecha de corte.
       c.esperado = c.diasDelMes ? (c.meta * c.diaDelMes) / c.diasDelMes : null;
+      c.avanceMTD = c.esperado ? pct(c.ventas, c.esperado) : null;
+    }
+    const share = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
+    for (const r of c.porAgente) {
+      if (r.meta === null) continue;
+      r.metaMTD = r.meta * share;
+      r.gapMTD = r.metaMTD - r.ventas;
+      r.avanceMTD = r.metaMTD ? pct(r.ventas, r.metaMTD) : null;
     }
   }
 

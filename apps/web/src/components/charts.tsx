@@ -453,7 +453,7 @@ export interface Part {
   color: string;
 }
 
-export function ShareBar({ parts, label, onSelect }: { parts: Part[]; label?: string; onSelect?: (p: Part) => void }) {
+export function ShareBar({ parts, label, onSelect, format = intOf }: { parts: Part[]; label?: string; onSelect?: (p: Part) => void; format?: (n: number) => string }) {
   const [hover, setHover] = useState<string | null>(null);
   const total = parts.reduce((s, p) => s + p.value, 0);
   const visible = parts.filter((p) => p.value > 0);
@@ -463,11 +463,11 @@ export function ShareBar({ parts, label, onSelect }: { parts: Part[]; label?: st
         {visible.map((p, i) => {
           const common = {
             onPointerEnter: () => setHover(p.label),
-            title: `${p.label}: ${fmtInt.format(p.value)} (${fmtPct((p.value / (total || 1)) * 100)})`,
+            title: `${p.label}: ${format(p.value)} (${fmtPct((p.value / (total || 1)) * 100)})`,
             style: { width: `${(p.value / (total || 1)) * 100}%`, background: p.color, minWidth: 4, opacity: hover && hover !== p.label ? 0.3 : 1, animationDelay: `${i * 60}ms` },
           };
           return onSelect ? (
-            <button key={p.label} type="button" onClick={() => onSelect(p)} aria-label={`${p.label}: ${fmtInt.format(p.value)}. Ver clientes`} className="viz-grow-x h-full cursor-pointer rounded-full transition-opacity duration-200" {...common} />
+            <button key={p.label} type="button" onClick={() => onSelect(p)} aria-label={`${p.label}: ${format(p.value)}. Ver clientes`} className="viz-grow-x h-full cursor-pointer rounded-full transition-opacity duration-200" {...common} />
           ) : (
             <div key={p.label} className="viz-grow-x h-full rounded-full transition-opacity duration-200" {...common} />
           );
@@ -481,7 +481,7 @@ export function ShareBar({ parts, label, onSelect }: { parts: Part[]; label?: st
               <span className="block leading-tight">
                 <span className={`block text-[13px] transition-colors ${hover === p.label ? "text-ink" : "text-ink-soft"}`}>{p.label}</span>
                 <span className="mt-1 block text-[17px] text-ink tabular-nums">
-                  <CountUp value={p.value} format={intOf} />
+                  <CountUp value={p.value} format={format} />
                   <span className="ml-2 text-[12.5px] text-ink-faint">{fmtPct(total ? (p.value / total) * 100 : 0)}</span>
                 </span>
               </span>
@@ -579,10 +579,16 @@ export function AreaChart({
   compare,
   onOpenDay,
   onOpenRange,
+  format = (n: number) => fmtInt.format(n),
+  tickPrefix = "",
 }: {
   data: Point[];
   height?: number;
   seriesLabel: string;
+  /** Cómo se escriben los valores (por defecto, enteros; en dólares para montos). */
+  format?: (n: number) => string;
+  /** "$" en el eje cuando la serie es un monto. */
+  tickPrefix?: string;
   /** Palabra para el resumen ("ventas", "llamadas"). */
   unit?: string;
   compare?: Compare;
@@ -712,7 +718,7 @@ export function AreaChart({
               <g key={t}>
                 <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? "var(--viz-axis)" : "var(--viz-grid)"} />
                 <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={12} className="tabular-nums">
-                  {compact(t)}
+                  {tickPrefix}{compact(t)}
                 </text>
               </g>
             ))}
@@ -743,7 +749,7 @@ export function AreaChart({
               <g className={intro ? "viz-fade" : undefined} style={{ animationDelay: "600ms" }}>
                 <circle cx={pts[maxIdx]![0]} cy={pts[maxIdx]![1]} r={4} fill="var(--viz-1)" stroke="var(--viz-surface)" strokeWidth={2} />
                 <text x={pts[maxIdx]![0]} y={pts[maxIdx]![1] - 10} textAnchor="middle" fontSize={12} fontWeight={600} className="fill-ink">
-                  {fmtInt.format(values[maxIdx]!)}
+                  {format(values[maxIdx]!)}
                 </text>
               </g>
             )}
@@ -764,9 +770,9 @@ export function AreaChart({
               content: (
                 <div>
                   <TipTitle>{h.title}</TipTitle>
-                  <TipRow color="var(--viz-1)" label={word} value={fmtInt.format(h.value)} />
+                  <TipRow color="var(--viz-1)" label={word} value={format(h.value)} />
                   {h.extra?.map((e) => <TipRow key={e.label} label={e.label} value={e.value} />)}
-                  {cmpAtHover !== undefined && <TipRow color="var(--viz-text)" dashed label={`${word} en ${compare!.label}`} value={fmtInt.format(cmpAtHover)} />}
+                  {cmpAtHover !== undefined && <TipRow color="var(--viz-text)" dashed label={`${word} en ${compare!.label}`} value={format(cmpAtHover)} />}
                   {onOpenDay && !drag && <TipHint>Clic para ver los clientes, arrastra para elegir varios días</TipHint>}
                 </div>
               ),
@@ -782,13 +788,13 @@ export function AreaChart({
               Del <span className="text-ink">{summary.from.title}</span> al <span className="text-ink">{summary.to.title}</span>:
             </span>
             <span>
-              <span className="font-medium text-ink tabular-nums">{fmtInt.format(summary.sum)}</span> {word}
+              <span className="font-medium text-ink tabular-nums">{format(summary.sum)}</span> {word}
             </span>
             <span>
-              <span className="font-medium text-ink tabular-nums">{fmtNum(summary.avg)}</span> por día
+              <span className="font-medium text-ink tabular-nums">{format(summary.avg)}</span> por día
             </span>
             <span>
-              mejor día {summary.best.title} con <span className="font-medium text-ink tabular-nums">{fmtInt.format(summary.best.value)}</span>
+              mejor día {summary.best.title} con <span className="font-medium text-ink tabular-nums">{format(summary.best.value)}</span>
             </span>
             {onOpenRange && (
               <button type="button" onClick={() => onOpenRange(summary.from, summary.to)} className="font-medium text-brand-600 hover:underline">

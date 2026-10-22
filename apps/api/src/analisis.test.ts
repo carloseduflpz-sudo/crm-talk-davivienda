@@ -204,6 +204,18 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(c.porAgente.find((x) => x.agent === "Ana")).toMatchObject({ ventas: 3500.5, operaciones: 2, total: 3500.5 });
     expect(c.estatusDisponibles.find((e) => e.label === "NO APLICA")).toMatchObject({ value: 1, monto: 900, cuenta: false });
     expect(a.cumplimiento.unidad).toBe("ventas"); // TDC se mide en ventas
+    // MTD: la meta repartida en días hábiles; corte jueves 3 de septiembre = día hábil 3 de 22.
+    expect(c).toMatchObject({ fechaCorte: "2026-09-03", diaDelMes: 3, diasDelMes: 22 });
+    expect(c.esperado).toBeCloseTo((10000.5 * 3) / 22, 6);
+    expect(c.avanceMTD).toBeCloseTo((4000.5 / ((10000.5 * 3) / 22)) * 100, 6);
+    const anaMTD = c.porAgente.find((x) => x.agent === "Ana")!;
+    expect(anaMTD.metaMTD).toBeCloseTo((5000.25 * 3) / 22, 6);
+    expect(anaMTD.gapMTD).toBeCloseTo((5000.25 * 3) / 22 - 3500.5, 6);
+    // La pestaña Ventas también trae los montos.
+    const v = ((await call("GET", "/analisis/cdc?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!;
+    expect(v.monto).toEqual({ total: 4900.5, aprobado: 4000.5, rechazado: 900, enProceso: 0 });
+    expect(v.porEjecutivo.find((x) => x.agent === "Luis")).toMatchObject({ monto: 1400, montoAprobado: 500 });
+    expect(v.porDia.find((d) => d.date === "2026-09-03")).toMatchObject({ monto: 1400, montoAprobado: 500 });
   });
 
   it("validaciones de la meta", async () => {
