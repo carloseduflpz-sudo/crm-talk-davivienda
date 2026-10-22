@@ -3,8 +3,7 @@
 /* Modo oscuro por clase en <html> (se guarda la preferencia de cada usuario). */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Tokens de diseño. Base profesional y minimalista con los colores de Talk;
-   la pasada de diseño completa es la Fase 3. */
+/* Tokens de diseño: colores de Talk, tinta azul marino sobre papel gris muy claro, líneas finas. */
 @theme {
   --font-sans: "Poppins", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
@@ -15,6 +14,13 @@
   --color-brand-900: #04248b;
   --color-accent-500: #eb622e;
   --color-accent-400: #ff7e33;
+
+  /* Tinta y papel de la consola */
+  --color-ink: #0e1b3d;
+  --color-ink-soft: #6b778f;
+  --color-ink-faint: #98a2b5;
+  --color-paper: #f5f7fa;
+  --color-hair: #e6eaf0;
 }
 
 @layer base {
@@ -23,9 +29,49 @@
     font-feature-settings: "tnum" 1; /* cifras tabulares: las columnas de números se alinean */
   }
   body {
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+    @apply bg-paper text-ink dark:bg-slate-950 dark:text-slate-100;
   }
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-brand-500;
   }
+}
+
+/* Colores de gráficas, validados para daltonismo en claro y oscuro (orden fijo: no reordenar).
+   Una serie = --viz-1. Estados del banco = verde · ámbar · rojo, en ese orden y siempre con
+   su etiqueta. Clases de llamada = --viz-1 … --viz-5 en orden. */
+:root {
+  --viz-surface: #ffffff;
+  --viz-grid: #edf0f5;
+  --viz-axis: #d9dee7;
+  --viz-text: #98a2b5;
+  --viz-1: #086dff;
+  --viz-1-wash: rgba(8, 109, 255, 0.1);
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --st-good: #2f9e6e;
+  --st-warning: #f0b43c;
+  --st-critical: #e25c5c;
+}
+.dark {
+  /* La tinta y el papel se invierten en oscuro; los componentes no necesitan clases dark: para el texto. */
+  --color-ink: #eef2f8;
+  --color-ink-soft: #9aa6bb;
+  --color-ink-faint: #6f7c93;
+  --color-paper: #1a2336;
+  --color-hair: #1e293b;
+  --viz-surface: #0f172a;
+  --viz-grid: #1c2638;
+  --viz-axis: #2b3850;
+  --viz-text: #74819a;
+  --viz-1: #3987e5;
+  --viz-1-wash: rgba(57, 135, 229, 0.14);
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --st-good: #3fb27f;
+  --st-warning: #e8b04a;
+  --st-critical: #e8706f;
 }

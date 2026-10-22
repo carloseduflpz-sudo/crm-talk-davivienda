@@ -14,7 +14,7 @@ export function Home() {
 
   return (
     <>
-      <PageHeader title="Panel Ejecutivo" subtitle="Las 6 campañas Davivienda en una sola vista." actions={<Badge tone="brand">Versión 2.0 · Fase 1</Badge>} />
+      <PageHeader title="Panel Ejecutivo" subtitle="Las 6 campañas Davivienda en una sola vista." actions={<Badge tone="brand">Versión 2.0</Badge>} />
 
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
@@ -45,7 +45,7 @@ export function Home() {
               {lastMonth ? (
                 <>
                   <p className="mt-6 text-3xl font-semibold capitalize">{monthLabel(lastMonth)}</p>
-                  <p className="mt-1 text-sm text-slate-500">Último mes cargado · {fmt.format(rows)} filas</p>
+                  <p className="mt-1 text-sm text-slate-500">Último mes cargado, {fmt.format(rows)} filas</p>
                 </>
               ) : (
                 <>
