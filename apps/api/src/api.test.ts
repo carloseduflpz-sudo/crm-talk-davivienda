@@ -1,188 +1,269 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+/* Pruebas de la API contra una base SQLite real con las migraciones del proyecto. */
+import { beforeEach, describe, expect, it } from "vitest";
+import { memoryD1 } from "../test/d1";
 import { createApp } from "./app";
-import { resetCertsCache, verifyAccessJwt } from "./auth";
+import { SESSION_COOKIE } from "./auth";
 import type { Env } from "./env";
+import { hashPassword, passwordProblem, verifyPassword } from "./password";
 
-/* ---------- utilidades de prueba ---------- */
+const ORIGIN = "https://crm.test";
+const SETUP_TOKEN = "clave-de-configuracion-123";
+const app = createApp();
 
-const TEAM = "equipo-prueba.cloudflareaccess.com";
-const AUD = "aud-de-prueba";
+let env: Env;
+beforeEach(() => {
+  env = {
+    ASSETS: { fetch: async () => new Response("app") } as unknown as Fetcher,
+    DB: memoryD1(),
+    FILES: { head: async () => null } as unknown as R2Bucket,
+    APP_ENV: "production",
+    SETUP_TOKEN,
+  };
+});
 
-function fakeEnv(over: Partial<Env> = {}, users: Record<string, { role: string; active: number }> = {}): Env {
-  const db = {
-    prepare(sql: string) {
-      let args: unknown[] = [];
-      const stmt = {
-        bind(...a: unknown[]) {
-          args = a;
-          return stmt;
-        },
-        async first() {
-          if (sql.includes("FROM users")) return users[String(args[0])] ?? null;
-          return { 1: 1 };
-        },
-        async run() {
-          return { success: true };
-        },
-      };
-      return stmt;
+/** Cliente de prueba que guarda la cookie de sesión como un navegador. */
+function browser() {
+  let cookie = "";
+  return {
+    get cookie() {
+      return cookie;
+    },
+    async call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
+      const h: Record<string, string> = { ...headers };
+      if (cookie) h.cookie = `${SESSION_COOKIE}=${cookie}`;
+      if (body !== undefined) h["content-type"] ??= "application/json";
+      const res = await app.handle(
+        new Request(ORIGIN + "/api" + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }),
+        env,
+        () => {},
+      );
+      const set = res.headers.get("set-cookie");
+      if (set) {
+        const m = set.match(new RegExp(`${SESSION_COOKIE}=([^;]*)`));
+        cookie = m?.[1] ?? "";
+      }
+      const data = (await res.json()) as Record<string, unknown>;
+      return { status: res.status, data, setCookie: set };
     },
   };
-  return {
-    ASSETS: { fetch: async () => new Response("app") } as unknown as Fetcher,
-    DB: db as unknown as D1Database,
-    FILES: { head: async () => null } as unknown as R2Bucket,
-    ACCESS_TEAM_DOMAIN: TEAM,
-    ACCESS_AUD: AUD,
-    ADMIN_EMAILS: "carlos@talk.test, ana@talk.test",
-    APP_ENV: "production",
-    ...over,
-  };
 }
 
-const b64url = (data: ArrayBuffer | Uint8Array | string) => {
-  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data);
-  let s = "";
-  bytes.forEach((b) => (s += String.fromCharCode(b)));
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-let keys: CryptoKeyPair;
-let publicJwk: JsonWebKey & { kid: string };
-
-async function signToken(payload: Record<string, unknown>, kid = "k1", privateKey = keys.privateKey): Promise<string> {
-  const h = b64url(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
-  const p = b64url(JSON.stringify(payload));
-  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(`${h}.${p}`));
-  return `${h}.${p}.${b64url(sig)}`;
+async function setupAdmin() {
+  const b = browser();
+  const r = await b.call("POST", "/auth/configurar", { token: SETUP_TOKEN, username: "Carlos", displayName: "Carlos Pérez", password: "Davivienda2026" });
+  expect(r.status).toBe(201);
+  return b;
 }
 
-const nowS = () => Math.floor(Date.now() / 1000);
-const goodPayload = (over: Record<string, unknown> = {}) => ({
-  aud: [AUD],
-  email: "Carlos@Talk.test",
-  iss: `https://${TEAM}`,
-  exp: nowS() + 600,
-  nbf: nowS() - 10,
-  ...over,
-});
+/* ---------- contraseñas ---------- */
 
-beforeAll(async () => {
-  keys = (await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  publicJwk = { ...(await crypto.subtle.exportKey("jwk", keys.publicKey)), kid: "k1" };
-});
-
-function mockCerts() {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    expect(String(input)).toBe(`https://${TEAM}/cdn-cgi/access/certs`);
-    return new Response(JSON.stringify({ keys: [publicJwk] }), { headers: { "content-type": "application/json" } });
+describe("contraseñas", () => {
+  it("se guardan cifradas y se verifican", async () => {
+    const h = await hashPassword("Secreta12345");
+    expect(h.startsWith("pbkdf2$100000$")).toBe(true);
+    expect(h.includes("Secreta12345")).toBe(false);
+    expect(await verifyPassword("Secreta12345", h)).toBe(true);
+    expect(await verifyPassword("secreta12345", h)).toBe(false);
   });
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetCertsCache();
-});
-
-/* ---------- token de Access ---------- */
-
-describe("verificación del token de Access", () => {
-  it("acepta un token válido y devuelve el correo en minúsculas", async () => {
-    mockCerts();
-    expect(await verifyAccessJwt(await signToken(goodPayload()), fakeEnv())).toBe("carlos@talk.test");
+  it("dos cifrados de la misma contraseña son distintos (sal)", async () => {
+    expect(await hashPassword("Secreta12345")).not.toBe(await hashPassword("Secreta12345"));
   });
-
-  it.each([
-    ["audiencia equivocada", { aud: ["otra"] }],
-    ["vencido", { exp: nowS() - 3600 }],
-    ["todavía no válido", { nbf: nowS() + 3600 }],
-    ["emisor equivocado", { iss: "https://otro.cloudflareaccess.com" }],
-    ["sin vencimiento", { exp: undefined }],
-  ])("rechaza un token %s", async (_name, over) => {
-    mockCerts();
-    expect(await verifyAccessJwt(await signToken(goodPayload(over)), fakeEnv())).toBeNull();
-  });
-
-  it("rechaza un token firmado con otra clave", async () => {
-    mockCerts();
-    const other = (await crypto.subtle.generateKey(
-      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-      true,
-      ["sign", "verify"],
-    )) as CryptoKeyPair;
-    expect(await verifyAccessJwt(await signToken(goodPayload(), "k1", other.privateKey), fakeEnv())).toBeNull();
-  });
-
-  it("rechaza basura sin romperse", async () => {
-    mockCerts();
-    expect(await verifyAccessJwt("no.es.token", fakeEnv())).toBeNull();
-    expect(await verifyAccessJwt("abc", fakeEnv())).toBeNull();
+  it("exige largo, letras y números, y que no contenga el usuario", () => {
+    expect(passwordProblem("corta1", "ana")).not.toBe(null);
+    expect(passwordProblem("solamenteletras", "ana")).not.toBe(null);
+    expect(passwordProblem("1234567890123", "ana")).not.toBe(null);
+    expect(passwordProblem("carlos2026xx", "carlos")).not.toBe(null);
+    expect(passwordProblem("Davivienda2026", "carlos")).toBe(null);
   });
 });
 
-/* ---------- rutas ---------- */
+/* ---------- configuración inicial ---------- */
+
+describe("configuración inicial", () => {
+  it("al principio la app pide configurarse", async () => {
+    expect((await browser().call("GET", "/auth/estado")).data).toMatchObject({ needsSetup: true });
+  });
+
+  it("rechaza una clave de configuración incorrecta", async () => {
+    const r = await browser().call("POST", "/auth/configurar", { token: "otra", username: "carlos", displayName: "Carlos", password: "Davivienda2026" });
+    expect(r.status).toBe(403);
+  });
+
+  it("no funciona si falta SETUP_TOKEN en Cloudflare", async () => {
+    env.SETUP_TOKEN = undefined;
+    const r = await browser().call("POST", "/auth/configurar", { token: "x", username: "carlos", displayName: "Carlos", password: "Davivienda2026" });
+    expect(r.status).toBe(503);
+  });
+
+  it("crea el primer administrador, abre sesión y no se puede repetir", async () => {
+    const b = await setupAdmin();
+    expect(b.cookie.length).toBeGreaterThan(20);
+    expect((await b.call("GET", "/me")).data).toMatchObject({ username: "carlos", displayName: "Carlos Pérez", role: "admin", mustChangePassword: false });
+    expect((await browser().call("GET", "/auth/estado")).data).toMatchObject({ needsSetup: false });
+    const again = await browser().call("POST", "/auth/configurar", { token: SETUP_TOKEN, username: "otro", displayName: "Otro", password: "Davivienda2026" });
+    expect(again.status).toBe(409);
+  });
+});
+
+/* ---------- entrar y salir ---------- */
+
+describe("entrar y salir", () => {
+  it("la cookie es HttpOnly, SameSite=Strict y Secure", async () => {
+    await setupAdmin();
+    const r = await browser().call("POST", "/auth/entrar", { username: "carlos", password: "Davivienda2026" });
+    expect(r.status).toBe(200);
+    expect(r.setCookie).toContain("HttpOnly");
+    expect(r.setCookie).toContain("SameSite=Strict");
+    expect(r.setCookie).toContain("Secure");
+  });
+
+  it("el usuario no distingue mayúsculas", async () => {
+    await setupAdmin();
+    expect((await browser().call("POST", "/auth/entrar", { username: "  CARLOS ", password: "Davivienda2026" })).status).toBe(200);
+  });
+
+  it("mismo mensaje si el usuario no existe o la contraseña es incorrecta", async () => {
+    await setupAdmin();
+    const a = await browser().call("POST", "/auth/entrar", { username: "nadie", password: "Davivienda2026" });
+    const b = await browser().call("POST", "/auth/entrar", { username: "carlos", password: "Incorrecta2026" });
+    expect(a.status).toBe(401);
+    expect(b.status).toBe(401);
+    expect(a.data.error).toBe(b.data.error);
+  });
+
+  it("bloquea 15 minutos tras 5 intentos fallidos", async () => {
+    await setupAdmin();
+    for (let i = 0; i < 5; i++) expect((await browser().call("POST", "/auth/entrar", { username: "carlos", password: "Mala123456" })).status).toBe(401);
+    const r = await browser().call("POST", "/auth/entrar", { username: "carlos", password: "Davivienda2026" });
+    expect(r.status).toBe(429);
+  });
+
+  it("sin sesión la API no entrega datos", async () => {
+    expect((await browser().call("GET", "/me")).status).toBe(401);
+    expect((await browser().call("GET", "/campaigns")).status).toBe(401);
+  });
+
+  it("una cookie inventada no sirve", async () => {
+    const r = await app.handle(new Request(ORIGIN + "/api/me", { headers: { cookie: `${SESSION_COOKIE}=inventada` } }), env, () => {});
+    expect(r.status).toBe(401);
+  });
+
+  it("al salir, la sesión deja de servir", async () => {
+    const b = await setupAdmin();
+    const stolen = b.cookie;
+    expect((await b.call("POST", "/auth/salir", {})).status).toBe(200);
+    const r = await app.handle(new Request(ORIGIN + "/api/me", { headers: { cookie: `${SESSION_COOKIE}=${stolen}` } }), env, () => {});
+    expect(r.status).toBe(401);
+  });
+});
+
+/* ---------- protección contra otros sitios ---------- */
+
+describe("protección CSRF", () => {
+  it("rechaza escrituras que no son JSON", async () => {
+    const r = await browser().call("POST", "/auth/entrar", "username=carlos", { "content-type": "application/x-www-form-urlencoded" });
+    expect(r.status).toBe(415);
+  });
+  it("rechaza escrituras desde otro origen", async () => {
+    const r = await browser().call("POST", "/auth/entrar", { username: "carlos", password: "x" }, { origin: "https://malicioso.test" });
+    expect(r.status).toBe(403);
+  });
+});
+
+/* ---------- administración de usuarios ---------- */
+
+describe("usuarios", () => {
+  it("el administrador crea un usuario que debe cambiar su contraseña al entrar", async () => {
+    const admin = await setupAdmin();
+    const c = await admin.call("POST", "/usuarios", { username: "ana.lopez", displayName: "Ana López", role: "admin", password: "Temporal2026" });
+    expect(c.status).toBe(201);
+
+    const ana = browser();
+    const login = await ana.call("POST", "/auth/entrar", { username: "ana.lopez", password: "Temporal2026" });
+    expect(login.data).toMatchObject({ ok: true, mustChangePassword: true });
+
+    // Mientras no cambie la contraseña, solo puede ver su perfil y cambiarla.
+    expect((await ana.call("GET", "/campaigns")).status).toBe(403);
+    expect((await ana.call("GET", "/me")).data).toMatchObject({ mustChangePassword: true });
+
+    const bad = await ana.call("POST", "/auth/cambiar-clave", { currentPassword: "Temporal2026", newPassword: "corta" });
+    expect(bad.status).toBe(400);
+    const ok = await ana.call("POST", "/auth/cambiar-clave", { currentPassword: "Temporal2026", newPassword: "MiClaveNueva2026" });
+    expect(ok.status).toBe(200);
+    expect((await ana.call("GET", "/campaigns")).status).toBe(200);
+  });
+
+  it("no permite usuarios repetidos", async () => {
+    const admin = await setupAdmin();
+    const r = await admin.call("POST", "/usuarios", { username: "CARLOS", displayName: "Otro", role: "admin", password: "Temporal2026" });
+    expect(r.status).toBe(409);
+  });
+
+  it("restablecer la contraseña cierra las sesiones de esa persona", async () => {
+    const admin = await setupAdmin();
+    const { data } = await admin.call("POST", "/usuarios", { username: "luis", displayName: "Luis", role: "lector", password: "Temporal2026" });
+    const id = (data.user as { id: number }).id;
+    const luis = browser();
+    await luis.call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" });
+    expect((await admin.call("POST", `/usuarios/${id}/clave`, { password: "OtraTemporal2026" })).status).toBe(200);
+    expect((await luis.call("GET", "/me")).status).toBe(401);
+  });
+
+  it("desactivar a alguien lo saca y ya no puede entrar", async () => {
+    const admin = await setupAdmin();
+    const { data } = await admin.call("POST", "/usuarios", { username: "luis", displayName: "Luis", role: "lector", password: "Temporal2026" });
+    const id = (data.user as { id: number }).id;
+    const luis = browser();
+    await luis.call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" });
+    expect((await admin.call("PATCH", `/usuarios/${id}`, { active: false })).status).toBe(200);
+    expect((await luis.call("GET", "/me")).status).toBe(401);
+    expect((await browser().call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" })).status).toBe(401);
+  });
+
+  it("no deja la app sin administrador", async () => {
+    const admin = await setupAdmin();
+    const me = (await admin.call("GET", "/me")).data as { id: number };
+    const r = await admin.call("PATCH", `/usuarios/${me.id}`, { role: "lector" });
+    expect(r.status).toBe(400);
+  });
+
+  it("un lector no puede administrar usuarios", async () => {
+    const admin = await setupAdmin();
+    await admin.call("POST", "/usuarios", { username: "luis", displayName: "Luis", role: "lector", password: "Temporal2026" });
+    const luis = browser();
+    await luis.call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" });
+    await luis.call("POST", "/auth/cambiar-clave", { currentPassword: "Temporal2026", newPassword: "Cambiada2026xyz" });
+    expect((await luis.call("GET", "/me")).data).toMatchObject({ mustChangePassword: false });
+    expect((await luis.call("GET", "/usuarios")).status).toBe(403);
+    expect((await luis.call("GET", "/campaigns")).status).toBe(200);
+  });
+
+  it("el administrador desbloquea a un usuario bloqueado", async () => {
+    const admin = await setupAdmin();
+    const { data } = await admin.call("POST", "/usuarios", { username: "luis", displayName: "Luis", role: "lector", password: "Temporal2026" });
+    const id = (data.user as { id: number }).id;
+    for (let i = 0; i < 5; i++) await browser().call("POST", "/auth/entrar", { username: "luis", password: "Mala123456" });
+    expect((await browser().call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" })).status).toBe(429);
+    await admin.call("PATCH", `/usuarios/${id}`, { unlock: true });
+    expect((await browser().call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" })).status).toBe(200);
+  });
+});
+
+/* ---------- otras rutas ---------- */
 
 describe("API", () => {
-  const app = createApp();
-
   it("/api/health responde sin sesión y sin detalles internos", async () => {
-    const res = await app.request("/api/health", {}, fakeEnv());
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(res.status).toBe(200);
-    expect(body).toMatchObject({ ok: true, d1: true, r2: true, access: true });
-    expect(Object.keys(body).sort()).toEqual(["access", "d1", "ok", "r2", "version"]);
+    const r = await browser().call("GET", "/health");
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.data).sort()).toEqual(["d1", "ok", "r2", "version"]);
   });
-
-  it("sin token responde 401", async () => {
-    const res = await app.request("/api/me", {}, fakeEnv());
-    expect(res.status).toBe(401);
+  it("rutas desconocidas responden 404 y métodos equivocados 405", async () => {
+    expect((await browser().call("GET", "/no-existe")).status).toBe(404);
+    expect((await browser().call("DELETE", "/health")).status).toBe(405);
   });
-
-  it("sin Access configurado no entrega datos (503)", async () => {
-    const res = await app.request("/api/me", {}, fakeEnv({ ACCESS_AUD: "" }));
-    expect(res.status).toBe(503);
-  });
-
-  it("con token válido devuelve el usuario y su rol", async () => {
-    mockCerts();
-    const token = await signToken(goodPayload());
-    const res = await app.request("/api/me", { headers: { "Cf-Access-Jwt-Assertion": token } }, fakeEnv());
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, email: "carlos@talk.test", role: "admin" });
-  });
-
-  it("la tabla users manda sobre ADMIN_EMAILS", async () => {
-    mockCerts();
-    const token = await signToken(goodPayload());
-    const env = fakeEnv({}, { "carlos@talk.test": { role: "lector", active: 1 } });
-    const res = await app.request("/api/me", { headers: { cookie: `CF_Authorization=${token}` } }, env);
-    expect(await res.json()).toMatchObject({ role: "lector" });
-  });
-
-  it("el atajo de desarrollo no funciona en producción", async () => {
-    const res = await app.request("/api/me", {}, fakeEnv({ AUTH_MODE: "dev", DEV_USER_EMAIL: "carlos@talk.test" }));
-    expect(res.status).toBe(401);
-  });
-
-  it("el atajo de desarrollo funciona en local", async () => {
-    const res = await app.request("/api/me", {}, fakeEnv({ AUTH_MODE: "dev", APP_ENV: "development", DEV_USER_EMAIL: "carlos@talk.test" }));
-    expect(await res.json()).toMatchObject({ email: "carlos@talk.test", role: "admin" });
-  });
-
   it("/api/campaigns devuelve las 6 campañas", async () => {
-    const env = fakeEnv({ AUTH_MODE: "dev", APP_ENV: "development", DEV_USER_EMAIL: "carlos@talk.test" });
-    const res = await app.request("/api/campaigns", {}, env);
-    const body = (await res.json()) as { campaigns: { code: string }[] };
-    expect(body.campaigns.map((c) => c.code)).toEqual(["tdc", "extrafin", "cdc", "upin", "seguros", "domi"]);
-  });
-
-  it("rutas desconocidas responden 404 en JSON", async () => {
-    const env = fakeEnv({ AUTH_MODE: "dev", APP_ENV: "development" });
-    const res = await app.request("/api/no-existe", {}, env);
-    expect(res.status).toBe(404);
+    const admin = await setupAdmin();
+    const r = await admin.call("GET", "/campaigns");
+    expect((r.data.campaigns as { code: string }[]).map((c) => c.code)).toEqual(["tdc", "extrafin", "cdc", "upin", "seguros", "domi"]);
   });
 });

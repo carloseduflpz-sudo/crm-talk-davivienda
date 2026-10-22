@@ -18,7 +18,6 @@ export function Home() {
           <p className="text-sm font-semibold">Estado del sistema</p>
           <StatusDot ok={h?.d1} label="Base de datos (D1)" />
           <StatusDot ok={h?.r2} label="Archivos (R2)" />
-          <StatusDot ok={h?.access} label="Login (Access)" />
           {health.isError && <span className="text-sm text-red-600">No se pudo consultar el estado.</span>}
         </div>
       </Card>

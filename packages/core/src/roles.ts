@@ -10,10 +10,11 @@ export type Permission =
   | "datos:restaurar"
   | "config:editar"
   | "reportes:generar"
-  | "bitacora:ver";
+  | "bitacora:ver"
+  | "usuarios:administrar";
 
 const GRANTS: Record<Role, readonly Permission[]> = {
-  admin: ["datos:ver", "datos:cargar", "datos:restaurar", "config:editar", "reportes:generar", "bitacora:ver"],
+  admin: ["datos:ver", "datos:cargar", "datos:restaurar", "config:editar", "reportes:generar", "bitacora:ver", "usuarios:administrar"],
   editor: ["datos:ver", "datos:cargar", "reportes:generar"],
   lector: ["datos:ver"],
 };

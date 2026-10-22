@@ -22,15 +22,40 @@ export const campaigns = sqliteTable("campaigns", {
   updatedAt: integer("updated_at").notNull().default(now),
 });
 
+/** Usuarios con usuario y contraseña. Los da de alta un administrador desde la app. */
 export const users = sqliteTable("users", {
-  email: text("email").primaryKey(),
-  name: text("name"),
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Siempre en minúsculas: letras, números, punto, guion y guion bajo. */
+  username: text("username").notNull().unique(),
+  displayName: text("display_name").notNull(),
   /** "admin" | "editor" | "lector" */
   role: text("role").notNull().default("admin"),
+  /** "pbkdf2$<iteraciones>$<sal>$<hash>"; nunca la contraseña en texto. */
+  passwordHash: text("password_hash").notNull(),
+  /** La contraseña la asignó un administrador: se pide cambiarla al entrar. */
+  mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(true),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
-  lastSeenAt: integer("last_seen_at"),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: integer("locked_until"),
+  lastLoginAt: integer("last_login_at"),
   createdAt: integer("created_at").notNull().default(now),
+  updatedAt: integer("updated_at").notNull().default(now),
 });
+
+/** Sesiones abiertas. Se guarda la huella SHA-256 del token, nunca el token. */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at").notNull().default(now),
+    expiresAt: integer("expires_at").notNull(),
+    userAgent: text("user_agent"),
+  },
+  (t) => [index("sessions_user_idx").on(t.userId), index("sessions_expires_idx").on(t.expiresAt)],
+);
 
 export const periods = sqliteTable(
   "periods",

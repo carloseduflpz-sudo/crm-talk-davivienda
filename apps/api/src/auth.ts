@@ -1,142 +1,111 @@
-/* Identidad con Cloudflare Access.
-   Access deja pasar solo a los correos autorizados y firma un token (JWT) con su clave.
-   Aquí se verifica esa firma en cada llamada: sin token válido no se entrega ningún dato. */
+/* Sesiones con cookie segura.
+   - El navegador guarda un token aleatorio en una cookie HttpOnly (JavaScript no la puede leer).
+   - La base guarda solo la huella SHA-256 del token: si alguien leyera la base, no podría entrar.
+   - Las sesiones vencen a las 12 horas. */
 import { ROLES, type Role } from "@crm/core";
 import type { Env, User } from "./env";
 
-interface Jwk extends JsonWebKey {
-  kid?: string;
-}
-interface JwtPayload {
-  aud?: string | string[];
-  email?: string;
-  exp?: number;
-  nbf?: number;
-  iss?: string;
-}
+export const SESSION_COOKIE = "crm_sesion";
+export const SESSION_HOURS = 12;
+const SESSION_MS = SESSION_HOURS * 60 * 60 * 1000;
 
-const CERTS_TTL_MS = 60 * 60 * 1000;
-const CLOCK_SKEW_S = 60;
-let certsCache: { team: string; at: number; keys: Jwk[] } | null = null;
+export const MAX_FAILED_ATTEMPTS = 5;
+export const LOCK_MINUTES = 15;
 
-export function teamHost(env: Pick<Env, "ACCESS_TEAM_DOMAIN">): string {
-  return String(env.ACCESS_TEAM_DOMAIN || "")
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/+$/, "");
+function b64url(bytes: Uint8Array): string {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function b64urlToBytes(s: string): Uint8Array {
-  let b = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (b.length % 4) b += "=";
-  const bin = atob(b);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+export async function sha256Hex(text: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function decodeJson<T>(part: string): T {
-  return JSON.parse(new TextDecoder().decode(b64urlToBytes(part))) as T;
+export function readCookie(req: Request, name: string): string | null {
+  const header = req.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=") || null;
+  }
+  return null;
 }
 
-async function accessCerts(team: string, forceRefresh = false): Promise<Jwk[]> {
+function cookie(value: string, maxAgeSeconds: number, secure: boolean): string {
+  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure ? "; Secure" : ""}`;
+}
+
+export function isSecure(req: Request): boolean {
+  return new URL(req.url).protocol === "https:";
+}
+
+/** Crea una sesión y devuelve la cabecera Set-Cookie. */
+export async function createSession(env: Env, req: Request, userId: number): Promise<string> {
+  const token = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const id = await sha256Hex(token);
   const now = Date.now();
-  if (!forceRefresh && certsCache && certsCache.team === team && now - certsCache.at < CERTS_TTL_MS) return certsCache.keys;
-  const res = await fetch(`https://${team}/cdn-cgi/access/certs`);
-  if (!res.ok) throw new Error(`Access respondió ${res.status} al pedir certificados`);
-  const body = (await res.json()) as { keys?: Jwk[] };
-  certsCache = { team, at: now, keys: body.keys ?? [] };
-  return certsCache.keys;
+  const ua = (req.headers.get("user-agent") ?? "").slice(0, 200) || null;
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now),
+    env.DB.prepare("INSERT INTO sessions (id, user_id, created_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?)").bind(id, userId, now, now + SESSION_MS, ua),
+  ]);
+  return cookie(token, SESSION_MS / 1000, isSecure(req));
 }
 
-/** Para pruebas: olvida los certificados guardados. */
-export function resetCertsCache(): void {
-  certsCache = null;
+export function clearSessionCookie(req: Request): string {
+  return cookie("", 0, isSecure(req));
 }
 
-/** Devuelve el correo verificado del token, o null si el token no es válido. */
-export async function verifyAccessJwt(token: string, env: Pick<Env, "ACCESS_TEAM_DOMAIN" | "ACCESS_AUD">): Promise<string | null> {
-  const team = teamHost(env);
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [h, p, sig] = parts as [string, string, string];
-
-  let header: { kid?: string; alg?: string };
-  let payload: JwtPayload;
-  try {
-    header = decodeJson(h);
-    payload = decodeJson(p);
-  } catch {
-    return null;
-  }
-  if (header.alg !== "RS256") return null;
-
-  // Si Access rotó sus claves, se vuelve a pedir la lista una vez.
-  let jwk = (await accessCerts(team)).find((k) => k.kid === header.kid);
-  if (!jwk) jwk = (await accessCerts(team, true)).find((k) => k.kid === header.kid);
-  if (!jwk) return null;
-
-  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-  const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToBytes(sig), new TextEncoder().encode(`${h}.${p}`));
-  if (!ok) return null;
-
-  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(env.ACCESS_AUD)) return null;
-  const nowS = Date.now() / 1000;
-  if (typeof payload.exp !== "number" || payload.exp < nowS - CLOCK_SKEW_S) return null;
-  if (typeof payload.nbf === "number" && payload.nbf > nowS + CLOCK_SKEW_S) return null;
-  if (payload.iss && payload.iss !== `https://${team}`) return null;
-  return payload.email ? String(payload.email).toLowerCase() : null;
+interface SessionRow {
+  session_id: string;
+  id: number;
+  username: string;
+  display_name: string;
+  role: string;
+  must_change_password: number;
 }
 
-function getCookie(req: Request, name: string): string | null {
-  const c = req.headers.get("cookie") ?? "";
-  const m = c.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m?.[1] ?? null;
+/** Usuario de la sesión, o null si no hay sesión válida. */
+export async function userFromRequest(env: Env, req: Request): Promise<User | null> {
+  const token = readCookie(req, SESSION_COOKIE);
+  if (!token || token.length > 100) return null;
+  const id = await sha256Hex(token);
+  const row = await env.DB.prepare(
+    `SELECT s.id AS session_id, u.id, u.username, u.display_name, u.role, u.must_change_password
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.id = ? AND s.expires_at > ? AND u.active = 1`,
+  )
+    .bind(id, Date.now())
+    .first<SessionRow>();
+  if (!row) return null;
+  const role: Role = (ROLES as readonly string[]).includes(row.role) ? (row.role as Role) : "lector";
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    role,
+    mustChangePassword: Boolean(row.must_change_password),
+    sessionId: row.session_id,
+  };
 }
 
-/** Rol: primero la tabla users; si no está ahí, ADMIN_EMAILS → admin; si no, lector. */
-export async function roleFor(email: string, env: Env): Promise<Role> {
-  try {
-    const row = await env.DB.prepare("SELECT role, active FROM users WHERE email = ?").bind(email).first<{ role: string; active: number }>();
-    if (row) {
-      if (!row.active) return "lector";
-      if ((ROLES as readonly string[]).includes(row.role)) return row.role as Role;
-    }
-  } catch {
-    // La tabla aún no existe (primera vez, antes de migrar): se usa ADMIN_EMAILS.
-  }
-  const admins = String(env.ADMIN_EMAILS || "")
-    .toLowerCase()
-    .split(/[,;\s]+/)
-    .filter(Boolean);
-  return admins.includes(email) ? "admin" : "lector";
+export async function deleteSession(env: Env, sessionId: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(sessionId).run();
 }
 
-export type IdentifyResult = { ok: true; user: User } | { ok: false; status: 401 | 503; error: string };
+/** Cierra todas las sesiones de un usuario, salvo la indicada. */
+export async function deleteUserSessions(env: Env, userId: number, exceptSessionId?: string): Promise<void> {
+  if (exceptSessionId) {
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND id <> ?").bind(userId, exceptSessionId).run();
+  } else {
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+  }
+}
 
-export async function identify(request: Request, env: Env): Promise<IdentifyResult> {
-  // El atajo de desarrollo solo funciona fuera de producción y de las vistas previas.
-  if (env.AUTH_MODE === "dev" && env.APP_ENV === "development") {
-    const email = (env.DEV_USER_EMAIL || "dev@local").toLowerCase();
-    return { ok: true, user: { email, role: await roleFor(email, env) } };
-  }
-  if (!teamHost(env) || !env.ACCESS_AUD) {
-    return {
-      ok: false,
-      status: 503,
-      error: "Cloudflare Access no está configurado (faltan ACCESS_TEAM_DOMAIN y ACCESS_AUD). Por seguridad, la API no entrega datos hasta que lo esté.",
-    };
-  }
-  const token = request.headers.get("Cf-Access-Jwt-Assertion") || getCookie(request, "CF_Authorization");
-  if (!token) return { ok: false, status: 401, error: "No autenticado. Entra por la dirección protegida con Cloudflare Access." };
-  let email: string | null = null;
-  try {
-    email = await verifyAccessJwt(token, env);
-  } catch (e) {
-    console.error("Error verificando Access", e);
-    email = null;
-  }
-  if (!email) return { ok: false, status: 401, error: "Sesión de Access inválida o vencida. Recarga la página para volver a entrar." };
-  return { ok: true, user: { email, role: await roleFor(email, env) } };
+/** Nombre de usuario normalizado, o null si no es válido. */
+export function normalizeUsername(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const u = raw.trim().toLowerCase();
+  return /^[a-z0-9._-]{3,32}$/.test(u) ? u : null;
 }

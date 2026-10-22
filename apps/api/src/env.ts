@@ -5,22 +5,22 @@ export interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
   FILES: R2Bucket;
-  ACCESS_TEAM_DOMAIN: string;
-  ACCESS_AUD: string;
-  ADMIN_EMAILS: string;
-  /** "production" | "preview" | "development" */
+  /** "production" | "development" */
   APP_ENV: string;
-  /** Solo en desarrollo local (.dev.vars): "dev" salta Access y usa DEV_USER_EMAIL. */
-  AUTH_MODE?: string;
-  DEV_USER_EMAIL?: string;
+  /**
+   * Clave secreta de un solo uso para crear el primer administrador.
+   * Se define en Cloudflare como *Secret* (nunca en el repositorio).
+   * Cuando ya existe un usuario, deja de servir.
+   */
+  SETUP_TOKEN?: string;
 }
 
 export interface User {
-  email: string;
+  id: number;
+  username: string;
+  displayName: string;
   role: Role;
-}
-
-export interface AppContext {
-  Bindings: Env;
-  Variables: { user: User };
+  mustChangePassword: boolean;
+  /** Huella de la sesión con la que llegó la petición. */
+  sessionId: string;
 }

@@ -2,13 +2,13 @@
 import { createApp } from "./app";
 import type { Env } from "./env";
 
-const app = createApp();
+const api = createApp();
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-      return app.fetch(request, env, ctx);
+      return api.handle(request, env, (p) => ctx.waitUntil(p));
     }
     return env.ASSETS.fetch(request);
   },

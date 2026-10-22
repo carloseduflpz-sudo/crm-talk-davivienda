@@ -7,8 +7,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@crm/core": "*",
-    "@crm/db": "*",
-    "hono": "^4.7.0"
+    "@crm/core": "*"
   }
 }

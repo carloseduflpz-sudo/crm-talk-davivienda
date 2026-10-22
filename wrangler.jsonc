@@ -32,12 +32,9 @@
   ],
 
   "vars": {
-    // Cloudflare Access. Sin estos dos valores la API no entrega datos (falla cerrada).
-    "ACCESS_TEAM_DOMAIN": "still-wind-00ec.cloudflareaccess.com",
-    "ACCESS_AUD": "",
-    // Correos con rol de administrador, separados por coma. Por ahora los 3 usuarios son admin.
-    "ADMIN_EMAILS": "carlos.edufl.pz@gmail.com",
     "APP_ENV": "production"
+    // SETUP_TOKEN (clave para crear el primer administrador) NO va aquí:
+    // se define en Cloudflare → Worker → Settings → Variables and Secrets, tipo "Secret".
   },
 
   "observability": { "enabled": true }

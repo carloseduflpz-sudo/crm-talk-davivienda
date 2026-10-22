@@ -1,9 +1,9 @@
 import { CAMPAIGNS } from "@crm/core";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, LayoutDashboard, Menu, Moon, Search, Settings, Sparkles, Sun, Upload, X } from "lucide-react";
+import { ChevronDown, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Search, Settings, Sparkles, Sun, Upload, Users, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { NavLink, Outlet } from "react-router";
-import { api } from "../lib/api";
+import { Link, NavLink, Outlet } from "react-router";
+import { api, type Me } from "../lib/api";
 import { useTheme } from "../lib/theme";
 
 const linkBase = "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors";
@@ -62,6 +62,58 @@ function Nav({ onNavigate }: { onNavigate: () => void }) {
 
 const ROLE_LABEL = { admin: "Administrador", editor: "Editor", lector: "Solo lectura" } as const;
 
+function AccountMenu({ me }: { me: Me }) {
+  const [busy, setBusy] = useState(false);
+  const initials = me.displayName
+    .split(" ")
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  const logout = async () => {
+    setBusy(true);
+    try {
+      await api.logout();
+    } finally {
+      location.assign("/");
+    }
+  };
+  const item = "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800";
+  return (
+    <details className="group relative">
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 [&::-webkit-details-marker]:hidden">
+        <span className="flex size-8 items-center justify-center rounded-full bg-brand-500 text-xs font-semibold text-white" aria-hidden>
+          {initials}
+        </span>
+        <span className="hidden text-left leading-tight sm:block">
+          <span className="block max-w-[30vw] truncate text-sm font-medium">{me.displayName}</span>
+          <span className="block text-xs text-slate-500">{ROLE_LABEL[me.role]}</span>
+        </span>
+        <ChevronDown className="size-4 text-slate-400 transition-transform group-open:rotate-180" aria-hidden />
+      </summary>
+      <div
+        className="absolute right-0 z-50 mt-2 w-60 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-800 dark:bg-slate-900"
+        onClick={(e) => (e.currentTarget.parentElement as HTMLDetailsElement).removeAttribute("open")}
+      >
+        <p className="px-3 pt-2 pb-1 text-xs text-slate-500">
+          Usuario: <span className="font-medium text-slate-700 dark:text-slate-300">{me.username}</span>
+        </p>
+        <Link to="/cuenta/clave" className={item}>
+          <KeyRound className="size-4" aria-hidden /> Cambiar contraseña
+        </Link>
+        {me.permissions.includes("usuarios:administrar") && (
+          <Link to="/configuracion/usuarios" className={item}>
+            <Users className="size-4" aria-hidden /> Usuarios
+          </Link>
+        )}
+        <button onClick={logout} disabled={busy} className={`${item} text-red-600`}>
+          <LogOut className="size-4" aria-hidden /> {busy ? "Cerrando sesión…" : "Cerrar sesión"}
+        </button>
+      </div>
+    </details>
+  );
+}
+
 export function Layout() {
   const [open, setOpen] = useState(false);
   const { theme, toggle } = useTheme();
@@ -104,12 +156,7 @@ export function Layout() {
           >
             {theme === "oscuro" ? <Sun className="size-5" /> : <Moon className="size-5" />}
           </button>
-          {me.data && (
-            <div className="text-right leading-tight">
-              <p className="max-w-[40vw] truncate text-sm font-medium">{me.data.email}</p>
-              <p className="text-xs text-slate-500">{ROLE_LABEL[me.data.role]}</p>
-            </div>
-          )}
+          {me.data && <AccountMenu me={me.data} />}
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
           <Outlet />

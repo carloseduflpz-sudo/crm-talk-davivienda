@@ -7,7 +7,7 @@ Consola interna de las 6 campañas Davivienda (TDC, Extrafinanciamiento, Compra 
 | Código | Este repositorio | Pantallas, API, cálculos. **Nunca datos de clientes.** |
 | Tablas | Cloudflare **D1** (`crm-talk`) | Clientes, ventas, llamadas, metas, cierres, bitácora |
 | Archivos | Cloudflare **R2** (`crm-talk-datos`) | Excel originales, presentaciones generadas, respaldos |
-| Login | Cloudflare **Access** | Solo entran los correos autorizados |
+| Login | Usuario y contraseña propios | Usuarios en D1; contraseñas cifradas (PBKDF2); sesiones de 12 h |
 
 ## Estructura
 
@@ -29,22 +29,24 @@ wrangler.jsonc     Configuración de Cloudflare
 
 ### 2. Conectar este repositorio (despliegue automático)
 1. **Workers & Pages → Create → Import a repository** → elige este repositorio.
-2. Comando de compilación: `npm run build`
+2. Comando de compilación: `npm run build` (Cloudflare instala las librerías solo; no agregar `npm install`)
 3. Comando de despliegue: `npx wrangler d1 migrations apply crm-talk --remote && npx wrangler deploy`
 4. Deploy. Desde ahora, cada cambio en `main` se publica solo, y cada pull request genera una vista previa.
 
 Las migraciones crean las tablas y cargan los catálogos (6 campañas, 19 estatus del banco, 143 tipologías de VICI).
 
-### 3. Proteger el acceso (Cloudflare Access)
-1. En el Worker: **Settings → Domains & Routes** → junto a `workers.dev` pulsa **Enable Cloudflare Access** (y lo mismo en **Preview URLs**).
-2. Copia el **AUD Tag** que aparece y pégalo en `ACCESS_AUD` dentro de `wrangler.jsonc`.
-3. En la política de Access, deja solo los correos de los 3 usuarios.
-4. En `ADMIN_EMAILS` (`wrangler.jsonc`) escribe esos 3 correos separados por coma → commit.
+### 3. Crear el primer administrador
+1. En el Worker: **Settings → Variables and Secrets → Add**.
+2. Tipo **Secret**, nombre `SETUP_TOKEN`, valor: una frase larga que solo tú conozcas (mínimo 12 caracteres) → **Deploy**.
+3. Abre la app: aparece **Configuración inicial**. Escribe esa frase, tu nombre, tu usuario y tu contraseña.
+4. Listo: entras como administrador. Desde **Configuración → Usuarios** das de alta a los demás con una contraseña temporal; al primer ingreso la app les pide crear la suya.
 
-Mientras `ACCESS_AUD` esté vacío, la app abre pero la API **no entrega datos** (falla cerrada, a propósito).
+`SETUP_TOKEN` solo sirve mientras no exista ningún usuario. Después puedes borrarlo.
+
+**Seguridad del login:** contraseñas cifradas con sal (nunca se guardan en texto), bloqueo de 15 minutos tras 5 intentos fallidos, sesión en cookie `HttpOnly` + `Secure` + `SameSite=Strict` que vence a las 12 horas, y bitácora de cada ingreso y cambio de usuarios.
 
 ### 4. Comprobar
-Abre `https://<tu-worker>.workers.dev/api/health`: debe decir `"ok": true`. Luego entra a la app con tu correo.
+Abre `https://<tu-worker>.workers.dev/api/health`: debe decir `"ok": true`. Luego entra a la app con tu usuario.
 
 ## Cómo se trabaja
 
@@ -61,9 +63,9 @@ Abre `https://<tu-worker>.workers.dev/api/health`: debe decir `"ok": true`. Lueg
 ## Desarrollo local (opcional)
 ```
 npm install
-printf "AUTH_MODE=dev\nAPP_ENV=development\nDEV_USER_EMAIL=tu@correo\n" > .dev.vars
+printf "APP_ENV=development\nSETUP_TOKEN=clave-local-de-prueba\n" > .dev.vars
 npm run db:migrate:local
 npm run dev          # app + API en http://localhost:8787
 npm run check        # tipos + pruebas + compilación
 ```
-El atajo `AUTH_MODE=dev` solo funciona con `APP_ENV=development`; en producción y vistas previas se ignora.
+La primera vez, la app local muestra la configuración inicial: usa `clave-local-de-prueba` como clave.
