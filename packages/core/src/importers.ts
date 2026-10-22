@@ -163,16 +163,20 @@ const VICI: Profile = {
   label: "Tipificaciones (VICI)",
   sheets: ["Worksheet", "Hoja1", "Sheet1"],
   anySheet: true,
-  required: ["id_base", "categoria", "tipologia", "full_name", "call_date"],
+  // Dos exportaciones de VICI: la de siempre (id_base, full_name) y el "histórico outbound"
+  // (id_cliente, user_name). Mismos datos con otros nombres de columna.
+  required: [["id_base", "id_cliente"], "categoria", "tipologia", ["full_name", "user_name"], "call_date"],
   fields: {
-    NIU: ["id_base", "niu"],
+    NIU: [["id_base", "id_cliente"], "niu"],
     Categoria: ["categoria"],
     Tipologia: ["tipologia"],
     Subtipologia: ["subtipologia"],
-    Agente: ["full_name"],
+    Agente: [["full_name", "user_name"]],
     Fecha: ["call_date", "isoDateTime"],
   },
   transform(rec) {
+    // El marcador automático no es un agente: esas llamadas quedan "Sin asignar".
+    if (typeof rec.Agente === "string" && /^outbound auto ?dial$/i.test(rec.Agente.trim())) rec.Agente = null;
     if (!rec.Categoria) rec.Categoria = "Sin Tipificar";
     if (!rec.Tipologia) rec.Tipologia = "Sin Tipificar";
     if (!rec.Subtipologia) rec.Subtipologia = rec.Tipologia;
@@ -494,12 +498,23 @@ export interface ParseResult {
 }
 export type ParseOutcome = ParseResult | { error: string };
 
-const labelOf = (r: string | string[]) => (Array.isArray(r) ? r[0]! : r);
+const labelOf = (r: string | string[]) => (Array.isArray(r) ? r.join(" o ") : r);
+
+/** Columnas obligatorias que no están en la fila que más se parece a un encabezado (para el mensaje de error). */
+function missingRequired(rows: Cell[][], required: (string | string[])[]): string[] {
+  let best: string[] = required.map(labelOf);
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const have = new Set((rows[i] ?? []).map(normHeader));
+    const miss = required.filter((r) => !(Array.isArray(r) ? r : [r]).some((c) => have.has(normHeader(c)))).map(labelOf);
+    if (miss.length < best.length) best = miss;
+  }
+  return best;
+}
 
 function readWithProfile(reader: WorkbookReader, prof: Profile, sheet: string): ParseOutcome {
   const rows = reader.rows(sheet);
   const hdr = findHeader(rows, prof.required);
-  if (!hdr) return { error: `En la hoja "${sheet}" no encontré los encabezados obligatorios: ${prof.required.map(labelOf).join(", ")}.` };
+  if (!hdr) return { error: `En la hoja "${sheet}" faltan columnas obligatorias: ${missingRequired(rows, prof.required).join(", ")}.` };
 
   const colOf: Record<string, number> = {};
   const missingOptional: string[] = [];

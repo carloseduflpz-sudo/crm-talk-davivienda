@@ -57,7 +57,8 @@ export function peekWorkbook(XLSX: XLSXReader, data: Uint8Array, campaign: Campa
 /** Cuántas filas tiene de verdad una hoja abierta parcialmente (SheetJS guarda el rango completo en !fullref). */
 function totalRows(wb: WorkBookLike, sheet: string): number | null {
   const ws = wb.Sheets[sheet] as Record<string, unknown> | undefined;
-  const ref = (ws?.["!fullref"] ?? ws?.["!ref"]) as string | undefined;
+  // Sin !fullref la hoja cupo completa en la lectura parcial (o SheetJS no lo informó): no se adivina.
+  const ref = ws?.["!fullref"] as string | undefined;
   const m = ref?.match(/^[A-Z]+(\d+)(?::[A-Z]+(\d+))?$/i);
   return m ? Number(m[2] ?? m[1]) - Number(m[1]) + 1 : null;
 }

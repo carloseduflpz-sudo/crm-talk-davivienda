@@ -92,8 +92,8 @@ function Missing({ campaign, what, month, icon }: { campaign: string; what: stri
   );
 }
 
-const Stack = ({ children }: { children: ReactNode }) => <div className="space-y-6">{children}</div>;
-const Pair = ({ children }: { children: ReactNode }) => <div className="grid gap-6 lg:grid-cols-2">{children}</div>;
+const Stack = ({ children }: { children: ReactNode }) => <div className="space-y-8">{children}</div>;
+const Pair = ({ children }: { children: ReactNode }) => <div className="grid gap-8 xl:grid-cols-2">{children}</div>;
 /** Una línea de contexto, en voz baja. */
 const Aside = ({ children }: { children: ReactNode }) => <p className="px-1 text-[12.5px] leading-relaxed text-ink-faint">{children}</p>;
 
@@ -233,7 +233,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
               extra: [{ label: "aprobación", value: fmtPct(m.aprobacion) }],
             }))}
           />
-          <div className="mt-8">
+          <div className="mt-10">
             <DataTable
               rows={[...v.mensual].reverse()}
               onRowClick={(r) => setMonth(r.month)}
@@ -499,7 +499,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
             </ChartCard>
             <ChartCard title="Intentos por cliente" note="Cuántas veces se llamó a cada cliente en el mes">
               <Columns
-                height={210}
+                height={260}
                 data={l.intentos.map((i) => ({
                   key: i.intentos,
                   label: i.intentos,
@@ -541,9 +541,9 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
             </button>
           }
         >
-          <div className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+          <div className="grid gap-12 xl:grid-cols-[1.4fr_1fr]">
             <AreaChart
-              height={210}
+              height={260}
               seriesLabel="Ventas en el CRM"
               unit="ventas"
               compare={compareOf(prev, prev?.crm?.porDia, (d) => d.ventas)}
@@ -828,7 +828,7 @@ export function Campaign() {
       </div>
 
       {a && a.months.length > 0 && (
-        <div className="-mt-3 mb-7 flex flex-wrap items-center justify-between gap-3">
+        <div className="-mt-2 mb-10 flex flex-wrap items-center justify-between gap-3">
           <AgentPicker agents={a.agentes} value={agent} onChange={(x) => setQuery({ agente: x })} />
           <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Mes">
             {a.months.map((m) => (

@@ -67,4 +67,36 @@ describe("lectura en dos pasos", () => {
     const rows = Array.from({ length: 1234 }, (_, i) => ({ niu: String(i), profile: null, offer: null, extra: {} }));
     expect(chunkEnds(rows)).toEqual([500, 1000, 1234]);
   });
+
+  it("VICI histórico outbound: id_cliente y user_name; el marcador automático queda sin agente", () => {
+    const head = ["uniqueid", "lead_id", "call_date", "status", "user", "user_name", "categoria", "tipologia", "subtipologia", "id_cliente"];
+    const rows = [
+      head,
+      [1, 10, "2026-10-01 08:00:00", "A", "RA-1", "Agente Uno", "No contacto", "Buzon de voz", "Buzon de voz", 123456],
+      [2, 11, "2026-10-01 08:05:00", "DROP", "VDAD", "Outbound Auto Dial", "Sin asignar a un agente", "Sin asignar a un agente", "Sin asignar a un agente", null],
+      [3, 12, "2026-10-02 09:00:00", "SALE", "RA-2", "Agente Dos", "Contacto efectivo positivo", "Venta realizada", "Venta realizada", 654321],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Sheet1");
+    const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    expect(detections[0]?.datasetId).toBe("tdc:tipif");
+    const r = readDataset(X, bytes, "tdc", reader, detections, "tdc:tipif");
+    expect(r.error).toBeNull();
+    expect(r.rows).toHaveLength(3); // la llamada sin NIU se conserva: cuenta para contactabilidad
+    expect(r.rows.map((x) => [x.niu, (x as { agent: string | null }).agent])).toEqual([
+      ["123456", "Agente Uno"],
+      ["", null],
+      ["654321", "Agente Dos"],
+    ]);
+    expect(r.month?.month).toBe("2026-10");
+  });
+
+  it("si faltan columnas, el mensaje dice exactamente cuáles", () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["call_date", "categoria", "tipologia", "user_name"], ["2026-10-01 08:00:00", "No contacto", "Buzon de voz", "Uno"]]), "Sheet1");
+    const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:tipif").error).toMatch(/faltan columnas obligatorias: id_base o id_cliente\./);
+  });
 });

@@ -144,11 +144,11 @@ export function Panel({ children, className = "" }: { children: ReactNode; class
 
 export function ChartCard({ title, note, children, actions }: { title: string; note?: ReactNode; children: ReactNode; actions?: ReactNode }) {
   return (
-    <Panel className="p-5 sm:p-6">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
-          {note && <p className="mt-1 text-[12.5px] text-ink-soft">{note}</p>}
+    <Panel className="p-6 sm:p-8">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <h3 className="text-[16px] font-semibold text-ink">{title}</h3>
+          {note && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-soft">{note}</p>}
         </div>
         {actions}
       </div>
@@ -242,7 +242,7 @@ const TONE: Record<string, string> = {
 };
 
 function FigureValue({ f, lead }: { f: Figure; lead?: boolean }) {
-  const cls = lead ? "mt-1 text-[44px] leading-none font-light tracking-[-0.03em]" : "mt-1.5 text-[26px] leading-tight font-normal tracking-[-0.02em]";
+  const cls = lead ? "mt-2 text-[52px] leading-none font-light tracking-[-0.03em]" : "mt-2 text-[30px] leading-tight font-normal tracking-[-0.02em]";
   return (
     <span className={`block ${cls} tabular-nums ${f.tone ? TONE[f.tone] : "text-ink"}`}>
       {f.num !== undefined && f.format ? <CountUp value={f.num} format={f.format} /> : (f.value ?? "—")}
@@ -254,7 +254,7 @@ function FigureValue({ f, lead }: { f: Figure; lead?: boolean }) {
 function FigureCell({ f, className, children }: { f: Figure; className: string; children: ReactNode }) {
   if (!f.onOpen) return <div className={className}>{children}</div>;
   return (
-    <button type="button" onClick={f.onOpen} className={`group relative text-left transition-colors hover:bg-paper/60 focus-visible:bg-paper/60 dark:hover:bg-slate-800/40 ${className}`}>
+    <button type="button" onClick={f.onOpen} className={`group relative flex flex-col items-stretch justify-start text-left transition-colors hover:bg-paper/60 focus-visible:bg-paper/60 dark:hover:bg-slate-800/40 ${className}`}>
       {children}
       <span className="pointer-events-none absolute right-5 bottom-4 inline-flex items-center gap-0.5 text-[12px] text-brand-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
         Ver clientes <ChevronRight className="size-3.5" aria-hidden />
@@ -268,17 +268,17 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
   const [lead, ...rest] = figures;
   return (
     <Panel className="overflow-hidden">
-      <div className="grid lg:grid-cols-[1.35fr_repeat(var(--n),1fr)]" style={{ ["--n" as string]: rest.length }}>
+      <div className="grid lg:grid-cols-[1.5fr_repeat(var(--n),1fr)]" style={{ ["--n" as string]: rest.length }}>
         {lead && (
-          <FigureCell f={lead} className="p-6 lg:pr-8">
+          <FigureCell f={lead} className="p-7 lg:p-8">
             <span className="flex items-start justify-between gap-3">
-              <span className="block text-[13px] text-ink-soft">{lead.label}</span>
+              <span className="block text-[13.5px] text-ink-soft">{lead.label}</span>
               {actions && <span className="shrink-0 whitespace-nowrap">{actions}</span>}
             </span>
             <FigureValue f={lead} lead />
-            {lead.foot && <span className="block mt-2 text-[12.5px] text-ink-soft">{lead.foot}</span>}
+            {lead.foot && <span className="mt-3 block text-[13px] leading-relaxed text-ink-soft">{lead.foot}</span>}
             {lead.delta && (
-              <span className="block mt-1.5">
+              <span className="mt-2.5 block">
                 <DeltaBadge d={lead.delta} />
               </span>
             )}
@@ -288,12 +288,12 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
         {rest.length > 0 && (
           <div className="grid grid-cols-2 border-t border-hair lg:contents">
             {rest.map((f, i) => (
-              <FigureCell key={f.label} f={f} className={`block border-hair p-6 lg:border-t-0 lg:border-l ${i % 2 ? "border-l" : ""} ${i >= 2 ? "border-t" : ""}`}>
-                <span className="block text-[13px] text-ink-soft">{f.label}</span>
+              <FigureCell key={f.label} f={f} className={`border-hair p-7 lg:border-t-0 lg:border-l lg:px-7 lg:py-8 ${i % 2 ? "border-l" : ""} ${i >= 2 ? "border-t" : ""}`}>
+                <span className="block text-[13.5px] text-ink-soft">{f.label}</span>
                 <FigureValue f={f} />
-                {f.foot && <span className="block mt-1 text-[12px] leading-snug text-ink-faint">{f.foot}</span>}
+                {f.foot && <span className="mt-2 block text-[12.5px] leading-relaxed text-ink-faint">{f.foot}</span>}
                 {f.delta && (
-                  <span className="block mt-1.5">
+                  <span className="mt-2.5 block">
                     <DeltaBadge d={f.delta} />
                   </span>
                 )}
@@ -302,7 +302,7 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
           </div>
         )}
       </div>
-      {children && <div className="border-t border-hair px-6 py-5">{children}</div>}
+      {children && <div className="border-t border-hair px-7 py-7 lg:px-8">{children}</div>}
     </Panel>
   );
 }
@@ -311,7 +311,7 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
 
 export function Legend({ items, hidden, onToggle }: { items: { label: string; color: string; value?: string; dashed?: boolean }[]; hidden?: Set<string>; onToggle?: (label: string) => void }) {
   return (
-    <ul className="flex flex-wrap gap-x-5 gap-y-1.5 text-[12.5px] text-ink-soft">
+    <ul className="flex flex-wrap gap-x-6 gap-y-2 text-[13px] text-ink-soft">
       {items.map((it) => {
         const off = hidden?.has(it.label);
         const swatch = it.dashed ? (
@@ -388,17 +388,17 @@ export function BarList({
     const dim = active && r.label !== active;
     return (
       <>
-        <div className="mb-1.5 flex items-baseline justify-between gap-4 text-[13px]">
+        <div className="mb-2 flex items-baseline justify-between gap-6 text-[13.5px]">
           <span className={`flex min-w-0 items-center gap-1 truncate first-letter:uppercase ${dim ? "text-ink-faint" : "text-ink-soft"} ${clickable ? "group-hover:text-ink" : ""}`}>
             <span className="truncate first-letter:uppercase">{calmCase(r.label)}</span>
             {clickable && <ChevronRight className="size-3.5 shrink-0 -translate-x-1 text-brand-600 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden />}
           </span>
           <span className="shrink-0 tabular-nums">
             <span className={`font-medium ${dim ? "text-ink-soft" : "text-ink"}`}>{r.display ?? fmtInt.format(r.value)}</span>
-            <span className="ml-2 inline-block min-w-12 text-right text-ink-faint">{r.note ?? fmtPct(share)}</span>
+            <span className="ml-3 inline-block min-w-14 text-right text-ink-faint">{r.note ?? fmtPct(share)}</span>
           </span>
         </div>
-        <div className="h-[5px] overflow-hidden rounded-full bg-paper dark:bg-slate-800">
+        <div className="h-1.5 overflow-hidden rounded-full bg-paper dark:bg-slate-800">
           <div
             className="viz-grow-x h-full rounded-full transition-[width,opacity] duration-500"
             style={{ width: `${Math.max((r.value / top) * 100, r.value ? 1 : 0)}%`, background: r.color ?? "var(--viz-1)", opacity: dim ? 0.3 : 1, animationDelay: `${i * 35}ms` }}
@@ -410,7 +410,7 @@ export function BarList({
 
   return (
     <div>
-      <ul className="space-y-3">
+      <ul className="space-y-4">
         {shown.map((r, i) => (
           <li key={r.label}>
             {onSelect ? (
@@ -418,23 +418,23 @@ export function BarList({
                 type="button"
                 onClick={() => onSelect(r)}
                 title={`${selectHint}: ${r.label}`}
-                className="group -mx-2 block w-[calc(100%+1rem)] rounded-xl px-2 py-1 text-left transition-colors hover:bg-paper/70 dark:hover:bg-slate-800/40"
+                className="group -mx-3 block w-[calc(100%+1.5rem)] rounded-xl px-3 py-1.5 text-left transition-colors hover:bg-paper/70 dark:hover:bg-slate-800/40"
               >
                 {line(r, i, true)}
               </button>
             ) : (
-              <div className="py-1" title={`${r.label}: ${r.display ?? fmtInt.format(r.value)}`}>
+              <div className="py-1.5" title={`${r.label}: ${r.display ?? fmtInt.format(r.value)}`}>
                 {line(r, i, false)}
               </div>
             )}
           </li>
         ))}
         {restSum > 0 && (
-          <li className="py-1">{line({ label: `Otros (${rest.length})`, value: restSum, color: "var(--viz-axis)" }, shown.length, false)}</li>
+          <li className="py-1.5">{line({ label: `Otros (${rest.length})`, value: restSum, color: "var(--viz-axis)" }, shown.length, false)}</li>
         )}
       </ul>
       {rows.length > maxRows && (
-        <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-3 text-[13px] font-medium text-brand-600 hover:underline">
+        <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-5 text-[13px] font-medium text-brand-600 hover:underline">
           {expanded ? "Ver menos" : `Ver los ${rows.length}`}
         </button>
       )}
@@ -456,7 +456,7 @@ export function ShareBar({ parts, label, onSelect }: { parts: Part[]; label?: st
   const visible = parts.filter((p) => p.value > 0);
   return (
     <div onPointerLeave={() => setHover(null)}>
-      <div className="flex h-2 w-full gap-[3px]" role={onSelect ? "group" : "img"} aria-label={label ?? parts.map((p) => `${p.label} ${p.value}`).join(", ")}>
+      <div className="flex h-2.5 w-full gap-[3px]" role={onSelect ? "group" : "img"} aria-label={label ?? parts.map((p) => `${p.label} ${p.value}`).join(", ")}>
         {visible.map((p, i) => {
           const common = {
             onPointerEnter: () => setHover(p.label),
@@ -470,16 +470,16 @@ export function ShareBar({ parts, label, onSelect }: { parts: Part[]; label?: st
           );
         })}
       </div>
-      <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
+      <div className="mt-6 flex flex-wrap gap-x-10 gap-y-4">
         {parts.map((p) => {
           const inner = (
             <>
               <span className="mt-[7px] size-2 shrink-0 rounded-full" style={{ background: p.color }} aria-hidden />
               <span className="block leading-tight">
-                <span className={`block text-[12.5px] transition-colors ${hover === p.label ? "text-ink" : "text-ink-soft"}`}>{p.label}</span>
-                <span className="mt-0.5 block text-[15px] text-ink tabular-nums">
+                <span className={`block text-[13px] transition-colors ${hover === p.label ? "text-ink" : "text-ink-soft"}`}>{p.label}</span>
+                <span className="mt-1 block text-[17px] text-ink tabular-nums">
                   <CountUp value={p.value} format={intOf} />
-                  <span className="ml-1.5 text-[12px] text-ink-faint">{fmtPct(total ? (p.value / total) * 100 : 0)}</span>
+                  <span className="ml-2 text-[12.5px] text-ink-faint">{fmtPct(total ? (p.value / total) * 100 : 0)}</span>
                 </span>
               </span>
             </>
@@ -570,7 +570,7 @@ export interface Compare {
  */
 export function AreaChart({
   data,
-  height = 240,
+  height = 300,
   seriesLabel,
   unit,
   compare,
@@ -602,10 +602,10 @@ export function AreaChart({
     setHover(null);
   }, [sig]);
 
-  const padL = 36,
+  const padL = 42,
     padR = 12,
     padT = 26,
-    padB = 28;
+    padB = 34;
   const values = data.map((d) => d.value);
   const cmpVals = compare ? Object.values(compare.byDay) : [];
   const ticks = niceTicks(Math.max(...values, ...cmpVals, 1));
@@ -708,7 +708,7 @@ export function AreaChart({
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} stroke={t === 0 ? "var(--viz-axis)" : "var(--viz-grid)"} />
-                <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={11} className="tabular-nums">
+                <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={12} className="tabular-nums">
                   {compact(t)}
                 </text>
               </g>
@@ -731,7 +731,7 @@ export function AreaChart({
             </g>
             {data.map((d, i) =>
               i % labelEvery === 0 || i === data.length - 1 ? (
-                <text key={d.key} x={x(d.day)} y={height - 8} textAnchor="middle" fill="var(--viz-text)" fontSize={11}>
+                <text key={d.key} x={x(d.day)} y={height - 8} textAnchor="middle" fill="var(--viz-text)" fontSize={12}>
                   {d.label}
                 </text>
               ) : null,
@@ -739,7 +739,7 @@ export function AreaChart({
             {hover === null && !sel && maxIdx >= 0 && (
               <g className={intro ? "viz-fade" : undefined} style={{ animationDelay: "600ms" }}>
                 <circle cx={pts[maxIdx]![0]} cy={pts[maxIdx]![1]} r={4} fill="var(--viz-1)" stroke="var(--viz-surface)" strokeWidth={2} />
-                <text x={pts[maxIdx]![0]} y={pts[maxIdx]![1] - 10} textAnchor="middle" fontSize={11} fontWeight={600} className="fill-ink">
+                <text x={pts[maxIdx]![0]} y={pts[maxIdx]![1] - 10} textAnchor="middle" fontSize={12} fontWeight={600} className="fill-ink">
                   {fmtInt.format(values[maxIdx]!)}
                 </text>
               </g>
@@ -772,7 +772,7 @@ export function AreaChart({
         )}
       </div>
 
-      <div className="mt-3 flex min-h-8 flex-wrap items-center justify-between gap-3">
+      <div className="mt-5 flex min-h-8 flex-wrap items-center justify-between gap-4">
         {summary ? (
           <div className="fade-in flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-paper px-3.5 py-2 text-[12.5px] text-ink-soft dark:bg-slate-800/60">
             <span>
@@ -824,7 +824,7 @@ export interface ColumnDatum {
 
 export function Columns({
   data,
-  height = 220,
+  height = 270,
   legend,
   onSelect,
   selectHint,
@@ -843,8 +843,8 @@ export function Columns({
   const [hover, setHover] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const intro = useIntro(signature(data.map((d) => d.parts.reduce((s, p) => s + p.value, 0))));
-  const padL = 36,
-    padB = 28,
+  const padL = 42,
+    padB = 34,
     padT = 18;
   const view = data.map((d) => ({ ...d, parts: d.parts.filter((p) => !hidden.has(p.label)) }));
   const totals = view.map((d) => d.parts.reduce((s, p) => s + p.value, 0));
@@ -873,7 +873,7 @@ export function Columns({
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={padL} x2={width - 8} y1={y(t)} y2={y(t)} stroke={t === 0 ? "var(--viz-axis)" : "var(--viz-grid)"} />
-                <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={11} className="tabular-nums">
+                <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={12} className="tabular-nums">
                   {compact(t)}
                 </text>
               </g>
@@ -899,12 +899,12 @@ export function Columns({
                     })}
                   </g>
                   {(i % labelEvery === 0 || data.length <= 12) && (
-                    <text x={cx} y={height - 8} textAnchor="middle" fill={active === d.key ? "currentColor" : "var(--viz-text)"} fontSize={11} fontWeight={active === d.key ? 600 : 400} className={active === d.key ? "text-ink" : ""}>
+                    <text x={cx} y={height - 8} textAnchor="middle" fill={active === d.key ? "currentColor" : "var(--viz-text)"} fontSize={12} fontWeight={active === d.key ? 600 : 400} className={active === d.key ? "text-ink" : ""}>
                       {d.label}
                     </text>
                   )}
                   {data.length <= 12 && totals[i]! > 0 && (
-                    <text x={cx} y={y(totals[i]!) - 7} textAnchor="middle" fontSize={11} className={`${intro ? "viz-fade " : ""}fill-ink-soft tabular-nums`}>
+                    <text x={cx} y={y(totals[i]!) - 7} textAnchor="middle" fontSize={12} className={`${intro ? "viz-fade " : ""}fill-ink-soft tabular-nums`}>
                       {compact(totals[i]!)}
                     </text>
                   )}
@@ -1020,12 +1020,12 @@ export function DataTable<T>({
   const visible = all ? sorted : sorted.slice(0, maxRows);
   if (!rows.length) return <p className="text-sm text-ink-soft">{empty}</p>;
   return (
-    <div className="-mx-5 overflow-x-auto sm:-mx-6">
-      <table className="w-full text-[13.5px]">
+    <div className="-mx-6 overflow-x-auto sm:-mx-8">
+      <table className="w-full text-[14px]">
         <thead>
           <tr className="text-[12px] text-ink-faint">
             {cols.map((c) => (
-              <th key={c.key} className={`px-5 pb-3 font-normal whitespace-nowrap sm:px-6 ${c.align === "right" ? "text-right" : "text-left"}`} aria-sort={sort?.key === c.key ? (sort.dir === -1 ? "descending" : "ascending") : undefined}>
+              <th key={c.key} className={`px-6 pb-4 font-normal whitespace-nowrap sm:px-8 ${c.align === "right" ? "text-right" : "text-left"}`} aria-sort={sort?.key === c.key ? (sort.dir === -1 ? "descending" : "ascending") : undefined}>
                 {c.sort ? (
                   <button
                     className={`inline-flex items-center gap-1 transition-colors hover:text-ink ${sort?.key === c.key ? "text-ink" : ""}`}
@@ -1054,7 +1054,7 @@ export function DataTable<T>({
                 className={`group border-t border-hair transition-colors outline-none ${onRowClick ? "cursor-pointer hover:bg-paper/70 focus-visible:bg-paper dark:hover:bg-slate-800/40" : ""} ${on ? "bg-brand-50/60 dark:bg-brand-500/10" : ""}`}
               >
                 {cols.map((c, j) => (
-                  <td key={c.key} className={`px-5 py-3 whitespace-nowrap sm:px-6 ${c.align === "right" ? "text-right tabular-nums" : ""} ${j === 0 ? "text-ink" : "text-ink/80"}`}>
+                  <td key={c.key} className={`px-6 py-4 whitespace-nowrap sm:px-8 ${c.align === "right" ? "text-right tabular-nums" : ""} ${j === 0 ? "text-ink" : "text-ink/80"}`}>
                     {j === 0 && onRowClick ? (
                       <span className="inline-flex items-center gap-1">
                         {c.render(r)}
@@ -1071,7 +1071,7 @@ export function DataTable<T>({
         </tbody>
       </table>
       {sorted.length > maxRows && (
-        <div className="border-t border-hair px-5 pt-4 sm:px-6">
+        <div className="border-t border-hair px-6 pt-5 sm:px-8">
           <button onClick={() => setAll((v) => !v)} className="text-[13px] font-medium text-brand-600 hover:underline">
             {all ? "Ver menos" : `Ver las ${sorted.length} filas`}
           </button>
@@ -1085,7 +1085,7 @@ export function DataTable<T>({
 export function PctCell({ value, max = 100, digits = 1 }: { value: number; max?: number; digits?: number }) {
   return (
     <span className="inline-flex items-center justify-end gap-3">
-      <span className="hidden h-[3px] w-16 overflow-hidden rounded-full bg-paper sm:inline-block dark:bg-slate-800">
+      <span className="hidden h-1 w-20 overflow-hidden rounded-full bg-paper sm:inline-block dark:bg-slate-800">
         <span className="viz-grow-x block h-full rounded-full bg-[var(--viz-1)]" style={{ width: `${Math.min((value / (max || 1)) * 100, 100)}%` }} />
       </span>
       <span className="w-14 tabular-nums">{fmtPct(value, digits)}</span>

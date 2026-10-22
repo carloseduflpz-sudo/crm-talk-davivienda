@@ -34,6 +34,13 @@ class Statement {
   async run() {
     return this.runSync();
   }
+  allSync() {
+    const rows = this.db.prepare(this.sql).all(...this.args) as Record<string, unknown>[];
+    return { success: true, results: rows.map((r) => ({ ...r })), meta: { changes: 0, last_row_id: 0 } };
+  }
+  get isQuery() {
+    return /^\s*(SELECT|WITH)\b/i.test(this.sql);
+  }
   runSync() {
     const r = this.db.prepare(this.sql).run(...this.args);
     return { success: true, results: [], meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) } };
@@ -49,7 +56,7 @@ export function memoryD1(): D1Database {
     async batch(stmts: Statement[]) {
       db.exec("BEGIN");
       try {
-        const out = stmts.map((s) => s.runSync());
+        const out = stmts.map((s) => (s.isQuery ? s.allSync() : s.runSync()));
         db.exec("COMMIT");
         return out;
       } catch (e) {
