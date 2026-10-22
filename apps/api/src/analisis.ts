@@ -7,7 +7,7 @@
    - Penetración = clientes con venta en VICI ÷ clientes únicos de la base del mes.
    - Cumplimiento = ventas de la sábana del mes ÷ meta; ritmo = ventas ÷ día del mes de la
      última venta; proyección = ritmo × días del mes. */
-import { isCampaignCode, type CampaignAnalysis, type Count } from "@crm/core";
+import { DEFAULT_WORK_DAYS, businessDays, countsForGoal, isCampaignCode, suggestedHolidays, type CampaignAnalysis, type CampaignCode, type Count } from "@crm/core";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -24,6 +24,31 @@ interface CurrentUpload {
 }
 
 const pct = (a: number, b: number) => (b ? (a / b) * 100 : 0);
+
+interface GoalRow {
+  sales_goal: number | null;
+  agents: number | null;
+  counted_statuses: string | null;
+  work_days: string | null;
+  holidays: string | null;
+}
+/** Lista JSON guardada (o null si no hay). */
+function parseList(v: string | null | undefined): string[] | null {
+  if (!v) return null;
+  try {
+    const x = JSON.parse(v) as unknown;
+    return Array.isArray(x) ? x.filter((s): s is string => typeof s === "string") : null;
+  } catch {
+    return null;
+  }
+}
+function parseDays(v: string | null | undefined): number[] {
+  const d = (v ?? "")
+    .split(",")
+    .map(Number)
+    .filter((x) => Number.isInteger(x) && x >= 0 && x <= 6);
+  return d.length ? [...new Set(d)].sort() : [...DEFAULT_WORK_DAYS];
+}
 const n = (v: unknown) => Number(v ?? 0);
 const placeholders = (k: number) => Array.from({ length: k }, () => "?").join(", ");
 /** Nombre del agente tal como se agrupa en todos los análisis (vacío = "Sin asignar"). */
@@ -68,15 +93,22 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       agentes: null,
       metaPorAgente: null,
       ventas: 0,
+      ventasTotales: 0,
       aprobadas: 0,
       avance: null,
       faltan: null,
+      fechaCorte: null,
       diaDelMes: 0,
-      diasDelMes: month ? new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate() : 30,
+      diasDelMes: 0,
+      diasRestantes: 0,
       ritmoDiario: 0,
       proyeccion: 0,
       ritmoNecesario: null,
+      esperado: null,
       porAgente: [],
+      config: { estatus: [], estatusPorDefecto: true, diasSemana: [...DEFAULT_WORK_DAYS], feriados: [] },
+      estatusDisponibles: [],
+      feriadosSugeridos: month ? suggestedHolidays(month) : [],
     },
   };
 
@@ -320,34 +352,81 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
 
   /* ---------- cumplimiento ---------- */
   if (month) {
-    const goal = await db.prepare("SELECT sales_goal, agents FROM goals WHERE campaign = ? AND month = ?").bind(campaign, month).first<{ sales_goal: number; agents: number | null }>();
     const c = out.cumplimiento;
+    // Meta del mes; si aún no hay, la configuración del último mes con meta sirve de punto de partida.
+    const goal = await db
+      .prepare("SELECT sales_goal, agents, counted_statuses, work_days, holidays FROM goals WHERE campaign = ? AND month = ?")
+      .bind(campaign, month)
+      .first<GoalRow>();
+    const base =
+      goal ??
+      (await db
+        .prepare("SELECT NULL AS sales_goal, NULL AS agents, counted_statuses, work_days, '[]' AS holidays FROM goals WHERE campaign = ? AND month < ? ORDER BY month DESC LIMIT 1")
+        .bind(campaign, month)
+        .first<GoalRow>());
+    const savedStatuses = parseList(base?.counted_statuses);
+    c.config = {
+      estatus: [],
+      estatusPorDefecto: savedStatuses === null,
+      diasSemana: parseDays(base?.work_days),
+      feriados: (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month)),
+    };
     c.meta = goal ? n(goal.sales_goal) : null;
     c.agentes = goal?.agents ?? null;
     c.metaPorAgente = c.meta !== null && c.agentes ? c.meta / c.agentes : null;
     // Con filtro por agente, la meta que se mide es la individual.
     if (agente) c.meta = c.metaPorAgente;
-    if (out.ventas) {
-      c.ventas = out.ventas.total;
-      c.aprobadas = out.ventas.aprobadas;
-      const lastDay = out.ventas.porDia.filter((d) => d.date.startsWith(month)).at(-1)?.date;
-      c.diaDelMes = lastDay ? Number(lastDay.slice(8, 10)) : 0;
+
+    const habiles = businessDays(month, c.config.diasSemana, c.config.feriados);
+    c.diasDelMes = habiles.length;
+
+    if (sabana) {
+      const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
+      const { results: estatus } = await db
+        .prepare(`SELECT ${label} AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
+        .bind(sabana.id, ...fb)
+        .all<{ label: string; n: number }>();
+      const cuenta = (l: string) => (savedStatuses ? savedStatuses.includes(l) : countsForGoal(campaign as CampaignCode, l));
+      c.estatusDisponibles = estatus.map((r) => ({ label: r.label, value: n(r.n), cuenta: cuenta(r.label) }));
+      // Los guardados se respetan aunque este mes no aparezcan; los de la regla, solo los presentes.
+      c.config.estatus = savedStatuses ?? c.estatusDisponibles.filter((e) => e.cuenta).map((e) => e.label);
+      const counted = c.config.estatus;
+      const inList = counted.length ? `${label} IN (${placeholders(counted.length)})` : "0";
+      const [porAgente, porDia] = await db.batch([
+        db
+          .prepare(
+            `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS total, SUM(${inList}) AS ventas, SUM(status_class = 'aprobado') AS aprobadas
+               FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC, total DESC`,
+          )
+          .bind(...counted, sabana.id, ...fb),
+        db.prepare(`SELECT MAX(sale_date) AS corte FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`).bind(sabana.id, ...fb, `${month}%`),
+      ]);
+      const agentes = porAgente!.results as { agent: string; total: number; ventas: number; aprobadas: number }[];
+      c.ventas = agentes.reduce((sum, r) => sum + n(r.ventas), 0);
+      c.ventasTotales = agentes.reduce((sum, r) => sum + n(r.total), 0);
+      c.aprobadas = agentes.reduce((sum, r) => sum + n(r.aprobadas), 0);
+      c.fechaCorte = (porDia!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
+      c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
+      c.diasRestantes = c.diasDelMes - c.diaDelMes;
       c.ritmoDiario = c.diaDelMes ? c.ventas / c.diaDelMes : 0;
-      c.proyeccion = Math.round(c.ritmoDiario * c.diasDelMes);
-      c.porAgente = out.ventas.porEjecutivo.map((a) => ({
-        agent: a.agent,
-        ventas: a.ventas,
-        aprobadas: a.aprobadas,
+      c.proyeccion = Math.round(c.ventas + c.ritmoDiario * c.diasRestantes);
+      c.porAgente = agentes.map((r) => ({
+        agent: r.agent,
+        ventas: n(r.ventas),
+        total: n(r.total),
+        aprobadas: n(r.aprobadas),
         meta: c.metaPorAgente,
-        gap: c.metaPorAgente !== null ? c.metaPorAgente - a.ventas : null,
-        avance: c.metaPorAgente ? pct(a.ventas, c.metaPorAgente) : null,
+        gap: c.metaPorAgente !== null ? c.metaPorAgente - n(r.ventas) : null,
+        avance: c.metaPorAgente ? pct(n(r.ventas), c.metaPorAgente) : null,
       }));
+    } else {
+      c.config.estatus = savedStatuses ?? [];
     }
     if (c.meta !== null) {
       c.avance = pct(c.ventas, c.meta);
       c.faltan = Math.max(0, c.meta - c.ventas);
-      const restantes = c.diasDelMes - c.diaDelMes;
-      c.ritmoNecesario = restantes > 0 ? c.faltan / restantes : null;
+      c.ritmoNecesario = c.diasRestantes > 0 ? c.faltan / c.diasRestantes : null;
+      c.esperado = c.diasDelMes ? (c.meta * c.diaDelMes) / c.diasDelMes : null;
     }
   }
 
@@ -374,18 +453,42 @@ export function registerAnalisis(r: Router): void {
     if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "Mes inválido.");
     const goal = b.salesGoal;
     const agents = b.agents ?? null;
+    // Configuración: qué estatus cuentan (null = regla por defecto), días hábiles y feriados.
+    const statuses = b.countedStatuses ?? null;
+    if (statuses !== null && (!Array.isArray(statuses) || statuses.length > 100 || statuses.some((x) => typeof x !== "string" || x.length > 120))) {
+      throw new HttpError(400, "La lista de estatus que cuentan no es válida.");
+    }
+    const workDays = b.workDays ?? [...DEFAULT_WORK_DAYS];
+    if (!Array.isArray(workDays) || !workDays.length || workDays.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+      throw new HttpError(400, "Elige al menos un día de la semana que se trabaje.");
+    }
+    const holidays = b.holidays ?? [];
+    if (!Array.isArray(holidays) || holidays.length > 31 || holidays.some((d) => typeof d !== "string" || !d.startsWith(month) || !/^\d{4}-\d{2}-\d{2}$/.test(d))) {
+      throw new HttpError(400, "Los feriados deben ser fechas del mismo mes.");
+    }
     if (typeof goal !== "number" || !Number.isInteger(goal) || goal < 0 || goal > 1_000_000) throw new HttpError(400, "La meta debe ser un número entero.");
     if (agents !== null && (typeof agents !== "number" || !Number.isInteger(agents) || agents < 1 || agents > 1000)) {
       throw new HttpError(400, "El número de agentes debe ser un entero mayor que cero.");
     }
     await env.DB.prepare(
-      `INSERT INTO goals (campaign, month, sales_goal, agents, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO goals (campaign, month, sales_goal, agents, counted_statuses, work_days, holidays, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (campaign, month) DO UPDATE SET sales_goal = excluded.sales_goal, agents = excluded.agents,
+         counted_statuses = excluded.counted_statuses, work_days = excluded.work_days, holidays = excluded.holidays,
          updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
     )
-      .bind(campaign, month, goal, agents, user.username, Date.now())
+      .bind(
+        campaign,
+        month,
+        goal,
+        agents,
+        statuses === null ? null : JSON.stringify([...new Set(statuses.map((x: string) => x.trim()))]),
+        [...new Set(workDays as number[])].sort().join(","),
+        JSON.stringify([...new Set(holidays as string[])].sort()),
+        user.username,
+        Date.now(),
+      )
       .run();
-    await audit(env, user.username, "meta_actualizada", `${campaign}:${month}`, { meta: goal, agentes: agents });
+    await audit(env, user.username, "meta_actualizada", `${campaign}:${month}`, { meta: goal, agentes: agents, estatus: statuses, diasSemana: workDays, feriados: holidays });
     return json({ ok: true });
   });
 }

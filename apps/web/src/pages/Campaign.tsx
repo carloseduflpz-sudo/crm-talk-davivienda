@@ -6,7 +6,7 @@
 import { getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, PhoneCall, Target, TrendingUp, Upload, type LucideIcon } from "lucide-react";
-import { useCallback, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
 import {
@@ -29,6 +29,7 @@ import {
   type Compare,
 } from "../components/charts";
 import { ClientDetail, type DetailSpec } from "../components/ClientDetail";
+import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
@@ -563,54 +564,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
 
 /* ---------- Cumplimiento ---------- */
 
-function GoalForm({ a, onDone, onCancel }: { a: CampaignAnalysis; onDone: () => void; onCancel?: () => void }) {
-  const c = a.cumplimiento;
-  const [meta, setMeta] = useState(c.meta?.toString() ?? "");
-  const [agentes, setAgentes] = useState(c.agentes?.toString() ?? "");
-  const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setSaving(true);
-    try {
-      await api.setGoal({ campaign: a.campaign, month: a.month!, salesGoal: Number(meta), agents: agentes ? Number(agentes) : null });
-      onDone();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar la meta.");
-    } finally {
-      setSaving(false);
-    }
-  };
-  const input = "w-full rounded-xl border border-hair bg-paper px-3.5 py-2.5 text-sm text-ink tabular-nums outline-none focus:border-brand-500 focus:bg-white dark:focus:bg-slate-900";
-  return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
-      <label className="block w-40 text-[13px]">
-        <span className="mb-1.5 block text-ink-soft">Meta de ventas</span>
-        <input className={input} type="number" min={0} step={1} required value={meta} onChange={(e) => setMeta(e.target.value)} />
-      </label>
-      <label className="block w-40 text-[13px]">
-        <span className="mb-1.5 block text-ink-soft">Agentes</span>
-        <input className={input} type="number" min={1} step={1} value={agentes} onChange={(e) => setAgentes(e.target.value)} placeholder="Opcional" />
-      </label>
-      <Button type="submit" loading={saving}>
-        Guardar meta
-      </Button>
-      {onCancel && (
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
-        </Button>
-      )}
-      {error && (
-        <div className="w-full">
-          <ErrorMessage>{error}</ErrorMessage>
-        </div>
-      )}
-    </form>
-  );
-}
-
-function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boolean; refresh: () => void }) {
+function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdit: boolean; refresh: () => void }) {
   const c = a.cumplimiento;
   const [editing, setEditing] = useState(false);
   if (!a.month) return <Missing campaign={a.campaign} what="la sábana" month={null} icon={Target} />;
@@ -619,6 +573,9 @@ function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boo
     setEditing(false);
     refresh();
   };
+  const contados = joinY(c.config.estatus.map((x) => x.toLowerCase()));
+  const feriados = joinY(c.config.feriados.map((d) => String(Number(d.slice(8)))));
+  const reglas = `${contados ? `Cuentan los estatus ${contados}.` : "No hay estatus elegidos para la meta."} Se trabaja de ${workDaysText(c.config.diasSemana)}${feriados ? `, sin el ${feriados}` : ""}: ${c.diasDelMes} días hábiles en el mes.`;
 
   if (c.meta === null || editing) {
     return (
@@ -629,7 +586,7 @@ function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boo
             a.agente
               ? `Para ver la meta individual de ${a.agente}, registra la meta del mes y el número de agentes con el filtro quitado.`
               : c.meta === null
-                ? "Todavía no hay meta para este mes. Con la meta se calculan el avance, el ritmo y el gap por agente."
+                ? "Todavía no hay meta para este mes. Con la meta se calculan el avance, el ritmo en días hábiles y el gap por agente."
                 : undefined
           }
         >
@@ -650,8 +607,10 @@ function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boo
   if (!a.ventas) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={Target} />;
 
   const meta = c.meta;
-  const esperado = (meta * c.diaDelMes) / (c.diasDelMes || 1);
+  const esperado = c.esperado ?? 0;
   const adelante = c.ventas >= esperado;
+  const corte = c.fechaCorte ? dayLabel(c.fechaCorte) : null;
+  const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
   return (
     <Stack>
       <FigureStrip
@@ -667,31 +626,59 @@ function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boo
             label: a.agente ? `Avance de ${a.agente}` : "Avance de la meta",
             num: c.avance ?? 0,
             format: pct1,
-            foot: a.agente
-              ? `${fmtInt.format(c.ventas)} de ${fmtNum(meta)} ventas de su meta individual`
-              : `${fmtInt.format(c.ventas)} de ${fmtInt.format(meta)} ventas${c.agentes ? `, con ${c.agentes} agentes y ${fmtNum(c.metaPorAgente)} ventas cada uno` : ""}`,
+            foot: (
+              <>
+                {fmtInt.format(c.ventas)} de {a.agente ? fmtNum(meta) : fmtInt.format(meta)} ventas que cuentan
+                {c.ventasTotales !== c.ventas && <> ({fmtInt.format(c.ventasTotales)} en la sábana)</>}
+                {!a.agente && c.agentes ? `, ${c.agentes} agentes con ${fmtNum(c.metaPorAgente)} cada uno` : ""}
+              </>
+            ),
             tone: c.faltan === 0 ? "good" : undefined,
           },
-          { label: "Faltan", num: c.faltan ?? 0, format: num1, foot: c.faltan === 0 ? "Meta alcanzada" : "Ventas para llegar a la meta", tone: c.faltan === 0 ? "good" : undefined },
-          { label: "Ritmo actual", num: c.ritmoDiario, format: num1, foot: `Ventas por día, al día ${c.diaDelMes} de ${c.diasDelMes}` },
+          {
+            label: "Faltan",
+            num: c.faltan ?? 0,
+            format: num1,
+            foot: c.faltan === 0 ? "Meta alcanzada" : "Ventas para llegar a la meta",
+            tone: c.faltan === 0 ? "good" : undefined,
+          },
+          { label: "Ritmo actual", num: c.ritmoDiario, format: num1, foot: `Ventas por día hábil, en ${c.diaDelMes} de ${c.diasDelMes} días hábiles` },
           c.ritmoNecesario === null
-            ? { label: "Ritmo necesario", value: "—", foot: "El mes ya terminó" }
-            : { label: "Ritmo necesario", num: c.ritmoNecesario, format: num1, foot: "Ventas por día para cerrar en meta", tone: c.ritmoNecesario > c.ritmoDiario ? ("warn" as const) : undefined },
+            ? { label: "Ritmo necesario", value: "—", foot: "Ya no quedan días hábiles" }
+            : {
+                label: "Ritmo necesario",
+                num: c.ritmoNecesario,
+                format: num1,
+                foot: `Por día hábil en los ${c.diasRestantes} que quedan`,
+                tone: c.ritmoNecesario > c.ritmoDiario ? ("warn" as const) : undefined,
+              },
           { label: "Proyección al cierre", num: c.proyeccion, format: intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta al ritmo actual`, tone: c.proyeccion >= meta ? "good" : "bad" },
         ]}
       >
-        <Meter thick value={c.ventas} max={meta} mark={esperado} markLabel={`Esperado al día ${c.diaDelMes}: ${fmtNum(esperado, 0)} ventas`} label="Avance contra la meta" />
-        <p className="mt-3 text-[12.5px] text-ink-soft">
-          La marca indica lo esperado al día {c.diaDelMes}: {fmtNum(esperado, 0)} ventas.{" "}
-          <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
-            {adelante ? `Van ${fmtNum(c.ventas - esperado, 0)} por encima.` : `Van ${fmtNum(esperado - c.ventas, 0)} por debajo.`}
-          </span>
+        <Meter thick value={c.ventas} max={meta} mark={esperado} markLabel={`Esperado al ${corte ?? "corte"}: ${fmtNum(esperado, 0)} ventas`} label="Avance contra la meta" />
+        <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
+          {corte ? (
+            <>
+              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca indica lo esperado a esa fecha: {fmtNum(esperado, 0)} ventas.{" "}
+              <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
+                {adelante ? `Van ${fmtNum(c.ventas - esperado, 0)} por encima.` : `Van ${fmtNum(esperado - c.ventas, 0)} por debajo.`}
+              </span>
+            </>
+          ) : (
+            "La sábana del mes no trae fechas de venta."
+          )}
+        </p>
+        <p className="mt-1.5 text-[12.5px] text-ink-faint">
+          {reglas}{" "}
+          <button type="button" onClick={openCounted} className="font-medium text-brand-600 hover:underline">
+            Ver las ventas que cuentan
+          </button>
         </p>
       </FigureStrip>
 
       <ChartCard
         title="Gap por agente"
-        note={c.metaPorAgente === null ? "Registra el número de agentes para calcular la meta individual" : `Cada agente tiene una meta de ${fmtNum(c.metaPorAgente)} ventas. Clic en un agente para filtrar la campaña.`}
+        note={c.metaPorAgente === null ? "Registra el número de agentes para calcular la meta individual" : `Cada agente tiene una meta de ${fmtNum(c.metaPorAgente)} ventas que cuentan. Clic en un agente para filtrar la campaña.`}
       >
         <DataTable
           rows={c.porAgente}
@@ -701,8 +688,8 @@ function CumplimientoTab({ a, setAgent, canEdit, refresh }: Ctx & { canEdit: boo
           isActive={(r) => r.agent === a.agente}
           cols={[
             { key: "agent", label: "Agente", render: (r) => r.agent, sort: (r) => r.agent },
-            { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
-            { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas), sort: (r) => r.aprobadas },
+            { key: "ventas", label: "Cuentan", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
+            { key: "total", label: "En la sábana", align: "right", render: (r) => fmtInt.format(r.total), sort: (r) => r.total },
             { key: "meta", label: "Meta", align: "right", render: (r) => fmtNum(r.meta) },
             {
               key: "gap",

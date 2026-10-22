@@ -78,6 +78,12 @@ export const goals = sqliteTable(
     salesGoal: integer("sales_goal").notNull(),
     agents: integer("agents"),
     notes: text("notes"),
+    /** JSON: estatus de la sábana que cuentan para la meta (null = regla por defecto de la campaña). */
+    countedStatuses: text("counted_statuses"),
+    /** Días de la semana que se trabajan: "1,2,3,4,5" (0 = domingo). */
+    workDays: text("work_days").notNull().default("1,2,3,4,5"),
+    /** JSON: fechas no laborables del mes. */
+    holidays: text("holidays").notNull().default("[]"),
     updatedBy: text("updated_by").notNull(),
     updatedAt: integer("updated_at").notNull().default(now),
   },

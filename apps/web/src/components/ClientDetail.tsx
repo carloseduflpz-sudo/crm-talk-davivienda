@@ -15,7 +15,7 @@ export interface DetailSpec {
   fuente: DetailSource;
   /** Qué se está viendo: "Rechazadas por score bajo". */
   title: string;
-  filters?: Record<string, string>;
+  filters?: Record<string, string | string[]>;
 }
 
 const NOUN: Record<DetailSource, [string, string]> = {

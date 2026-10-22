@@ -149,15 +149,23 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(a.crm).toMatchObject({ total: 3, conEstatusBanco: 2 });
   });
 
-  it("cumplimiento: meta, avance, ritmo, proyección y gap por agente", () => {
+  it("cumplimiento: solo cuenta lo entregado, en días hábiles (lunes a viernes por defecto)", () => {
     const c = a.cumplimiento;
-    expect(c).toMatchObject({ meta: 40, agentes: 2, metaPorAgente: 20, ventas: 20, faltan: 20, diaDelMes: 10, diasDelMes: 30 });
-    expect(c.avance).toBeCloseTo(50, 6);
-    expect(c.ritmoDiario).toBeCloseTo(2, 6);
-    expect(c.proyeccion).toBe(60);
-    expect(c.ritmoNecesario).toBeCloseTo(1, 6);
+    const entregadas = sabanaSep.filter((r) => r.statusRaw === "ENTREGADA");
+    expect(c.config).toEqual({ estatus: ["ENTREGADA"], estatusPorDefecto: true, diasSemana: [1, 2, 3, 4, 5], feriados: [] });
+    expect(c.estatusDisponibles.find((e) => e.label === "APROBADA")?.cuenta).toBe(false);
+    expect(c).toMatchObject({ meta: 40, agentes: 2, metaPorAgente: 20, ventas: entregadas.length, ventasTotales: 20, fechaCorte: "2026-09-10" });
+    // Septiembre 2026: 22 días hábiles; al jueves 10 van 8 (1 sep es martes).
+    expect(c).toMatchObject({ diasDelMes: 22, diaDelMes: 8, diasRestantes: 14, faltan: 40 - entregadas.length });
+    expect(c.avance).toBeCloseTo((entregadas.length / 40) * 100, 6);
+    expect(c.ritmoDiario).toBeCloseTo(entregadas.length / 8, 6);
+    expect(c.proyeccion).toBe(Math.round(entregadas.length + (entregadas.length / 8) * 14));
+    expect(c.ritmoNecesario).toBeCloseTo((40 - entregadas.length) / 14, 6);
+    expect(c.esperado).toBeCloseTo((40 * 8) / 22, 6);
     const ana = c.porAgente.find((x) => x.agent === "Ana")!;
-    expect(ana.gap).toBe(20 - sabanaSep.filter((r) => r.executive === "Ana").length);
+    const anaEntregadas = entregadas.filter((r) => r.executive === "Ana").length;
+    expect(ana).toMatchObject({ ventas: anaEntregadas, total: sabanaSep.filter((r) => r.executive === "Ana").length, gap: 20 - anaEntregadas });
+    expect(c.feriadosSugeridos.map((f) => f.date)).toEqual(["2026-09-15"]);
   });
 
   it("sin mes pedido usa el más reciente; un mes sin archivos no rompe nada", async () => {
@@ -167,7 +175,26 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(vacio).toMatchObject({ month: null, months: [], ventas: null, base: null, llamadas: null, crm: null });
   });
 
+  it("la meta guarda qué estatus cuentan, los días hábiles y los feriados", async () => {
+    const put = await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 40, agents: 2, countedStatuses: ["ENTREGADA", "APROBADA"], workDays: [1, 2, 3, 4, 5], holidays: ["2026-09-15"] });
+    expect(put.status, String(put.data.error)).toBe(200);
+    const c = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).cumplimiento;
+    expect(c.config).toEqual({ estatus: ["ENTREGADA", "APROBADA"], estatusPorDefecto: false, diasSemana: [1, 2, 3, 4, 5], feriados: ["2026-09-15"] });
+    expect(c.ventas).toBe(sabanaSep.filter((r) => r.statusRaw === "ENTREGADA" || r.statusRaw === "APROBADA").length);
+    expect(c).toMatchObject({ diasDelMes: 21, diaDelMes: 8, diasRestantes: 13 });
+    // Sábados también: septiembre suma 4 sábados (5, 12, 19, 26); al día 10 ya pasó el 5.
+    await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 40, agents: 2, countedStatuses: null, workDays: [1, 2, 3, 4, 5, 6], holidays: [] });
+    const c2 = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).cumplimiento;
+    expect(c2).toMatchObject({ diasDelMes: 26, diaDelMes: 9 });
+    expect(c2.config.estatusPorDefecto).toBe(true);
+    // Se deja como al inicio para las demás pruebas.
+    await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 40, agents: 2 });
+  });
+
   it("validaciones de la meta", async () => {
+    expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, workDays: [] })).status).toBe(400);
+    expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, holidays: ["2026-10-01"] })).status).toBe(400);
+    expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, countedStatuses: "ENTREGADA" })).status).toBe(400);
     expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: -1 })).status).toBe(400);
     expect((await call("PUT", "/metas", { campaign: "xx", month: "2026-09", salesGoal: 10 })).status).toBe(400);
   });
@@ -189,7 +216,8 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(f.crm!.total).toBe(crm.filter((c) => c.agent === "Ana").length);
     expect(f.base!.total).toBe(a.base!.total); // la base no depende del agente
     expect(f.cumplimiento.meta).toBe(20); // meta individual: 40 ÷ 2 agentes
-    expect(f.cumplimiento.ventas).toBe(ana.length);
+    expect(f.cumplimiento.ventas).toBe(ana.filter((r) => r.statusRaw === "ENTREGADA").length);
+    expect(f.cumplimiento.ventasTotales).toBe(ana.length);
     expect(f.agentes).toEqual(["Ana", "Luis"]);
   });
 });
@@ -199,6 +227,7 @@ describe("detalle de clientes", () => {
 
   it("ventas por estatus, clase, motivo, día y agente", async () => {
     expect((await det("fuente=ventas&estatus=RECHAZADA")).total).toBe(sabanaSep.filter((r) => r.statusRaw === "RECHAZADA").length);
+    expect((await det("fuente=ventas&estatus=ENTREGADA&estatus=APROBADA")).total).toBe(sabanaSep.filter((r) => r.statusRaw === "ENTREGADA" || r.statusRaw === "APROBADA").length);
     expect((await det("fuente=ventas&clase=aprobado")).total).toBe(a.ventas!.aprobadas);
     expect((await det("fuente=ventas&motivo=Score")).total).toBe(sabanaSep.filter((r) => r.reason === "Score").length);
     const d = await det("fuente=ventas&dia=2026-09-03");

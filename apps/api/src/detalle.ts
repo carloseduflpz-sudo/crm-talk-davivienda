@@ -120,8 +120,10 @@ export function registerDetalle(r: Router): void {
     const clase = text("clase");
     if (src.table === "bank_sales") {
       if (clase) add("status_class = ?", clase);
-      const estatus = text("estatus");
-      if (estatus) add("COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') = ?", estatus);
+      // Uno o varios estatus (la meta puede contar varios).
+      const estatus = q.getAll("estatus").map((x) => x.trim()).filter(Boolean);
+      if (estatus.length > 50 || estatus.some((x) => x.length > 200)) throw new HttpError(400, "Demasiados estatus en el filtro.");
+      if (estatus.length) add(`COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') IN (${estatus.map(() => "?").join(", ")})`, ...estatus);
       const motivo = text("motivo");
       if (motivo) add("status_class = 'rechazado' AND COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') = ?", motivo);
       const proceso = text("proceso");

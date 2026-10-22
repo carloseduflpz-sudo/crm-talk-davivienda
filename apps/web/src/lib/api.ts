@@ -148,10 +148,14 @@ export const api = {
     return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
   },
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
-  detail: (campaign: string, params: Record<string, string | number | null | undefined>) => {
+  detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {
     const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== "") q.set(k, String(v));
+    for (const [k, v] of Object.entries(params)) {
+      if (Array.isArray(v)) v.forEach((x) => q.append(k, x));
+      else if (v !== null && v !== undefined && v !== "") q.set(k, String(v));
+    }
     return get<DetailResult>(`/analisis/${campaign}/detalle?${q}`);
   },
-  setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null }) => request("PUT", "/metas", b),
+  setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null; countedStatuses: string[] | null; workDays: number[]; holidays: string[] }) =>
+    request("PUT", "/metas", b),
 };

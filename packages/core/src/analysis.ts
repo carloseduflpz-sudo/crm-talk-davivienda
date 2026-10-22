@@ -110,15 +110,39 @@ export interface CampaignAnalysis {
     meta: number | null;
     agentes: number | null;
     metaPorAgente: number | null;
+    /** Ventas que cuentan para la meta (solo los estatus de `config.estatus`). */
     ventas: number;
+    /** Todas las ventas de la sábana del mes, cuenten o no. */
+    ventasTotales: number;
     aprobadas: number;
     avance: number | null;
     faltan: number | null;
+    /** Último día con ventas en la sábana: hasta ahí se mide el avance. */
+    fechaCorte: string | null;
+    /** Días hábiles transcurridos hasta la fecha de corte (incluida). */
     diaDelMes: number;
+    /** Días hábiles del mes. */
     diasDelMes: number;
+    diasRestantes: number;
+    /** Ventas por día hábil. */
     ritmoDiario: number;
     proyeccion: number;
     ritmoNecesario: number | null;
-    porAgente: { agent: string; ventas: number; aprobadas: number; meta: number | null; gap: number | null; avance: number | null }[];
+    /** Lo que se esperaba llevar a la fecha de corte, repartiendo la meta por días hábiles. */
+    esperado: number | null;
+    porAgente: { agent: string; ventas: number; total: number; aprobadas: number; meta: number | null; gap: number | null; avance: number | null }[];
+    /** Configuración de la meta del mes (o la sugerida si aún no hay meta). */
+    config: {
+      /** Estatus de la sábana que cuentan para la meta. */
+      estatus: string[];
+      /** true si se usa la regla por defecto (no se ha elegido a mano). */
+      estatusPorDefecto: boolean;
+      /** Días de la semana que se trabajan (0 = domingo … 6 = sábado). */
+      diasSemana: number[];
+      feriados: string[];
+    };
+    /** Estatus de la sábana del mes, con cuántas ventas tiene cada uno y si cuenta. */
+    estatusDisponibles: { label: string; value: number; cuenta: boolean }[];
+    feriadosSugeridos: { date: string; name: string }[];
   };
 }
