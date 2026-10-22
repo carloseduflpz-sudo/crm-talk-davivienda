@@ -82,7 +82,17 @@ export function chunkEnds(rows: NormalizedRow[]): number[] {
 }
 
 /** Segundo paso: lee completo lo que necesita `datasetId` y deja las filas listas para guardar. */
-export function readDataset(XLSX: XLSXReader, data: Uint8Array, campaign: CampaignCode, peek: WorkbookReader, detections: Detection[], datasetId: string | null, step: Step = () => {}): ExcelReading {
+export function readDataset(
+  XLSX: XLSXReader,
+  data: Uint8Array,
+  campaign: CampaignCode,
+  peek: WorkbookReader,
+  detections: Detection[],
+  datasetId: string | null,
+  step: Step = () => {},
+  /** false cuando el libro se compactó: el rango declarado de la hoja ya no dice cuántas filas hay. */
+  countRows = true,
+): ExcelReading {
   const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null };
   if (!datasetId) {
     return { ...base, error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Revisa que sea el archivo correcto o elige el tipo a mano.` };
@@ -93,7 +103,7 @@ export function readDataset(XLSX: XLSXReader, data: Uint8Array, campaign: Campai
     const res = parseWorkbook(peek, datasetId);
     return { ...base, error: "error" in res ? res.error : "No encontré la hoja con los datos." };
   }
-  const total = sheets.reduce((s, sn) => s + (totalRows(peek.wb, sn) ?? 0), 0);
+  const total = countRows ? sheets.reduce((s, sn) => s + (totalRows(peek.wb, sn) ?? 0), 0) : 0;
   step(total ? `Leyendo ${fmt.format(total)} filas de ${sheets.length > 1 ? "las hojas" : "la hoja"} ${sheets.join(" y ")}…` : "Leyendo las filas…");
 
   const wb = XLSX.read(data, { ...LEAN, sheets });

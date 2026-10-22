@@ -6,3 +6,4 @@ export * from "./roles";
 export * from "./importers";
 export * from "./analysis";
 export * from "./lectura";
+export * from "./compactar";

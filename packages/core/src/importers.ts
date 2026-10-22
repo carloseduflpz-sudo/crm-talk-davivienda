@@ -298,12 +298,13 @@ export const PROFILES: Record<string, Profile> = {
     label: "Base Extrafinanciamiento",
     sheets: [],
     anySheet: true,
-    required: ["NIU", ["Perfil", "PERFIL"]],
+    // El "Entregable" del banco trae el NIU como NIUCliente y otros nombres de columna.
+    required: [["NIU", "NIUCliente"], ["Perfil", "PERFIL"]],
     fields: {
-      NIU: ["NIU", "niu"], Nombre: [["Nombre", "Nombre Completo", "Nombre legal según IBS"]], DUI: [["DUI", "Dui"]], Municipio: ["Municipio"],
+      NIU: [["NIU", "NIUCliente"], "niu"], Nombre: [["Nombre", "Nombre Completo", "Nombre legal según IBS", "NombreSociedad"]], DUI: [["DUI", "Dui", "NumeroDUI"]], Municipio: ["Municipio"],
       Departamento: ["Departamento"], Correo: [["Correo", "Correo Electrónico"]], Telefono: [["TelNotificaciones", "Telefono", "Teléfono"]],
-      Perfil: [["Perfil", "PERFIL"]], Segmento: [["Segmento", "Segmento Empresa", "Tipo empresa"]], Monto: [["Monto", "Monto Oferta", "Monto Extra"], "num"],
-      Plazo: ["Plazo"], Tasa: ["Tasa"], Pago: [["Pago", "Cuota"]], Tarjeta: [["Tarjeta", "Tipo de Producto", "Tipo Tarjeta"]], Edad: ["Edad", "int"],
+      Perfil: [["Perfil", "PERFIL"]], Segmento: [["Segmento", "Segmento Empresa", "Tipo empresa"]], Monto: [["Monto", "Monto Oferta", "Monto Extra", "Monto Extrafinanciamiento"], "num"],
+      Plazo: [["Plazo", "Plazo (Meses)"]], Tasa: [["Tasa", "Tasa Campaña"]], Pago: [["Pago", "Cuota"]], Tarjeta: [["Tarjeta", "Tipo de Producto", "Tipo Tarjeta"]], Edad: ["Edad", "int"],
       ClasifRiesgo: [["Clasificación Riesgo", "ClasifRiesgo", "Riesgo"]], AplicaCDC: ["Aplica CDC"], TipoCDC: ["Tipo CDC"], Base: [["BASE", "Base"]],
     },
   },
