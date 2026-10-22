@@ -61,6 +61,12 @@ export interface CampaignAnalysis {
   agentes: string[];
   /** Archivos vigentes del mes elegido, por tipo. */
   loaded: { dataset: string; kind: string; rows: number; version: number; createdAt: number; createdBy: string }[];
+  /** Fechas de los datos del mes: hasta qué día llegan y si algún archivo trae filas con fecha de otro mes. */
+  fechas: {
+    /** Último día con datos dentro del mes (sábana, tipificaciones o CRM). */
+    hasta: string | null;
+    fuera: { kind: "sabana" | "tipif" | "ventas"; filas: number; meses: string[] }[];
+  };
 
   ventas: null | {
     total: number;
@@ -220,5 +226,9 @@ export interface MonthSummary {
   logrado: number | null;
   cumplimiento: number | null;
   diasHabiles: number;
+  /** Último día con datos dentro del mes (null si no hay archivos con fecha). */
+  hasta: string | null;
+  /** Ventas y monto de la sábana acumulados día a día (posición 0 = día 1): para comparar meses al mismo día. */
+  acumulado: { ventas: number[]; monto: number[] };
 }
 

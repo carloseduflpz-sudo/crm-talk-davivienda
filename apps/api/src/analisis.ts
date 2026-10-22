@@ -12,6 +12,7 @@ import {
   GOAL_UNIT,
   businessDays,
   countsForGoal,
+  daysInMonth,
   isCampaignCode,
   suggestedHolidays,
   type CampaignAnalysis,
@@ -67,6 +68,20 @@ const placeholders = (k: number) => Array.from({ length: k }, () => "?").join(",
 /** Nombre del agente tal como se agrupa en todos los análisis (vacío = "Sin asignar"). */
 export const agentLabel = (col: string) => `COALESCE(NULLIF(TRIM(${col}), ''), 'Sin asignar')`;
 
+/** Ventas y monto acumulados por día del mes (solo fechas de ese mes). */
+function acumulado(month: string, porDia: { date: string; ventas: number; monto: number }[]): { ventas: number[]; monto: number[] } {
+  const days = daysInMonth(month);
+  const v = new Array<number>(days).fill(0);
+  const m = new Array<number>(days).fill(0);
+  for (const d of porDia) {
+    if (!d.date.startsWith(month)) continue;
+    const i = Number(d.date.slice(8, 10)) - 1;
+    if (i >= 0 && i < days) (v[i]! += d.ventas), (m[i]! += d.monto);
+  }
+  for (let i = 1; i < days; i++) (v[i]! += v[i - 1]!), (m[i]! += m[i - 1]!);
+  return { ventas: v, monto: m.map((x) => Math.round(x * 100) / 100) };
+}
+
 export async function analyzeCampaign(env: Env, campaign: string, requestedMonth: string | null, agente: string | null = null): Promise<CampaignAnalysis> {
   const db = env.DB;
   // Filtro opcional por agente: se agrega a cada consulta de ventas, llamadas y CRM.
@@ -97,6 +112,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
     agente,
     agentes: [],
     loaded: ofMonth.map((u) => ({ dataset: u.dataset, kind: u.kind, rows: u.rows_valid, version: u.version, createdAt: u.created_at, createdBy: u.created_by })),
+    fechas: { hasta: null, fuera: [] },
     ventas: null,
     base: null,
     llamadas: null,
@@ -128,6 +144,39 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       feriadosSugeridos: month ? suggestedHolidays(month) : [],
     },
   };
+
+  /* ---------- fechas: hasta qué día llegan los datos y filas de otros meses ---------- */
+  if (month) {
+    type Dated = ["sabana" | "tipif" | "ventas", CurrentUpload | undefined, string, string];
+    const dated = (
+      [
+        ["sabana", sabana, "bank_sales", "sale_date"],
+        ["tipif", tipif, "calls", "called_at"],
+        ["ventas", crm, "crm_sales", "entered_at"],
+      ] as Dated[]
+    ).filter((x): x is ["sabana" | "tipif" | "ventas", CurrentUpload, string, string] => Boolean(x[1]));
+    if (dated.length) {
+      const res = await db.batch(
+        dated.map(([, u, table, col]) =>
+          db
+            .prepare(
+              `SELECT MAX(CASE WHEN substr(${col}, 1, 7) = ?1 THEN substr(${col}, 1, 10) END) AS hasta,
+                      SUM(CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN 1 ELSE 0 END) AS fuera,
+                      GROUP_CONCAT(DISTINCT CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN substr(${col}, 1, 7) END) AS meses
+                 FROM ${table} WHERE upload_id = ?2`,
+            )
+            .bind(month, u.id),
+        ),
+      );
+      let hasta: string | null = null;
+      res.forEach((r, i) => {
+        const row = r.results[0] as { hasta: string | null; fuera: number | null; meses: string | null } | undefined;
+        if (row?.hasta && (!hasta || row.hasta > hasta)) hasta = row.hasta;
+        if (n(row?.fuera) > 0) out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
+      });
+      out.fechas.hasta = hasta;
+    }
+  }
 
   /* ---------- ventas (sábana del banco) ---------- */
   if (sabana) {
@@ -573,6 +622,8 @@ export function registerAnalisis(r: Router): void {
           logrado: a.ventas ? c.ventas : null,
           cumplimiento: c.meta !== null && a.ventas ? c.avance : null,
           diasHabiles: c.diasDelMes,
+          hasta: a.fechas.hasta,
+          acumulado: acumulado(a.month, a.ventas?.porDia ?? []),
         };
       })
       .sort((x, y) => x.month.localeCompare(y.month));

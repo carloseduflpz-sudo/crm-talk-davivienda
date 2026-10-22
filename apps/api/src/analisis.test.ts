@@ -87,6 +87,10 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(a.loaded.map((l) => l.dataset).sort()).toEqual(["tdc:base:primeras", "tdc:base:segundas", "tdc:sabana", "tdc:tipif", "tdc:ventas"]);
   });
 
+  it("fechas: hasta qué día llegan los datos; ningún archivo trae filas de otro mes", () => {
+    expect(a.fechas).toEqual({ hasta: "2026-09-10", fuera: [] });
+  });
+
   it("ventas: totales, aprobación y rechazo por motivo", () => {
     const apr = sabanaSep.filter((r) => r.statusRaw === "ENTREGADA" || r.statusRaw === "APROBADA").length;
     const rech = sabanaSep.filter((r) => r.statusRaw === "RECHAZADA").length;
@@ -355,6 +359,13 @@ describe("histórico", () => {
     expect(meses[1]).toMatchObject({ ventas: 20, llamadas: 8, registros: 4, unidad: "ventas", meta: 40 });
     expect(meses[1]!.contactabilidad).toBeCloseTo(50, 6);
     expect(meses[1]!.diasHabiles).toBe(22);
+    // Acumulado por día: los días 1 a 10 tienen 2 ventas cada uno.
+    expect(meses[1]!.acumulado.ventas).toHaveLength(30);
+    expect(meses[1]!.acumulado.ventas.slice(0, 3)).toEqual([2, 4, 6]);
+    expect(meses[1]!.acumulado.ventas[29]).toBe(20);
+    expect(meses[0]!.acumulado.ventas[13]).toBe(0);
+    expect(meses[0]!.acumulado.ventas[14]).toBe(6);
+    expect(meses[1]!.hasta).toBe("2026-09-10");
   });
 
   it("con filtro por agente", async () => {
@@ -364,3 +375,16 @@ describe("histórico", () => {
   });
 });
 
+describe("filas con fecha de otro mes", () => {
+  it("se avisan: cuántas y de qué meses", async () => {
+    await load("tdc:sabana", "2026-10", [
+      { niu: "1", saleDate: "2026-10-01", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "2", saleDate: "2026-10-05", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "3", saleDate: "2026-09-29", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "4", saleDate: "2026-09-30", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "5", saleDate: "2026-08-30", executive: "Ana", statusRaw: "ENTREGADA" },
+    ]);
+    const oct = (await call("GET", "/analisis/tdc?mes=2026-10")).data.analysis as CampaignAnalysis;
+    expect(oct.fechas).toEqual({ hasta: "2026-10-05", fuera: [{ kind: "sabana", filas: 3, meses: ["2026-08", "2026-09"] }] });
+  });
+});

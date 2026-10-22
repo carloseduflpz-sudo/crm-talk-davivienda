@@ -5,7 +5,7 @@
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
 import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Database, History, PhoneCall, Target, TrendingUp, Upload, type LucideIcon } from "lucide-react";
+import { BarChart3, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
@@ -36,7 +36,7 @@ import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
-import { monthLabel } from "../lib/xlsx";
+import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
   { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Estatus del banco, rechazo por motivo, ejecutivos y comparativo mensual." },
@@ -73,7 +73,9 @@ const num1 = (n: number) => fmtNum(n);
 /** Etiquetas del banco EN MAYÚSCULAS, en minúsculas para usarlas dentro de una frase. */
 const lower = (s: string) => (s === s.toUpperCase() ? s.toLowerCase() : s.charAt(0).toLowerCase() + s.slice(1));
 /** "vs agosto". */
-const vsLabel = (prev: CampaignAnalysis | undefined) => (prev?.month ? `vs ${monthLabel(prev.month).split(" ")[0]}` : "");
+/** "vs septiembre"; si el mes que se ve va en curso, se aclara que el anterior está completo. */
+const vsLabel = (prev: CampaignAnalysis | undefined, a: CampaignAnalysis) =>
+  prev?.month ? `vs ${monthLabel(prev.month).split(" ")[0]}${a.month === currentMonth() ? " completo" : ""}` : "";
 
 /** Lo que cada pestaña necesita para ser interactiva. */
 interface Ctx {
@@ -114,7 +116,12 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   const v = a.ventas;
   if (!v) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={TrendingUp} />;
   const p = prev?.ventas;
-  const vs = vsLabel(prev);
+  const vs = vsLabel(prev, a);
+  // Mes en curso: el total y las aprobadas se comparan contra el mes anterior al mismo día.
+  const corte = a.month === currentMonth() && a.fechas.hasta ? dayNum(a.fechas.hasta) : null;
+  const pDays = p && corte ? p.porDia.filter((d) => dayNum(d.date) <= corte) : null;
+  const pSum = (k: "ventas" | "aprobadas" | "monto" | "montoAprobado") => (pDays ? pDays.reduce((t, d) => t + d[k], 0) : undefined);
+  const vsDay = pDays && prev?.month ? `vs ${monthLabel(prev.month).split(" ")[0]} al día ${corte}` : vs;
   // CDC y Extra: los indicadores van en dólares (con la cantidad de ventas como referencia).
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
@@ -144,7 +151,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 num: v.monto.total,
                 format: fmtMoney,
                 foot: `${ventasN(v.total)} en la sábana del banco`,
-                delta: deltaOf(v.monto.total, p?.monto.total, vs),
+                delta: pDays ? deltaOf(v.monto.total, pSum("monto"), vsDay) : deltaOf(v.monto.total, p?.monto.total, vs),
                 spark: v.porDia.map((d) => d.monto),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               }
@@ -153,7 +160,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 num: v.total,
                 format: intOf,
                 foot: "Todas las de la sábana del banco",
-                delta: deltaOf(v.total, p?.total, vs),
+                delta: pDays ? deltaOf(v.total, pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
                 spark: v.porDia.map((d) => d.ventas),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               },
@@ -162,7 +169,13 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             num: money ? v.monto.aprobado : v.aprobadas,
             format: money ? fmtMoney : intOf,
             foot: money ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto` : `${fmtPct(share(v.aprobadas, v.total))} del total`,
-            delta: money ? deltaOf(v.monto.aprobado, p?.monto.aprobado, vs) : deltaOf(v.aprobadas, p?.aprobadas, vs),
+            delta: pDays
+              ? money
+                ? deltaOf(v.monto.aprobado, pSum("montoAprobado"), vsDay)
+                : deltaOf(v.aprobadas, pSum("aprobadas"), vsDay)
+              : money
+                ? deltaOf(v.monto.aprobado, p?.monto.aprobado, vs)
+                : deltaOf(v.aprobadas, p?.aprobadas, vs),
             onOpen: () => open({ fuente: "ventas", title: "Ventas aprobadas", filters: { clase: "aprobado" } }),
           },
           {
@@ -328,7 +341,7 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
   const conVenta = b.porPerfil.reduce((s, p) => s + p.conVenta, 0);
   const prevConVenta = prev?.base?.porPerfil.reduce((s, p) => s + p.conVenta, 0);
   const topPen = Math.max(...b.porPerfil.map((p) => p.penetracion), 0.0001);
-  const vs = vsLabel(prev);
+  const vs = vsLabel(prev, a);
   return (
     <Stack>
       <FigureStrip
@@ -475,7 +488,7 @@ function EfectividadTab({ a, prev, open, setAgent }: Ctx) {
   const l = a.llamadas;
   if (!l) return <Missing campaign={a.campaign} what="las tipificaciones de VICI" month={a.month} icon={BarChart3} />;
   const p = prev?.llamadas;
-  const vs = vsLabel(prev);
+  const vs = vsLabel(prev, a);
   const base = a.base?.total ?? 0;
   const ranked = [...l.porAgente].sort((x, y) => y.contactabilidad - x.contactabilidad);
   return (
@@ -553,7 +566,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
   const c = a.crm;
   if (!l && !c) return <Missing campaign={a.campaign} what="las tipificaciones de VICI" month={a.month} icon={PhoneCall} />;
   const p = prev?.llamadas ?? undefined;
-  const vs = vsLabel(prev);
+  const vs = vsLabel(prev, a);
   const byClass = (k: string, from: Llamadas | null | undefined = l) => from?.porClase.find((x) => x.label === k)?.value ?? 0;
   const intentos = (x: Llamadas) => (x.registros ? (x.primerContacto + x.seguimiento) / x.registros : 0);
   return (
@@ -918,16 +931,33 @@ function TrendCard({ t, meses, active, onSelect }: { t: Trend; meses: MonthSumma
 function HistoricoTab({ a, setMonth }: Ctx) {
   const h = useQuery({ queryKey: ["historico", a.campaign, a.agente], queryFn: () => api.history(a.campaign, a.agente), staleTime: 60_000 });
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
+  const [cut, setCut] = useState<"dia" | "mes">("dia");
   if (h.isPending) return <p className="text-sm text-ink-soft">Calculando el histórico…</p>;
   if (h.isError) return <ErrorMessage>{h.error.message}</ErrorMessage>;
   const meses = h.data;
   const pctAxis = (n: number) => `${fmtInt.format(n)}%`;
+  // Mes en curso: para comparar parejo, las ventas de cada mes se cuentan del día 1 al mismo día.
+  const live = meses.find((m) => m.month === currentMonth() && m.hasta);
+  const corte = live ? Number(live.hasta!.slice(8, 10)) : null;
+  const sameDay = corte !== null && cut === "dia";
+  const atCut = (serie: number[], full: number | null) => (full === null ? null : sameDay ? (serie[Math.min(corte!, serie.length) - 1] ?? 0) : full);
+  const ventasDe = (m: MonthSummary) => atCut(m.acumulado.ventas, m.ventas);
+  const montoDe = (m: MonthSummary) => atCut(m.acumulado.monto, m.monto);
+  const alDia = sameDay ? ` al día ${corte}` : "";
   const trends: Trend[] = [
     money
-      ? { key: "monto", title: "Monto de ventas", value: (m) => m.monto, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true }
-      : { key: "ventas", title: "Ventas de la sábana", value: (m) => m.ventas, format: intOf, upIsGood: true },
+      ? { key: "monto", title: `Monto de ventas${alDia}`, value: montoDe, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true, note: sameDay ? `Cada mes sumado del 1 al ${corte}` : undefined }
+      : { key: "ventas", title: sameDay ? `Ventas al día ${corte}` : "Ventas de la sábana", value: ventasDe, format: intOf, upIsGood: true, note: sameDay ? `Cada mes contado del 1 al ${corte}` : undefined },
     { key: "aprobacion", title: "Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: "Aprobadas sobre las ya resueltas por el banco" },
-    { key: "cumplimiento", title: "Cumplimiento de la meta", value: (m) => m.cumplimiento, format: pct1, axis: pctAxis, rate: true, note: "Lo que cuenta para la meta sobre la meta del mes" },
+    {
+      key: "cumplimiento",
+      title: "Cumplimiento de la meta",
+      value: (m) => m.cumplimiento,
+      format: pct1,
+      axis: pctAxis,
+      rate: true,
+      note: live ? `Lo que cuenta para la meta sobre la meta del mes; ${monthLabel(live.month).split(" ")[0]} va a la fecha` : "Lo que cuenta para la meta sobre la meta del mes",
+    },
     { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Original más bases adicionales, sin repetir" },
     { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
     { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true },
@@ -936,6 +966,31 @@ function HistoricoTab({ a, setMonth }: Ctx) {
   const opt = <T,>(v: T | null, f: (x: T) => string) => (v === null ? "—" : f(v));
   return (
     <Stack>
+      {live && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-hair bg-white px-5 py-4 dark:bg-slate-900">
+          <p className="max-w-3xl text-[13.5px] leading-relaxed text-ink-soft">
+            <span className="inline-block font-medium text-ink first-letter:uppercase">{monthLabel(live.month)}</span> va en curso, con datos hasta el {dayLabel(live.hasta!)}.{" "}
+            {sameDay ? `Para comparar parejo, las ventas de cada mes se cuentan del 1 al ${corte}.` : "Las ventas de los meses anteriores están completas."}
+          </p>
+          <div className="flex items-center gap-1 rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Cómo comparar las ventas">
+            {(
+              [
+                ["dia", `Al día ${corte}`],
+                ["mes", "Mes completo"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setCut(v)}
+                aria-pressed={cut === v}
+                className={`rounded-full px-3.5 py-1 text-[13px] whitespace-nowrap transition-colors ${cut === v ? "bg-white font-medium text-ink shadow-[0_1px_2px_rgba(14,27,61,0.08)] dark:bg-slate-700" : "text-ink-soft hover:text-ink"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {meses.length < 2 && (
         <Aside>
           Por ahora hay {meses.length === 1 ? "un solo mes" : "ningún mes"} con archivos. Al cargar otros meses (sábana, base y tipificaciones de cada mes) aquí se comparan mes contra mes.
@@ -955,13 +1010,23 @@ function HistoricoTab({ a, setMonth }: Ctx) {
           isActive={(r) => r.month === a.month}
           maxRows={24}
           cols={[
-            { key: "month", label: "Mes", render: (r) => <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span>, sort: (r) => r.month },
-            { key: "ventas", label: "Ventas", align: "right", render: (r) => opt(r.ventas, (x) => fmtInt.format(x)), sort: (r) => r.ventas ?? -1 },
+            {
+              key: "month",
+              label: "Mes",
+              render: (r) => (
+                <span className="inline-flex items-center gap-2">
+                  <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span>
+                  {r === live && <span className="rounded-full bg-[var(--st-good)]/12 px-2 py-0.5 text-[11px] font-medium text-[var(--st-good)]">en curso</span>}
+                </span>
+              ),
+              sort: (r) => r.month,
+            },
+            { key: "ventas", label: sameDay ? `Ventas al día ${corte}` : "Ventas", align: "right", render: (r) => opt(ventasDe(r), (x) => fmtInt.format(x)), sort: (r) => ventasDe(r) ?? -1 },
             { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => opt(r.aprobadas, (x) => fmtInt.format(x)), sort: (r) => r.aprobadas ?? -1 },
             { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => opt(r.aprobacion, (x) => fmtPct(x)), sort: (r) => r.aprobacion ?? -1 },
             ...(money
               ? [
-                  { key: "monto", label: "Monto", align: "right" as const, render: (r: R) => opt(r.monto, fmtMoney), sort: (r: R) => r.monto ?? -1 },
+                  { key: "monto", label: sameDay ? `Monto al día ${corte}` : "Monto", align: "right" as const, render: (r: R) => opt(montoDe(r), fmtMoney), sort: (r: R) => montoDe(r) ?? -1 },
                   { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: R) => opt(r.montoAprobado, fmtMoney), sort: (r: R) => r.montoAprobado ?? -1 },
                 ]
               : []),
@@ -982,6 +1047,52 @@ function HistoricoTab({ a, setMonth }: Ctx) {
         />
       </ChartCard>
     </Stack>
+  );
+}
+
+/* ---------- qué mes se está viendo ---------- */
+
+/** "Estás viendo octubre 2026, mes en curso · datos hasta el mié 21 oct". */
+function MonthStatus({ a }: { a: CampaignAnalysis }) {
+  if (!a.month) return null;
+  const today = currentMonth();
+  const state = a.month === today ? "mes en curso" : a.month < today ? "mes cerrado" : "mes que aún no empieza";
+  return (
+    <p className="flex items-start gap-2 text-[13px] text-ink-soft">
+      <span className={`mt-[7px] size-2 shrink-0 rounded-full ${a.month === today ? "bg-[var(--st-good)]" : "bg-ink-faint/50"}`} aria-hidden />
+      <span>
+        Estás viendo <span className="font-medium text-ink">{monthLabel(a.month)}</span>, {state}
+        {a.fechas.hasta && <> · datos hasta el {dayLabel(a.fechas.hasta)}</>}
+      </span>
+    </p>
+  );
+}
+
+const KIND_LABEL = { sabana: "La sábana", tipif: "Las tipificaciones", ventas: "Las ventas del CRM" } as const;
+
+/** Aviso si algún archivo vigente del mes trae filas con fecha de otro mes (se están contando en este). */
+function OtherMonthsWarning({ a, code }: { a: CampaignAnalysis; code: string }) {
+  const month = a.month;
+  if (!month || !a.fechas.fuera.length) return null;
+  return (
+    <div role="status" className="mb-8 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-[13.5px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="space-y-1">
+        <p className="font-medium">Hay filas de otros meses dentro de {monthLabel(month)}</p>
+        {a.fechas.fuera.map((f) => (
+          <p key={f.kind}>
+            {KIND_LABEL[f.kind]} trae {fmtInt.format(f.filas)} {f.filas === 1 ? "fila" : "filas"} con fecha de {joinY(f.meses.map(monthLabel))}; hoy se cuentan en {monthLabel(month)}.
+          </p>
+        ))}
+        <p>
+          Para separarlas, vuelve a cargar ese archivo en el{" "}
+          <Link to={`/carga?campana=${code}`} className="font-medium underline underline-offset-2">
+            Centro de carga
+          </Link>
+          : ahora guarda solo las filas del mes que elijas.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -1078,7 +1189,10 @@ export function Campaign() {
 
       {a && a.months.length > 0 && (
         <div className="-mt-2 mb-10 flex flex-wrap items-center justify-between gap-3">
-          <AgentPicker agents={a.agentes} value={agent} onChange={(x) => setQuery({ agente: x })} />
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <AgentPicker agents={a.agentes} value={agent} onChange={(x) => setQuery({ agente: x })} />
+            <MonthStatus a={a} />
+          </div>
           <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Mes">
             {a.months.map((m) => (
               <button
@@ -1096,6 +1210,7 @@ export function Campaign() {
         </div>
       )}
 
+      {a && <OtherMonthsWarning a={a} code={code} />}
       {analysis.isPending && <p className="text-sm text-ink-soft">Calculando…</p>}
       {analysis.isError && <ErrorMessage>{analysis.error.message}</ErrorMessage>}
       {a && a.months.length === 0 && (

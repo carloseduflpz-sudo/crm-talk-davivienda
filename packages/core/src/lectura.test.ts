@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { XLSX, workbookBytes } from "../test/libros";
 import { CAMPAIGNS } from "./campaigns";
 import { WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook } from "./importers";
-import { chunkEnds, peekWorkbook, readDataset, type XLSXReader } from "./lectura";
+import { chunkEnds, onlyMonth, peekWorkbook, readDataset, rowMonth, rowsByMonth, type XLSXReader } from "./lectura";
 
 const X = XLSX as unknown as XLSXReader;
 
@@ -98,5 +98,15 @@ describe("lectura en dos pasos", () => {
     const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
     const { reader, detections } = peekWorkbook(X, bytes, "tdc");
     expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:tipif").error).toMatch(/faltan columnas obligatorias: id_base o id_cliente\./);
+  });
+
+  it("separa las filas por mes para no mezclar meses", () => {
+    const sale = (niu: string, saleDate: string | null) => ({ niu, process: null, saleDate, executive: null, statusRaw: null, reason: null, daysInProcess: null, amount: null, extra: {} });
+    const call = (niu: string, calledAt: string | null) => ({ niu, agent: null, calledAt, category: null, tipologia: null, extra: {} });
+    const rows = [sale("1", "2026-10-02"), sale("2", "2026-09-30"), sale("3", null), sale("4", "2026-10-21")];
+    expect(rowsByMonth(rows)).toEqual({ byMonth: { "2026-10": 2, "2026-09": 1 }, sinFecha: 1 });
+    expect(onlyMonth(rows, "2026-10").map((r) => r.niu)).toEqual(["1", "3", "4"]);
+    expect(rowMonth(call("5", "2026-09-01 08:00:00"))).toBe("2026-09");
+    expect(rowMonth({ niu: "6", profile: null, offer: null, extra: {} })).toBeNull();
   });
 });

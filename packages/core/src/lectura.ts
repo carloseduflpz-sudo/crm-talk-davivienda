@@ -81,6 +81,35 @@ export function chunkEnds(rows: NormalizedRow[]): number[] {
   return ends;
 }
 
+/* ---------- meses de las filas: para no mezclar un mes con otro ---------- */
+
+/** Mes (AAAA-MM) de una fila según su fecha: venta, llamada o ingreso. Las bases no traen fecha → null. */
+export function rowMonth(r: NormalizedRow): string | null {
+  const d = "saleDate" in r ? r.saleDate : "calledAt" in r ? r.calledAt : "enteredAt" in r ? r.enteredAt : null;
+  const m = d ? /^(20\d{2})-(0[1-9]|1[0-2])/.exec(d) : null;
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+/** Cuántas filas trae el archivo de cada mes, y cuántas no tienen fecha. */
+export function rowsByMonth(rows: readonly NormalizedRow[]): { byMonth: Record<string, number>; sinFecha: number } {
+  const byMonth: Record<string, number> = {};
+  let sinFecha = 0;
+  for (const r of rows) {
+    const m = rowMonth(r);
+    if (m) byMonth[m] = (byMonth[m] ?? 0) + 1;
+    else sinFecha++;
+  }
+  return { byMonth, sinFecha };
+}
+
+/** Solo las filas de `month` (las que no traen fecha se quedan: no hay cómo saber de qué mes son). */
+export function onlyMonth<T extends NormalizedRow>(rows: readonly T[], month: string): T[] {
+  return rows.filter((r) => {
+    const m = rowMonth(r);
+    return m === null || m === month;
+  });
+}
+
 /** Segundo paso: lee completo lo que necesita `datasetId` y deja las filas listas para guardar. */
 export function readDataset(
   XLSX: XLSXReader,

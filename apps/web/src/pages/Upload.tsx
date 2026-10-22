@@ -1,6 +1,6 @@
 /* Centro de carga: arrastrar el Excel → la app lo reconoce y lo valida → vista previa →
    se guarda por lotes con versión, sin borrar la versión anterior. */
-import { CAMPAIGNS, PREVIEW_HIDDEN, getCampaign, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
+import { CAMPAIGNS, PREVIEW_HIDDEN, chunkEnds, getCampaign, onlyMonth, rowsByMonth, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, CloudUpload, Download, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
@@ -24,7 +24,14 @@ type Phase = { name: "idle" } | { name: "reading"; fileName: string; step: strin
 
 const fmt = new Intl.NumberFormat("es-SV");
 const fmtDate = (ms: number) => new Intl.DateTimeFormat("es-SV", { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms));
-const currentMonth = () => new Date().toISOString().slice(0, 7);
+/** Mes de hoy en la hora local (no en UTC: el último día del mes en la noche sigue siendo ese mes). */
+const monthOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const currentMonth = () => monthOf(new Date());
+const previousMonth = () => {
+  const d = new Date();
+  return monthOf(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+};
+const VALID_MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const datasetLabel = (id: string) => {
   const [c] = id.split(":");
   return (isCampaignCode(c ?? "") ? getCampaign(c as CampaignCode).datasets.find((d) => d.id === id)?.label : null) ?? id;
@@ -288,7 +295,8 @@ export function Upload() {
       try {
         const { result, sha } = await excel.open(file, campaign, onStep);
         setAnalysis({ ...result, file, sha });
-        setMonth(result.month?.month ?? currentMonth());
+        // Sin fechas en el archivo (las bases) no se adivina el mes: se pide elegirlo.
+        setMonth(result.month?.month ?? "");
         setPhase({ name: "ready" });
       } catch (e) {
         if (e instanceof ReadCancelled) return;
@@ -342,14 +350,30 @@ export function Upload() {
     setAddLabel(`Adicional ${new Intl.DateTimeFormat("es-SV", { day: "numeric", month: "short" }).format(new Date())}`);
   }, [analysis?.sha, analysis?.datasetId, month]);
 
+  // Meses que trae el archivo según la fecha de cada fila: para no mezclar un mes con otro.
+  const split = useMemo(() => (analysis ? rowsByMonth(analysis.rows) : { byMonth: {}, sinFecha: 0 }), [analysis]);
+  const monthsInFile = Object.entries(split.byMonth).sort((x, y) => y[1] - x[1]);
+  const hasDates = monthsInFile.length > 0;
+  const inMonth = (split.byMonth[month] ?? 0) + split.sinFecha;
+  const outside = analysis ? analysis.rows.length - inMonth : 0;
+  const [scope, setScope] = useState<"mes" | "todo">("mes");
+  useEffect(() => setScope("mes"), [analysis?.sha, analysis?.datasetId]);
+  const filtering = outside > 0 && scope === "mes";
+  const toSave = filtering ? inMonth : (analysis?.rows.length ?? 0);
+  const monthOk = VALID_MONTH.test(month);
+
   const save = async () => {
     if (!analysis?.datasetId) return;
     const a = analysis;
-    const chunks = a.chunkEnds.map((end, i) => a.rows.slice(i ? a.chunkEnds[i - 1] : 0, end));
+    // Solo las filas del mes elegido (salvo que se pida guardar todo el archivo en ese mes).
+    const rows = filtering ? onlyMonth(a.rows, month) : a.rows;
+    const ends = filtering ? chunkEnds(rows) : a.chunkEnds;
+    const chunks = ends.map((end, i) => rows.slice(i ? ends[i - 1] : 0, end));
+    const excluded = a.rows.length - rows.length;
     let uploadId: string | null = null;
     setError("");
     try {
-      setPhase({ name: "saving", done: 0, total: a.rows.length, step: "Preparando la carga…" });
+      setPhase({ name: "saving", done: 0, total: rows.length, step: "Preparando la carga…" });
       const c = await api.createUpload({
         campaign,
         dataset: a.datasetId!,
@@ -357,21 +381,21 @@ export function Upload() {
         fileName: a.file.name,
         fileSha256: a.sha,
         rowsTotal: a.rows.length + a.dropped,
-        rowsValid: a.rows.length,
-        rowsDiscarded: a.dropped,
+        rowsValid: rows.length,
+        rowsDiscarded: a.dropped + excluded,
         ...(needsMode ? { mode: mode!, label: mode === "adicional" ? addLabel : null } : {}),
       });
       uploadId = c.id;
       let done = 0;
       for (let seq = 0; seq < chunks.length; seq++) {
         const part = chunks[seq]!;
-        setPhase({ name: "saving", done, total: a.rows.length, step: `Guardando filas (${seq + 1} de ${chunks.length})…` });
+        setPhase({ name: "saving", done, total: rows.length, step: `Guardando filas (${seq + 1} de ${chunks.length})…` });
         await withRetry(() => api.sendRows(c.id, seq, part));
         done += part.length;
       }
       let warning: string | undefined;
       if (a.file.size <= MAX_BACKUP_BYTES) {
-        setPhase({ name: "saving", done, total: a.rows.length, step: "Guardando el Excel original como respaldo…" });
+        setPhase({ name: "saving", done, total: rows.length, step: "Guardando el Excel original como respaldo…" });
         try {
           await withRetry(() => api.putFile(c.id, a.file));
         } catch {
@@ -380,7 +404,7 @@ export function Upload() {
       } else {
         warning = "El Excel pesa más de 60 MB: los datos quedaron guardados, pero no se guardó una copia del archivo original.";
       }
-      setPhase({ name: "saving", done, total: a.rows.length, step: "Verificando y activando la versión…" });
+      setPhase({ name: "saving", done, total: rows.length, step: "Verificando y activando la versión…" });
       const { upload } = await api.confirmUpload(c.id);
       await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] })]);
       closeReader(); // ya no hace falta el archivo en memoria
@@ -394,7 +418,6 @@ export function Upload() {
   };
 
   const kind = analysis?.datasetId ? (getCampaign(campaign).datasets.find((d) => d.id === analysis.datasetId)?.kind as UploadKind) : null;
-  const byMonth = analysis?.month ? Object.entries(analysis.month.byMonth).sort((x, y) => y[1] - x[1]) : [];
 
   return (
     <>
@@ -543,10 +566,26 @@ export function Upload() {
                     onChange={(e) => setMonth(e.target.value)}
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                   />
-                  {analysis.month && (
+                  {hasDates ? (
                     <p className="mt-1.5 text-xs text-slate-500">
-                      Sugerido: <span className="capitalize">{monthLabel(analysis.month.month)}</span> ({Math.round(analysis.month.share * 100)}% de las filas).
+                      Según las fechas del archivo: {monthLabel(monthsInFile[0]![0])} ({fmt.format(monthsInFile[0]![1])} filas).
                     </p>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <span className={monthOk ? "" : "font-medium text-amber-700 dark:text-amber-300"}>Este archivo no trae fechas: {monthOk ? "revisa que sea el mes correcto." : "elige de qué mes es."}</span>
+                      {[currentMonth(), previousMonth()].map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          disabled={phase.name === "saving"}
+                          onClick={() => setMonth(m)}
+                          aria-pressed={month === m}
+                          className={`rounded-full px-2.5 py-1 font-medium capitalize ring-1 transition-colors ${month === m ? "bg-brand-500 text-white ring-brand-500" : "text-slate-600 ring-slate-300 hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"}`}
+                        >
+                          {monthLabel(m)}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
@@ -562,14 +601,47 @@ export function Upload() {
                       value={fmt.format(analysis.dropped)}
                       tone={analysis.dropped ? "warn" : "default"}
                     />
-                    <Stat label="Meses en el archivo" value={String(byMonth.length || "—")} foot={byMonth.slice(0, 3).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ")} />
+                    <Stat label="Meses en el archivo" value={String(monthsInFile.length || "—")} foot={monthsInFile.slice(0, 3).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ") || "Sin fechas"} />
                   </div>
 
-                  {analysis.month && analysis.month.share < 0.8 && (
-                    <p className="flex gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
-                      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-                      El archivo mezcla varios meses. Revisa que el mes elegido sea el correcto.
-                    </p>
+                  {monthOk && hasDates && inMonth === split.sinFecha && (
+                    <div className="flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+                      <TriangleAlert className="size-4 shrink-0" aria-hidden />
+                      <span className="flex-1">
+                        Este archivo no tiene filas de {monthLabel(month)}: sus fechas son de {monthLabel(monthsInFile[0]![0])}.
+                      </span>
+                      <button type="button" onClick={() => setMonth(monthsInFile[0]![0])} className="rounded-lg px-2.5 py-1 font-medium ring-1 ring-amber-300 hover:bg-amber-100 dark:ring-amber-500/40 dark:hover:bg-amber-500/20">
+                        Usar {monthLabel(monthsInFile[0]![0])}
+                      </button>
+                    </div>
+                  )}
+                  {monthOk && outside > 0 && inMonth > split.sinFecha && (
+                    <fieldset className="rounded-2xl border border-amber-200 p-4 dark:border-amber-500/30">
+                      <legend className="px-1 text-sm font-semibold">
+                        El archivo trae filas de otros meses ({monthsInFile.filter(([m]) => m !== month).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ")})
+                      </legend>
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                        {(
+                          [
+                            ["mes", `Guardar solo las de ${monthLabel(month)}`, `${fmt.format(inMonth)} filas. Las ${fmt.format(outside)} de otros meses quedan fuera y no se mezclan con ${monthLabel(month)}.`],
+                            ["todo", `Guardar todo el archivo en ${monthLabel(month)}`, `${fmt.format(analysis.rows.length)} filas. Úsalo solo si esas filas de otros meses sí cuentan en ${monthLabel(month)}.`],
+                          ] as const
+                        ).map(([value, title, hint]) => (
+                          <label
+                            key={value}
+                            className={`flex cursor-pointer gap-3 rounded-xl border p-3.5 text-sm transition-colors ${
+                              scope === value ? "border-brand-500 bg-brand-50/60 dark:bg-brand-500/10" : "border-slate-200 hover:border-slate-300 dark:border-slate-700"
+                            }`}
+                          >
+                            <input type="radio" name="alcance" className="mt-0.5 accent-brand-500" checked={scope === value} onChange={() => setScope(value)} />
+                            <span>
+                              <span className="block font-medium first-letter:uppercase">{title}</span>
+                              <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">{hint}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
                   )}
                   {needsMode && current && (
                     <fieldset className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
@@ -655,11 +727,16 @@ export function Upload() {
               ) : (
                 !analysis.error && (
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={save} disabled={!/^20\d{2}-\d{2}$/.test(month) || (needsMode && !mode)}>
+                    <Button onClick={save} disabled={!monthOk || toSave === 0 || (needsMode && !mode)}>
                       <CloudUpload className="size-4" aria-hidden />{" "}
-                      {needsMode && mode === "adicional" ? `Sumar ${fmt.format(analysis.rows.length)} clientes a ${monthLabel(month)}` : `Guardar ${fmt.format(analysis.rows.length)} filas en ${monthLabel(month)}`}
+                      {!monthOk
+                        ? "Guardar"
+                        : needsMode && mode === "adicional"
+                          ? `Sumar ${fmt.format(toSave)} clientes a ${monthLabel(month)}`
+                          : `Guardar ${fmt.format(toSave)} filas en ${monthLabel(month)}`}
                     </Button>
-                    {needsMode && !mode && <span className="self-center text-xs text-slate-500">Elige si es una base adicional o un reemplazo.</span>}
+                    {!monthOk && <span className="self-center text-xs text-slate-500">Elige el mes al que corresponde.</span>}
+                    {monthOk && needsMode && !mode && <span className="self-center text-xs text-slate-500">Elige si es una base adicional o un reemplazo.</span>}
                   </div>
                 )
               )}
