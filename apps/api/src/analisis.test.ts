@@ -283,3 +283,84 @@ describe("detalle de clientes", () => {
     expect((await det("fuente=crm&agente=Luis")).total).toBe(2);
   });
 });
+
+describe("bases adicionales", () => {
+  // 8 clientes: 3 ya venían en la base de primeras (NIU 127-129) y 5 son nuevos (200-204).
+  const adicional = [...["127", "128", "129"], ...Array.from({ length: 5 }, (_, i) => String(200 + i))].map((niu) => ({ niu, profile: "Nuevo" }));
+  let addId = "";
+
+  it("se suma a la original del mes en vez de reemplazarla", async () => {
+    const before = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).base!;
+    const c = await call("POST", "/cargas", {
+      campaign: "tdc", dataset: "tdc:base:primeras", month: "2026-09", fileName: "adicional.xlsx", fileSha256: "d".repeat(64),
+      rowsTotal: adicional.length, rowsValid: adicional.length, rowsDiscarded: 0, mode: "adicional", label: "Adicional 15 sep",
+    });
+    expect(c.status, String(c.data.error)).toBe(201);
+    addId = String(c.data.id);
+    expect((await call("POST", `/cargas/${addId}/filas`, { seq: 0, rows: adicional })).status).toBe(200);
+    const conf = await call("POST", `/cargas/${addId}/confirmar`, {});
+    expect(conf.status).toBe(200);
+    expect(conf.data.upload).toMatchObject({ isAddition: true, label: "Adicional 15 sep", isCurrent: true });
+
+    const list = (await call("GET", "/cargas?campana=tdc")).data.uploads as { dataset: string; month: string; isCurrent: boolean; isAddition: boolean }[];
+    expect(list.filter((u) => u.dataset === "tdc:base:primeras" && u.month === "2026-09" && u.isCurrent)).toHaveLength(2);
+
+    const base = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).base!;
+    expect(base.total).toBe(before.total + 5);
+    expect(base.porCarga.map((x) => [x.dataset, x.adicional])).toEqual([
+      ["tdc:base:primeras", false],
+      ["tdc:base:segundas", false],
+      ["tdc:base:primeras", true],
+    ]);
+    const add = base.porCarga[2]!;
+    expect(add).toMatchObject({ nombre: "Adicional 15 sep", unicos: 8, nuevos: 5, repetidos: 3, llamados: 0, ventas: 0 });
+    // Las bases originales: segundas solo cuenta como nuevos los que no venían en primeras.
+    expect(base.porCarga[1]).toMatchObject({ unicos: 10, nuevos: 5, repetidos: 5 });
+    expect(base.porCarga[0]!.nuevos + base.porCarga[1]!.nuevos + add.nuevos).toBe(base.total);
+  });
+
+  it("reemplazar la base original conserva las adicionales", async () => {
+    await load("tdc:base:primeras", "2026-09", basePrimeras);
+    const base = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).base!;
+    expect(base.porCarga.filter((x) => x.adicional)).toHaveLength(1);
+    expect(base.porCarga.filter((x) => x.dataset === "tdc:base:primeras")).toHaveLength(2);
+  });
+
+  it("una adicional se puede quitar y volver a sumar", async () => {
+    expect((await call("POST", `/cargas/${addId}/quitar`, {})).status).toBe(200);
+    let base = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).base!;
+    expect(base.porCarga.some((x) => x.adicional)).toBe(false);
+    expect((await call("POST", `/cargas/${addId}/activar`, {})).status).toBe(200);
+    base = ((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis).base!;
+    expect(base.porCarga.filter((x) => x.adicional)).toHaveLength(1);
+    expect((await call("POST", `/cargas/${addId}/quitar`, {})).status).toBe(200);
+  });
+
+  it("solo las bases pueden ser adicionales", async () => {
+    const c = await call("POST", "/cargas", {
+      campaign: "tdc", dataset: "tdc:sabana", month: "2026-09", fileName: "x.xlsx", fileSha256: "d".repeat(64),
+      rowsTotal: 1, rowsValid: 1, rowsDiscarded: 0, mode: "adicional",
+    });
+    expect(c.status).toBe(400);
+  });
+});
+
+describe("histórico", () => {
+  it("un resumen por mes, del más antiguo al más reciente", async () => {
+    const r = await call("GET", "/analisis/tdc/historico");
+    expect(r.status, String(r.data.error)).toBe(200);
+    const meses = r.data.meses as import("@crm/core").MonthSummary[];
+    expect(meses.map((m) => m.month)).toEqual(["2026-08", "2026-09"]);
+    expect(meses[0]).toMatchObject({ ventas: 6, aprobadas: 4, rechazadas: 2, base: null, llamadas: null, meta: null, cumplimiento: null });
+    expect(meses[1]).toMatchObject({ ventas: 20, llamadas: 8, registros: 4, unidad: "ventas", meta: 40 });
+    expect(meses[1]!.contactabilidad).toBeCloseTo(50, 6);
+    expect(meses[1]!.diasHabiles).toBe(22);
+  });
+
+  it("con filtro por agente", async () => {
+    const meses = (await call("GET", "/analisis/tdc/historico?agente=Ana")).data.meses as import("@crm/core").MonthSummary[];
+    expect(meses.find((m) => m.month === "2026-09")!.ventas).toBe(sabanaSep.filter((r) => r.executive === "Ana").length);
+    expect(meses.find((m) => m.month === "2026-08")!.ventas).toBe(6);
+  });
+});
+

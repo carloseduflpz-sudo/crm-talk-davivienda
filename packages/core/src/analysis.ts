@@ -80,6 +80,27 @@ export interface CampaignAnalysis {
 
   base: null | {
     total: number;
+    /** Cada carga de base vigente del mes: la original y las adicionales, en orden de llegada.
+        Los clientes que se repiten se atribuyen a la primera base que los trajo. */
+    porCarga: {
+      uploadId: string;
+      dataset: string;
+      adicional: boolean;
+      nombre: string | null;
+      llegada: number;
+      registros: number;
+      unicos: number;
+      /** Clientes que no venían en una base anterior del mes. */
+      nuevos: number;
+      repetidos: number;
+      /** De los clientes nuevos: cuántos se llamaron, cuántos tuvieron contacto efectivo y cuántos compraron. */
+      llamados: number;
+      contactados: number;
+      ventas: number;
+      aprobadas: number;
+      /** Ventas ÷ clientes nuevos, en %. */
+      penetracion: number;
+    }[];
     porArchivo: { dataset: string; registros: number; unicos: number }[];
     porPerfil: ProfileRow[];
     historial: { month: string; dataset: string; unicos: number }[];
@@ -174,3 +195,30 @@ export interface CampaignAnalysis {
     feriadosSugeridos: { date: string; name: string }[];
   };
 }
+
+/** Resumen de un mes para la pestaña Histórico (todos los meses con archivos vigentes). */
+export interface MonthSummary {
+  month: string;
+  /** Ventas de la sábana (null si ese mes no tiene sábana). */
+  ventas: number | null;
+  aprobadas: number | null;
+  rechazadas: number | null;
+  aprobacion: number | null;
+  monto: number | null;
+  montoAprobado: number | null;
+  /** Clientes únicos de la base (original + adicionales) y cuántas bases adicionales hubo. */
+  base: number | null;
+  adicionales: number;
+  llamadas: number | null;
+  registros: number | null;
+  contactabilidad: number | null;
+  ventasVici: number | null;
+  penetracion: number | null;
+  /** Meta del mes y lo que cuenta para ella (ventas o dólares según la campaña). */
+  unidad: "ventas" | "monto";
+  meta: number | null;
+  logrado: number | null;
+  cumplimiento: number | null;
+  diasHabiles: number;
+}
+

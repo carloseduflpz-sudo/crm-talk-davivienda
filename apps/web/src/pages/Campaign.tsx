@@ -3,9 +3,9 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode } from "@crm/core";
+import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Database, PhoneCall, Target, TrendingUp, Upload, type LucideIcon } from "lucide-react";
+import { BarChart3, Database, History, PhoneCall, Target, TrendingUp, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
@@ -14,6 +14,8 @@ import {
   BarList,
   ChartCard,
   Columns,
+  DeltaBadge,
+  Panel,
   DataTable,
   FigureStrip,
   Meter,
@@ -42,6 +44,7 @@ export const CAMPAIGN_TABS = [
   { slug: "efectividad", label: "Efectividad", icon: BarChart3, needs: "tipif", about: "Contactabilidad, registros y penetración, general y por agente." },
   { slug: "llamadas", label: "Llamadas", icon: PhoneCall, needs: "tipif", about: "Tipificaciones, intentos por cliente y ventas capturadas en el CRM." },
   { slug: "cumplimiento", label: "Cumplimiento", icon: Target, needs: "sabana", about: "Meta, avance, ritmo, proyección y gap por agente." },
+  { slug: "historico", label: "Histórico", icon: History, needs: "sabana", about: "Comparativo mes a mes: ventas, base, contactabilidad, penetración y cumplimiento." },
 ] as const;
 
 const SALE_COLORS = { aprobado: "var(--st-good)", en_proceso: "var(--st-warning)", rechazado: "var(--st-critical)" } as Record<string, string>;
@@ -334,16 +337,27 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
             label: "Clientes en la base",
             num: b.total,
             format: intOf,
-            foot: b.porArchivo.length > 1 ? "Únicos, sin repetir entre bases" : "Clientes únicos",
+            foot: b.porCarga.length > 1 ? "Únicos, sin repetir entre bases" : "Clientes únicos",
             delta: deltaOf(b.total, prev?.base?.total, vs, { upIsGood: null }),
             onOpen: () => open({ fuente: "base", title: "Clientes de la base" }),
           },
-          ...b.porArchivo.map((f) => ({
+          // Las bases originales; las adicionales se resumen aparte.
+          ...b.porCarga.filter((f) => !f.adicional).map((f) => ({
             label: label(f.dataset),
             num: f.unicos,
             format: intOf,
             foot: f.registros !== f.unicos ? `${fmtInt.format(f.registros)} filas en el archivo` : "Clientes únicos",
           })),
+          ...(b.porCarga.some((x) => x.adicional)
+            ? [
+                {
+                  label: "Bases adicionales",
+                  num: b.porCarga.filter((x) => x.adicional).reduce((sum, x) => sum + x.nuevos, 0),
+                  format: intOf,
+                  foot: `Clientes nuevos en ${b.porCarga.filter((x) => x.adicional).length === 1 ? "1 base adicional" : `${b.porCarga.filter((x) => x.adicional).length} bases adicionales`}`,
+                },
+              ]
+            : []),
           ...(a.ventas
             ? [
                 {
@@ -358,6 +372,65 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
         ]}
       />
       {a.agente && <Aside>La base es la misma para todos los agentes; el cruce de ventas sí está filtrado por {a.agente}.</Aside>}
+
+      {b.porCarga.length > 1 && (
+        <ChartCard
+          title="Bases del mes"
+          note="La original y las adicionales, en orden de llegada. Un cliente que viene en varias se cuenta en la primera que lo trajo; llamados, contacto y ventas son de sus clientes nuevos. Clic para ver los clientes de cada base."
+        >
+          <DataTable
+            rows={b.porCarga}
+            onRowClick={(r) => open({ fuente: "base", title: r.adicional ? r.nombre || "Base adicional" : label(r.dataset), filters: { carga: r.uploadId } })}
+            rowHint="Ver los clientes de esta base"
+            cols={[
+              {
+                key: "base",
+                label: "Base",
+                render: (r) => (
+                  <span className="inline-flex items-center gap-2">
+                    {r.adicional ? r.nombre || "Base adicional" : label(r.dataset)}
+                    {r.adicional && <span className="rounded-full bg-[var(--viz-2)]/12 px-2 py-0.5 text-[11px] font-medium text-[var(--viz-2)]">Adicional</span>}
+                  </span>
+                ),
+              },
+              { key: "llegada", label: "Llegó", render: (r) => new Intl.DateTimeFormat("es-SV", { day: "numeric", month: "short" }).format(new Date(r.llegada)), sort: (r) => r.llegada },
+              { key: "unicos", label: "Clientes", align: "right", render: (r) => fmtInt.format(r.unicos), sort: (r) => r.unicos },
+              { key: "nuevos", label: "Nuevos", align: "right", render: (r) => fmtInt.format(r.nuevos), sort: (r) => r.nuevos },
+              { key: "repetidos", label: "Repetidos", align: "right", render: (r) => fmtInt.format(r.repetidos), sort: (r) => r.repetidos },
+              ...(a.llamadas
+                ? [
+                    {
+                      key: "llamados",
+                      label: "Llamados",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => `${fmtInt.format(r.llamados)} (${fmtPct(share(r.llamados, r.nuevos), 0)})`,
+                      sort: (r: (typeof b.porCarga)[number]) => share(r.llamados, r.nuevos),
+                    },
+                    {
+                      key: "contactados",
+                      label: "Con contacto",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => `${fmtInt.format(r.contactados)} (${fmtPct(share(r.contactados, r.llamados), 0)})`,
+                      sort: (r: (typeof b.porCarga)[number]) => share(r.contactados, r.llamados),
+                    },
+                  ]
+                : []),
+              ...(a.ventas
+                ? [
+                    { key: "ventas", label: "Ventas", align: "right" as const, render: (r: (typeof b.porCarga)[number]) => fmtInt.format(r.ventas), sort: (r: (typeof b.porCarga)[number]) => r.ventas },
+                    {
+                      key: "penetracion",
+                      label: "Penetración",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => <PctCell value={r.penetracion} max={Math.max(...b.porCarga.map((x) => x.penetracion), 0.0001)} digits={2} />,
+                      sort: (r: (typeof b.porCarga)[number]) => r.penetracion,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </ChartCard>
+      )}
 
       <ChartCard title="Perfiles de la base" note={a.ventas ? "Cruce por NIU contra la sábana del mismo mes. Clic en un perfil para ver sus clientes." : "Carga la sábana del mes para ver el cruce contra ventas"}>
         <DataTable
@@ -794,6 +867,124 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   );
 }
 
+/* ---------- Histórico ---------- */
+
+interface Trend {
+  key: string;
+  title: string;
+  value: (m: MonthSummary) => number | null;
+  format: (n: number) => string;
+  axis?: (n: number) => string;
+  rate?: boolean;
+  upIsGood?: boolean | null;
+  note?: string;
+}
+
+function TrendCard({ t, meses, active, onSelect }: { t: Trend; meses: MonthSummary[]; active: string | null; onSelect: (m: string) => void }) {
+  const rows = meses.filter((m) => t.value(m) !== null);
+  const last = rows.at(-1);
+  const before = rows.at(-2);
+  const delta = last && before ? deltaOf(t.value(last), t.value(before), `vs ${monthLabel(before.month).split(" ")[0]}`, { rate: t.rate, upIsGood: t.upIsGood }) : undefined;
+  return (
+    <Panel className="p-6 sm:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[14px] text-ink-soft">{t.title}</h3>
+          <p className="mt-1.5 text-[30px] leading-tight font-normal tracking-[-0.02em] text-ink tabular-nums">{last ? t.format(t.value(last)!) : "—"}</p>
+          <p className="mt-1 text-[12.5px] text-ink-faint first-letter:uppercase">{last ? monthLabel(last.month) : "Sin datos"}</p>
+        </div>
+        {delta && <DeltaBadge d={delta} />}
+      </div>
+      {t.note && <p className="mt-2 text-[12.5px] text-ink-faint">{t.note}</p>}
+      <div className="mt-5">
+        {rows.length ? (
+          <Columns
+            height={190}
+            active={active}
+            format={t.format}
+            axisFormat={t.axis}
+            onSelect={(d) => onSelect(d.key)}
+            selectHint="Clic para ver este mes"
+            data={rows.map((m) => ({ key: m.month, label: monthShort(m.month), title: monthLabel(m.month), parts: [{ label: t.title, value: t.value(m)!, color: "var(--viz-1)" }] }))}
+          />
+        ) : (
+          <p className="text-sm text-ink-soft">Ningún mes tiene este dato.</p>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function HistoricoTab({ a, setMonth }: Ctx) {
+  const h = useQuery({ queryKey: ["historico", a.campaign, a.agente], queryFn: () => api.history(a.campaign, a.agente), staleTime: 60_000 });
+  const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
+  if (h.isPending) return <p className="text-sm text-ink-soft">Calculando el histórico…</p>;
+  if (h.isError) return <ErrorMessage>{h.error.message}</ErrorMessage>;
+  const meses = h.data;
+  const pctAxis = (n: number) => `${fmtInt.format(n)}%`;
+  const trends: Trend[] = [
+    money
+      ? { key: "monto", title: "Monto de ventas", value: (m) => m.monto, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true }
+      : { key: "ventas", title: "Ventas de la sábana", value: (m) => m.ventas, format: intOf, upIsGood: true },
+    { key: "aprobacion", title: "Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: "Aprobadas sobre las ya resueltas por el banco" },
+    { key: "cumplimiento", title: "Cumplimiento de la meta", value: (m) => m.cumplimiento, format: pct1, axis: pctAxis, rate: true, note: "Lo que cuenta para la meta sobre la meta del mes" },
+    { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Original más bases adicionales, sin repetir" },
+    { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
+    { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true },
+  ];
+  type R = MonthSummary;
+  const opt = <T,>(v: T | null, f: (x: T) => string) => (v === null ? "—" : f(v));
+  return (
+    <Stack>
+      {meses.length < 2 && (
+        <Aside>
+          Por ahora hay {meses.length === 1 ? "un solo mes" : "ningún mes"} con archivos. Al cargar otros meses (sábana, base y tipificaciones de cada mes) aquí se comparan mes contra mes.
+        </Aside>
+      )}
+      <div className="grid gap-8 lg:grid-cols-2 2xl:grid-cols-3">
+        {trends.map((t) => (
+          <TrendCard key={t.key} t={t} meses={meses} active={a.month} onSelect={setMonth} />
+        ))}
+      </div>
+
+      <ChartCard title="Mes a mes" note={a.agente ? `Solo ${a.agente}. La base es la misma para todos los agentes.` : "Cada mes con sus archivos vigentes. Clic en un mes para verlo en las demás pestañas."}>
+        <DataTable
+          rows={[...meses].reverse()}
+          onRowClick={(r) => setMonth(r.month)}
+          rowHint="Ver este mes"
+          isActive={(r) => r.month === a.month}
+          maxRows={24}
+          cols={[
+            { key: "month", label: "Mes", render: (r) => <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span>, sort: (r) => r.month },
+            { key: "ventas", label: "Ventas", align: "right", render: (r) => opt(r.ventas, (x) => fmtInt.format(x)), sort: (r) => r.ventas ?? -1 },
+            { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => opt(r.aprobadas, (x) => fmtInt.format(x)), sort: (r) => r.aprobadas ?? -1 },
+            { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => opt(r.aprobacion, (x) => fmtPct(x)), sort: (r) => r.aprobacion ?? -1 },
+            ...(money
+              ? [
+                  { key: "monto", label: "Monto", align: "right" as const, render: (r: R) => opt(r.monto, fmtMoney), sort: (r: R) => r.monto ?? -1 },
+                  { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: R) => opt(r.montoAprobado, fmtMoney), sort: (r: R) => r.montoAprobado ?? -1 },
+                ]
+              : []),
+            {
+              key: "base",
+              label: "Base",
+              align: "right",
+              render: (r) => (r.base === null ? "—" : `${fmtInt.format(r.base)}${r.adicionales ? ` (+${r.adicionales} adic.)` : ""}`),
+              sort: (r) => r.base ?? -1,
+            },
+            { key: "llamadas", label: "Llamadas", align: "right", render: (r) => opt(r.llamadas, (x) => fmtInt.format(x)), sort: (r) => r.llamadas ?? -1 },
+            { key: "contactabilidad", label: "Contactabilidad", align: "right", render: (r) => opt(r.contactabilidad, (x) => fmtPct(x)), sort: (r) => r.contactabilidad ?? -1 },
+            { key: "penetracion", label: "Penetración", align: "right", render: (r) => opt(r.penetracion, (x) => fmtPct(x, 2)), sort: (r) => r.penetracion ?? -1 },
+            { key: "meta", label: "Meta", align: "right", render: (r) => opt(r.meta, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x))), sort: (r) => r.meta ?? -1 },
+            { key: "logrado", label: "Logrado", align: "right", render: (r) => opt(r.logrado, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x))), sort: (r) => r.logrado ?? -1 },
+            { key: "cumplimiento", label: "Cumplimiento", align: "right", render: (r) => (r.cumplimiento === null ? "—" : <PctCell value={r.cumplimiento} max={Math.max(100, ...meses.map((m) => m.cumplimiento ?? 0))} />), sort: (r) => r.cumplimiento ?? -1 },
+          ]}
+        />
+      </ChartCard>
+    </Stack>
+  );
+}
+
 /* ---------- página ---------- */
 
 export function Campaign() {
@@ -922,6 +1113,7 @@ export function Campaign() {
           {current.slug === "base" && <BaseTab {...ctx} />}
           {current.slug === "efectividad" && <EfectividadTab {...ctx} />}
           {current.slug === "llamadas" && <LlamadasTab {...ctx} />}
+          {current.slug === "historico" && <HistoricoTab {...ctx} />}
           {current.slug === "cumplimiento" && (
             <CumplimientoTab {...ctx} canEdit={me.data?.permissions.includes("config:editar") ?? false} refresh={() => void qc.invalidateQueries({ queryKey: ["analysis", code] })} />
           )}

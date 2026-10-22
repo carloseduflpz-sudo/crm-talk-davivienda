@@ -7,7 +7,18 @@
    - Penetración = clientes con venta en VICI ÷ clientes únicos de la base del mes.
    - Cumplimiento = ventas de la sábana del mes ÷ meta; ritmo = ventas ÷ día del mes de la
      última venta; proyección = ritmo × días del mes. */
-import { DEFAULT_WORK_DAYS, GOAL_UNIT, businessDays, countsForGoal, isCampaignCode, suggestedHolidays, type CampaignAnalysis, type CampaignCode, type Count } from "@crm/core";
+import {
+  DEFAULT_WORK_DAYS,
+  GOAL_UNIT,
+  businessDays,
+  countsForGoal,
+  isCampaignCode,
+  suggestedHolidays,
+  type CampaignAnalysis,
+  type CampaignCode,
+  type Count,
+  type MonthSummary,
+} from "@crm/core";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -21,6 +32,8 @@ interface CurrentUpload {
   version: number;
   created_at: number;
   created_by: string;
+  is_addition: number;
+  label: string | null;
 }
 
 const pct = (a: number, b: number) => (b ? (a / b) * 100 : 0);
@@ -60,7 +73,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
   const fa = (col: string) => (agente ? ` AND ${agentLabel(col)} = ?` : "");
   const fb: string[] = agente ? [agente] : [];
   const { results: current } = await db
-    .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by FROM uploads WHERE campaign = ? AND is_current = 1")
+    .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by, is_addition, label FROM uploads WHERE campaign = ? AND is_current = 1")
     .bind(campaign)
     .all<CurrentUpload>();
   const months = [...new Set(current.map((u) => u.month))].sort().reverse();
@@ -242,10 +255,51 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
             )
             .bind(...baseIds),
     );
-    const [porArchivo, unicos, historial, perfiles] = await db.batch(stmts);
+    // Cada carga de base (original y adicionales, en orden de llegada): clientes nuevos que aportó
+    // (los que no venían en una base anterior del mes) y cómo se trabajaron esos clientes.
+    const ordered = [...bases].sort((x, y) => x.is_addition - y.is_addition || x.created_at - y.created_at);
+    const effSql = efectivoSql.replace(/call_class/g, "c.call_class");
+    const perUpload = ordered.map((u, i) => {
+      const earlier = ordered.slice(0, i).map((x) => x.id);
+      const notEarlier = earlier.length ? ` AND niu NOT IN (SELECT niu FROM base_records WHERE upload_id IN (${placeholders(earlier.length)}))` : "";
+      return db
+        .prepare(
+          `WITH b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id = ?${notEarlier})
+           SELECT (SELECT COUNT(*) FROM base_records WHERE upload_id = ?) AS registros,
+                  (SELECT COUNT(DISTINCT niu) FROM base_records WHERE upload_id = ?) AS unicos,
+                  (SELECT COUNT(*) FROM b) AS nuevos,
+                  (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS llamados,
+                  (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")} AND ${effSql}) AS contactados,
+                  (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")}) AS ventas,
+                  (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")} AND s.status_class = 'aprobado') AS aprobadas`,
+        )
+        .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
+    });
+    const [porArchivo, unicos, historial, perfiles, ...cargas] = await db.batch([...stmts, ...perUpload]);
     baseUnicos = n((unicos!.results[0] as { n: number } | undefined)?.n);
+    const porCarga = ordered.map((u, i) => {
+      const r = cargas[i]!.results[0] as Record<string, number>;
+      const nuevos = n(r.nuevos);
+      return {
+        uploadId: u.id,
+        dataset: u.dataset,
+        adicional: Boolean(u.is_addition),
+        nombre: u.label,
+        llegada: u.created_at,
+        registros: n(r.registros),
+        unicos: n(r.unicos),
+        nuevos,
+        repetidos: n(r.unicos) - nuevos,
+        llamados: n(r.llamados),
+        contactados: n(r.contactados),
+        ventas: n(r.ventas),
+        aprobadas: n(r.aprobadas),
+        penetracion: pct(n(r.ventas), nuevos),
+      };
+    });
     out.base = {
       total: baseUnicos,
+      porCarga,
       porArchivo: (porArchivo!.results as { dataset: string; registros: number; unicos: number }[]).map((r) => ({ dataset: r.dataset, registros: n(r.registros), unicos: n(r.unicos) })),
       historial: (historial!.results as { month: string; dataset: string; unicos: number }[]).map((r) => ({ month: r.month, dataset: r.dataset, unicos: n(r.unicos) })),
       porPerfil: (perfiles!.results as { profile: string; base: number; con_venta: number; aprobadas: number; rechazadas: number }[]).map((r) => ({
@@ -484,6 +538,45 @@ export function registerAnalisis(r: Router): void {
     const agente = url.searchParams.get("agente")?.trim() || null;
     if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
     return json({ ok: true, analysis: await analyzeCampaign(env, campaign, mes, agente) });
+  });
+
+  /** Histórico: un resumen por mes con los archivos vigentes de cada mes (mismo cálculo que cada pestaña). */
+  r.on("GET", "/analisis/:campaign/historico", "datos:ver", async ({ env, params, url }) => {
+    const campaign = params.campaign!;
+    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
+    const agente = url.searchParams.get("agente")?.trim() || null;
+    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
+    const first = await analyzeCampaign(env, campaign, null, agente);
+    const months = first.months.slice(0, 13);
+    const all = [first, ...(await Promise.all(months.slice(1).map((m) => analyzeCampaign(env, campaign, m, agente))))];
+    const summary: MonthSummary[] = all
+      .filter((a): a is CampaignAnalysis & { month: string } => Boolean(a.month))
+      .map((a) => {
+        const c = a.cumplimiento;
+        return {
+          month: a.month,
+          ventas: a.ventas?.total ?? null,
+          aprobadas: a.ventas?.aprobadas ?? null,
+          rechazadas: a.ventas?.rechazadas ?? null,
+          aprobacion: a.ventas ? a.ventas.aprobacion : null,
+          monto: a.ventas ? a.ventas.monto.total : null,
+          montoAprobado: a.ventas ? a.ventas.monto.aprobado : null,
+          base: a.base?.total ?? null,
+          adicionales: a.base?.porCarga.filter((x) => x.adicional).length ?? 0,
+          llamadas: a.llamadas?.total ?? null,
+          registros: a.llamadas?.registros ?? null,
+          contactabilidad: a.llamadas?.contactabilidad ?? null,
+          ventasVici: a.llamadas?.ventasUnicas ?? null,
+          penetracion: a.llamadas?.penetracion ?? null,
+          unidad: c.unidad,
+          meta: c.meta,
+          logrado: a.ventas ? c.ventas : null,
+          cumplimiento: c.meta !== null && a.ventas ? c.avance : null,
+          diasHabiles: c.diasDelMes,
+        };
+      })
+      .sort((x, y) => x.month.localeCompare(y.month));
+    return json({ ok: true, agente, meses: summary });
   });
 
   /** Meta de ventas y número de agentes de una campaña en un mes. */

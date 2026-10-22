@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { CampaignAnalysis, DatasetDef, Permission, Role } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, Role } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -92,6 +92,9 @@ export interface UploadInfo {
   rowsTotal: number;
   rowsValid: number;
   rowsDiscarded: number;
+  /** Base adicional: vigente junto a la original del mes. */
+  isAddition: boolean;
+  label: string | null;
   createdBy: string;
   createdAt: number;
 }
@@ -132,13 +135,25 @@ export const api = {
   resetPassword: (id: number, password: string) => post(`/usuarios/${id}/clave`, { password }),
 
   uploads: (campaign?: string) => get<{ uploads: UploadInfo[] }>(`/cargas${campaign ? `?campana=${campaign}` : ""}`).then((r) => r.uploads),
-  createUpload: (b: { campaign: string; dataset: string; month: string; fileName: string; fileSha256: string; rowsTotal: number; rowsValid: number; rowsDiscarded: number }) =>
+  createUpload: (b: {
+    campaign: string;
+    dataset: string;
+    month: string;
+    fileName: string;
+    fileSha256: string;
+    rowsTotal: number;
+    rowsValid: number;
+    rowsDiscarded: number;
+    mode?: "adicional" | "reemplazar";
+    label?: string | null;
+  }) =>
     post<{ id: string; version: number; maxRowsPerChunk: number }>("/cargas", b),
   sendRows: (id: string, seq: number, rows: unknown[]) => post<{ duplicate?: boolean }>(`/cargas/${id}/filas`, { seq, rows }),
   putFile,
   confirmUpload: (id: string) => post<{ upload: UploadInfo }>(`/cargas/${id}/confirmar`),
   discardUpload: (id: string) => post(`/cargas/${id}/descartar`),
   activateUpload: (id: string) => post(`/cargas/${id}/activar`),
+  removeAddition: (id: string) => post(`/cargas/${id}/quitar`),
 
   analysis: (campaign: string, month?: string | null, agent?: string | null) => {
     const q = new URLSearchParams();
@@ -147,6 +162,8 @@ export const api = {
     const qs = q.toString();
     return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
   },
+  history: (campaign: string, agent?: string | null) =>
+    get<{ meses: MonthSummary[] }>(`/analisis/${campaign}/historico${agent ? `?agente=${encodeURIComponent(agent)}` : ""}`).then((r) => r.meses),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {
     const q = new URLSearchParams();

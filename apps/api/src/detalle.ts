@@ -136,6 +136,9 @@ export function registerDetalle(r: Router): void {
       if (tip) add("COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') = ?", tip);
     }
     if (src.table === "base_records") {
+      // Una carga de base en particular (la original o una adicional).
+      const carga = text("carga");
+      if (carga) add("upload_id = ?", carga);
       const perfil = text("perfil");
       if (perfil) add("COALESCE(NULLIF(TRIM(profile), ''), 'N/D') = ?", perfil);
     }

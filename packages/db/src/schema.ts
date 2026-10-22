@@ -154,6 +154,10 @@ export const uploads = sqliteTable(
     rowsDiscarded: integer("rows_discarded").notNull().default(0),
     /** Lotes de filas ya recibidos (evita duplicar un lote reenviado). */
     chunksReceived: integer("chunks_received").notNull().default(0),
+    /** Base adicional: queda vigente junto a la original en vez de reemplazarla. */
+    isAddition: integer("is_addition", { mode: "boolean" }).notNull().default(false),
+    /** Nombre de la base adicional ("Adicional 15 oct"). */
+    label: text("label"),
     createdBy: text("created_by").notNull(),
     createdAt: integer("created_at").notNull().default(now),
   },

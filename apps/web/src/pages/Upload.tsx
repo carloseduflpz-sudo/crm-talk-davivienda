@@ -161,7 +161,10 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
               {uploads.data.map((u) => (
                 <tr key={u.id} className={u.isCurrent ? "" : "text-slate-500"}>
                   <td className="px-5 py-3">
-                    <p className="font-medium text-slate-800 dark:text-slate-200">{datasetLabel(u.dataset)}</p>
+                    <p className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
+                      {datasetLabel(u.dataset)}
+                      {u.isAddition && <Badge tone="accent">{u.label || "Adicional"}</Badge>}
+                    </p>
                     <p className="max-w-64 truncate text-xs text-slate-500" title={u.fileName}>
                       {u.fileName}
                     </p>
@@ -170,7 +173,7 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
                   <td className="px-3 py-3">v{u.version}</td>
                   <td className="px-3 py-3 text-right tabular-nums">{fmt.format(u.rowsValid)}</td>
                   <td className="px-3 py-3">
-                    <Badge tone={STATUS_BADGE[u.status].tone}>{STATUS_BADGE[u.status].label}</Badge>
+                    {u.isAddition && u.status === "reemplazada" ? <Badge tone="neutral">Quitada del mes</Badge> : <Badge tone={STATUS_BADGE[u.status].tone}>{STATUS_BADGE[u.status].label}</Badge>}
                   </td>
                   <td className="px-3 py-3 text-xs whitespace-nowrap">
                     {u.createdBy}
@@ -184,14 +187,26 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
                           <Download className="size-4" aria-label="Descargar el Excel original" />
                         </a>
                       )}
+                      {u.isAddition && u.isCurrent && canRestore && (
+                        <button
+                          disabled={busy === u.id}
+                          onClick={() => confirm(`¿Quitar "${u.label || "la base adicional"}" del análisis de ${monthLabel(u.month)}? Sus filas se conservan y se puede volver a sumar.`) && act(u.id, () => api.removeAddition(u.id))}
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800"
+                        >
+                          Quitar del mes
+                        </button>
+                      )}
                       {u.status === "reemplazada" && canRestore && (
                         <button
                           disabled={busy === u.id}
-                          onClick={() => confirm(`¿Volver a dejar vigente la versión ${u.version} de ${monthLabel(u.month)}?`) && act(u.id, () => api.activateUpload(u.id))}
-                          className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800"
-                          title="Volver a esta versión"
+                          onClick={() =>
+                            confirm(u.isAddition ? `¿Volver a sumar "${u.label || "la base adicional"}" a ${monthLabel(u.month)}?` : `¿Volver a dejar vigente la versión ${u.version} de ${monthLabel(u.month)}?`) &&
+                            act(u.id, () => api.activateUpload(u.id))
+                          }
+                          className={`rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-slate-800 ${u.isAddition ? "px-2.5 py-1.5 text-xs font-medium" : "p-2"}`}
+                          title={u.isAddition ? "Volver a sumar esta base al mes" : "Volver a esta versión"}
                         >
-                          <RotateCcw className="size-4" aria-label="Volver a esta versión" />
+                          {u.isAddition ? "Volver a sumar" : <RotateCcw className="size-4" aria-label="Volver a esta versión" />}
                         </button>
                       )}
                       {!u.isCurrent && (
@@ -312,10 +327,20 @@ export function Upload() {
     if (file && phase.name !== "saving") void readFile(file);
   };
 
+  // Versión vigente "original" de ese archivo y mes (las bases adicionales no cuentan aquí).
   const current = useMemo(
-    () => (analysis?.datasetId ? uploads.data?.find((u) => u.dataset === analysis.datasetId && u.month === month && u.isCurrent) : undefined),
+    () => (analysis?.datasetId ? uploads.data?.find((u) => u.dataset === analysis.datasetId && u.month === month && u.isCurrent && !u.isAddition) : undefined),
     [analysis, uploads.data, month],
   );
+  const isBase = analysis?.datasetId ? getCampaign(campaign).datasets.find((d) => d.id === analysis.datasetId)?.kind === "base" : false;
+  // Si ya hay base ese mes, hay que elegir: sumar como adicional o reemplazar.
+  const needsMode = Boolean(isBase && current);
+  const [mode, setMode] = useState<null | "adicional" | "reemplazar">(null);
+  const [addLabel, setAddLabel] = useState("");
+  useEffect(() => {
+    setMode(null);
+    setAddLabel(`Adicional ${new Intl.DateTimeFormat("es-SV", { day: "numeric", month: "short" }).format(new Date())}`);
+  }, [analysis?.sha, analysis?.datasetId, month]);
 
   const save = async () => {
     if (!analysis?.datasetId) return;
@@ -334,6 +359,7 @@ export function Upload() {
         rowsTotal: a.rows.length + a.dropped,
         rowsValid: a.rows.length,
         rowsDiscarded: a.dropped,
+        ...(needsMode ? { mode: mode!, label: mode === "adicional" ? addLabel : null } : {}),
       });
       uploadId = c.id;
       let done = 0;
@@ -545,7 +571,46 @@ export function Upload() {
                       El archivo mezcla varios meses. Revisa que el mes elegido sea el correcto.
                     </p>
                   )}
-                  {current && (
+                  {needsMode && current && (
+                    <fieldset className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                      <legend className="px-1 text-sm font-semibold">
+                        <span className="capitalize">{monthLabel(month)}</span> ya tiene esta base ({fmt.format(current.rowsValid)} clientes, cargada el {fmtDate(current.createdAt)})
+                      </legend>
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                        {(
+                          [
+                            ["adicional", "Agregar como base adicional", "El banco mandó más clientes: se suman a la base del mes y se ve cuánto rinde cada base."],
+                            ["reemplazar", "Reemplazar la base del mes", "La base anterior venía mal: esta toma su lugar (la anterior queda como respaldo)."],
+                          ] as const
+                        ).map(([value, title, hint]) => (
+                          <label
+                            key={value}
+                            className={`flex cursor-pointer gap-3 rounded-xl border p-3.5 text-sm transition-colors ${
+                              mode === value ? "border-brand-500 bg-brand-50/60 dark:bg-brand-500/10" : "border-slate-200 hover:border-slate-300 dark:border-slate-700"
+                            }`}
+                          >
+                            <input type="radio" name="modo" className="mt-0.5 accent-brand-500" checked={mode === value} onChange={() => setMode(value)} />
+                            <span>
+                              <span className="block font-medium">{title}</span>
+                              <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">{hint}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {mode === "adicional" && (
+                        <label className="mt-3 block max-w-sm text-sm">
+                          <span className="mb-1.5 block text-slate-600 dark:text-slate-300">Nombre de esta base</span>
+                          <input
+                            value={addLabel}
+                            maxLength={60}
+                            onChange={(e) => setAddLabel(e.target.value)}
+                            className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                          />
+                        </label>
+                      )}
+                    </fieldset>
+                  )}
+                  {current && !needsMode && (
                     <p className="flex gap-2 rounded-xl bg-blue-50 px-3.5 py-2.5 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
                       <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                       <span>
@@ -590,9 +655,11 @@ export function Upload() {
               ) : (
                 !analysis.error && (
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={save} disabled={!/^20\d{2}-\d{2}$/.test(month)}>
-                      <CloudUpload className="size-4" aria-hidden /> Guardar {fmt.format(analysis.rows.length)} filas en {monthLabel(month)}
+                    <Button onClick={save} disabled={!/^20\d{2}-\d{2}$/.test(month) || (needsMode && !mode)}>
+                      <CloudUpload className="size-4" aria-hidden />{" "}
+                      {needsMode && mode === "adicional" ? `Sumar ${fmt.format(analysis.rows.length)} clientes a ${monthLabel(month)}` : `Guardar ${fmt.format(analysis.rows.length)} filas en ${monthLabel(month)}`}
                     </Button>
+                    {needsMode && !mode && <span className="self-center text-xs text-slate-500">Elige si es una base adicional o un reemplazo.</span>}
                   </div>
                 )
               )}
@@ -606,7 +673,11 @@ export function Upload() {
           <div className="flex items-start gap-3">
             <CircleCheck className="mt-0.5 size-6 shrink-0 text-emerald-600" aria-hidden />
             <div className="flex-1">
-              <p className="font-semibold">Listo: {datasetLabel(phase.upload.dataset)} de {monthLabel(phase.upload.month)} quedó vigente</p>
+              <p className="font-semibold">
+                {phase.upload.isAddition
+                  ? `Listo: "${phase.upload.label || "Base adicional"}" se sumó a la base de ${monthLabel(phase.upload.month)}`
+                  : `Listo: ${datasetLabel(phase.upload.dataset)} de ${monthLabel(phase.upload.month)} quedó vigente`}
+              </p>
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                 Versión {phase.upload.version} · {fmt.format(phase.upload.rowsValid)} filas guardadas y verificadas
                 {phase.upload.rowsDiscarded ? ` · ${fmt.format(phase.upload.rowsDiscarded)} descartadas` : ""}.

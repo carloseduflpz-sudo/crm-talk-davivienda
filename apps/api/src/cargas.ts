@@ -5,7 +5,9 @@
      3. PUT  /cargas/:id/archivo    → guarda el Excel original en R2 (opcional)
      4. POST /cargas/:id/confirmar  → verifica que llegaron todas y la deja vigente
    La versión anterior del mismo archivo y mes NO se borra: queda "reemplazada" y se
-   puede volver a activar. Las cifras se clasifican aquí, nunca en el navegador. */
+   puede volver a activar. Las bases pueden subirse como ADICIONALES: quedan vigentes junto a
+   la original (el banco a veces manda más clientes a mitad de mes). Las cifras se clasifican
+   aquí, nunca en el navegador. */
 import {
   ALL_DATASETS,
   buildTipologiaIndex,
@@ -44,6 +46,8 @@ interface UploadRow {
   rows_valid: number;
   rows_discarded: number;
   chunks_received: number;
+  is_addition: number;
+  label: string | null;
   created_by: string;
   created_at: number;
 }
@@ -62,6 +66,8 @@ const publicUpload = (u: UploadRow) => ({
   rowsTotal: u.rows_total,
   rowsValid: u.rows_valid,
   rowsDiscarded: u.rows_discarded,
+  isAddition: Boolean(u.is_addition),
+  label: u.label,
   createdBy: u.created_by,
   createdAt: u.created_at,
 });
@@ -233,6 +239,11 @@ export function registerCargas(r: Router): void {
     });
     const [rowsTotal, rowsValid, rowsDiscarded] = counts as [number, number, number];
     if (rowsValid === 0) throw new HttpError(400, "El archivo no tiene filas válidas para guardar.");
+    // Base adicional: se suma a la original del mes en vez de reemplazarla.
+    const addition = b.mode === "adicional";
+    if (b.mode !== undefined && b.mode !== "adicional" && b.mode !== "reemplazar") throw new HttpError(400, "Modo de carga inválido.");
+    if (addition && def.kind !== "base") throw new HttpError(400, "Solo las bases pueden cargarse como adicionales.");
+    const label = addition ? (typeof b.label === "string" && b.label.trim() ? b.label.trim().slice(0, 60) : null) : null;
 
     // Cargas abandonadas a medias (más de 24 h) de este mismo archivo: se eliminan.
     await env.DB.prepare("DELETE FROM uploads WHERE dataset = ? AND status = 'validando' AND created_at < ?").bind(dataset, Date.now() - STALE_MS).run();
@@ -240,10 +251,10 @@ export function registerCargas(r: Router): void {
     const id = crypto.randomUUID();
     const v = await env.DB.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS v FROM uploads WHERE dataset = ? AND month = ?").bind(dataset, month).first<{ v: number }>();
     await env.DB.prepare(
-      `INSERT INTO uploads (id, campaign, dataset, kind, month, version, is_current, status, file_name, file_sha256, rows_total, rows_valid, rows_discarded, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 'validando', ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO uploads (id, campaign, dataset, kind, month, version, is_current, status, file_name, file_sha256, rows_total, rows_valid, rows_discarded, is_addition, label, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 'validando', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(id, campaign, dataset, def.kind, month, v!.v, fileName, sha, rowsTotal, rowsValid, rowsDiscarded, user.username, Date.now())
+      .bind(id, campaign, dataset, def.kind, month, v!.v, fileName, sha, rowsTotal, rowsValid, rowsDiscarded, addition ? 1 : 0, label, user.username, Date.now())
       .run();
     return json({ ok: true, id, version: v!.v, maxRowsPerChunk: MAX_ROWS_PER_CHUNK }, 201);
   });
@@ -317,13 +328,20 @@ export function registerCargas(r: Router): void {
     if ((got?.n ?? 0) !== u.rows_valid) {
       throw new HttpError(409, `Llegaron ${got?.n ?? 0} de ${u.rows_valid} filas. No se activó nada; descarta esta carga y vuelve a intentarlo.`);
     }
-    const prev = await env.DB.prepare("SELECT version FROM uploads WHERE dataset = ? AND month = ? AND is_current = 1").bind(u.dataset, u.month).first<{ version: number }>();
+    // Una base adicional se suma; cualquier otra carga reemplaza a la original vigente (las adicionales se conservan).
+    const prev = u.is_addition
+      ? null
+      : await env.DB.prepare("SELECT version FROM uploads WHERE dataset = ? AND month = ? AND is_current = 1 AND is_addition = 0").bind(u.dataset, u.month).first<{ version: number }>();
     await env.DB.batch([
-      env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE dataset = ? AND month = ? AND is_current = 1").bind(u.dataset, u.month),
+      ...(u.is_addition ? [] : [env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE dataset = ? AND month = ? AND is_current = 1 AND is_addition = 0").bind(u.dataset, u.month)]),
       env.DB.prepare("UPDATE uploads SET is_current = 1, status = 'vigente' WHERE id = ?").bind(u.id),
       env.DB.prepare("INSERT OR IGNORE INTO periods (campaign, month) VALUES (?, ?)").bind(u.campaign, u.month),
     ]);
-    await audit(env, user.username, "carga_confirmada", `${u.dataset}:${u.month}:v${u.version}`, { filas: u.rows_valid, reemplaza: prev?.version ?? null });
+    await audit(env, user.username, u.is_addition ? "base_adicional_confirmada" : "carga_confirmada", `${u.dataset}:${u.month}:v${u.version}`, {
+      filas: u.rows_valid,
+      reemplaza: prev?.version ?? null,
+      nombre: u.label,
+    });
     return json({ ok: true, upload: publicUpload(await getUpload(env, u.id)) });
   });
 
@@ -343,10 +361,20 @@ export function registerCargas(r: Router): void {
     const u = await getUpload(env, params.id!);
     if (u.status !== "reemplazada") throw new HttpError(400, "Solo se puede activar una versión reemplazada.");
     await env.DB.batch([
-      env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE dataset = ? AND month = ? AND is_current = 1").bind(u.dataset, u.month),
+      // Una adicional vuelve a sumarse; una original reemplaza a la original vigente.
+      ...(u.is_addition ? [] : [env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE dataset = ? AND month = ? AND is_current = 1 AND is_addition = 0").bind(u.dataset, u.month)]),
       env.DB.prepare("UPDATE uploads SET is_current = 1, status = 'vigente' WHERE id = ?").bind(u.id),
     ]);
     await audit(env, user.username, "carga_reactivada", `${u.dataset}:${u.month}:v${u.version}`);
+    return json({ ok: true, upload: publicUpload(await getUpload(env, u.id)) });
+  });
+
+  /** Quita una base adicional del análisis del mes (sus filas se conservan; se puede volver a sumar). */
+  r.on("POST", "/cargas/:id/quitar", "datos:cargar", async ({ env, params, user }) => {
+    const u = await getUpload(env, params.id!);
+    if (!u.is_addition || !u.is_current) throw new HttpError(400, "Solo se puede quitar una base adicional vigente.");
+    await env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE id = ?").bind(u.id).run();
+    await audit(env, user.username, "base_adicional_quitada", `${u.dataset}:${u.month}:v${u.version}`, { nombre: u.label });
     return json({ ok: true, upload: publicUpload(await getUpload(env, u.id)) });
   });
 }

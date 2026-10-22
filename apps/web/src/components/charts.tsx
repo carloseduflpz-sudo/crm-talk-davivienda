@@ -840,8 +840,13 @@ export function Columns({
   onSelect,
   selectHint,
   active,
+  format,
+  axisFormat = compact,
 }: {
   data: ColumnDatum[];
+  /** Cómo se escriben los valores en etiquetas y detalle (por defecto, enteros). */
+  format?: (n: number) => string;
+  axisFormat?: (n: number) => string;
   height?: number;
   legend?: boolean;
   onSelect?: (d: ColumnDatum) => void;
@@ -850,6 +855,8 @@ export function Columns({
   active?: string | null;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
+  const fmtValue = format ?? ((n: number) => fmtInt.format(n));
+  const fmtLabel = format ?? compact;
   const height = fixedHeight ?? Math.round(Math.min(380, Math.max(250, width * 0.24)));
   const [tip, setTip] = useState<Tip | null>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -886,7 +893,7 @@ export function Columns({
               <g key={t}>
                 <line x1={padL} x2={width - 8} y1={y(t)} y2={y(t)} stroke={t === 0 ? "var(--viz-axis)" : "var(--viz-grid)"} />
                 <text x={padL - 10} y={y(t) + 3.5} textAnchor="end" fill="var(--viz-text)" fontSize={12} className="tabular-nums">
-                  {compact(t)}
+                  {axisFormat(t)}
                 </text>
               </g>
             ))}
@@ -917,7 +924,7 @@ export function Columns({
                   )}
                   {data.length <= 12 && totals[i]! > 0 && (
                     <text x={cx} y={y(totals[i]!) - 7} textAnchor="middle" fontSize={12} className={`${intro ? "viz-fade " : ""}fill-ink-soft tabular-nums`}>
-                      {compact(totals[i]!)}
+                      {fmtLabel(totals[i]!)}
                     </text>
                   )}
                   <rect
@@ -929,7 +936,7 @@ export function Columns({
                     tabIndex={0}
                     role={onSelect ? "button" : undefined}
                     className={onSelect ? "cursor-pointer outline-none" : "outline-none"}
-                    aria-label={`${d.title ?? d.label}: ${fmtInt.format(totals[i]!)}`}
+                    aria-label={`${d.title ?? d.label}: ${fmtValue(totals[i]!)}`}
                     onClick={onSelect ? () => onSelect(data[i]!) : undefined}
                     onKeyDown={onSelect ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(data[i]!)) : undefined}
                     onPointerMove={() => {
@@ -940,9 +947,9 @@ export function Columns({
                         content: (
                           <div>
                             <TipTitle>{d.title ?? d.label}</TipTitle>
-                            {d.parts.length > 1 && <TipRow label="total" value={fmtInt.format(totals[i]!)} />}
+                            {d.parts.length > 1 && <TipRow label="total" value={fmtValue(totals[i]!)} />}
                             {[...d.parts].reverse().map((p) => (
-                              <TipRow key={p.label} color={p.color} label={p.label.toLowerCase()} value={fmtInt.format(p.value)} />
+                              <TipRow key={p.label} color={p.color} label={p.label.toLowerCase()} value={fmtValue(p.value)} />
                             ))}
                             {d.extra?.map((e) => <TipRow key={e.label} label={e.label} value={e.value} />)}
                             {onSelect && selectHint && <TipHint>{selectHint}</TipHint>}
@@ -1030,6 +1037,8 @@ export function DataTable<T>({
       })
     : rows;
   const visible = all ? sorted : sorted.slice(0, maxRows);
+  // Tablas anchas (muchas columnas): menos aire entre columnas para que quepan sin desplazarse.
+  const pad = cols.length > 8 ? "px-3 first:pl-6 last:pr-6 sm:first:pl-8 sm:last:pr-8" : "px-6 sm:px-8";
   if (!rows.length) return <p className="text-sm text-ink-soft">{empty}</p>;
   return (
     <div className="-mx-6 overflow-x-auto sm:-mx-8">
@@ -1037,7 +1046,7 @@ export function DataTable<T>({
         <thead>
           <tr className="text-[12px] text-ink-faint">
             {cols.map((c) => (
-              <th key={c.key} className={`px-6 pb-4 font-normal whitespace-nowrap sm:px-8 ${c.align === "right" ? "text-right" : "text-left"}`} aria-sort={sort?.key === c.key ? (sort.dir === -1 ? "descending" : "ascending") : undefined}>
+              <th key={c.key} className={`${pad} pb-4 font-normal whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`} aria-sort={sort?.key === c.key ? (sort.dir === -1 ? "descending" : "ascending") : undefined}>
                 {c.sort ? (
                   <button
                     className={`inline-flex items-center gap-1 transition-colors hover:text-ink ${sort?.key === c.key ? "text-ink" : ""}`}
@@ -1066,7 +1075,7 @@ export function DataTable<T>({
                 className={`group border-t border-hair transition-colors outline-none ${onRowClick ? "cursor-pointer hover:bg-paper/70 focus-visible:bg-paper dark:hover:bg-slate-800/40" : ""} ${on ? "bg-brand-50/60 dark:bg-brand-500/10" : ""}`}
               >
                 {cols.map((c, j) => (
-                  <td key={c.key} className={`px-6 py-4 whitespace-nowrap sm:px-8 ${c.align === "right" ? "text-right tabular-nums" : ""} ${j === 0 ? "text-ink" : "text-ink/80"}`}>
+                  <td key={c.key} className={`${pad} py-4 whitespace-nowrap ${c.align === "right" ? "text-right tabular-nums" : ""} ${j === 0 ? "text-ink" : "text-ink/80"}`}>
                     {j === 0 && onRowClick ? (
                       <span className="inline-flex items-center gap-1">
                         {c.render(r)}
