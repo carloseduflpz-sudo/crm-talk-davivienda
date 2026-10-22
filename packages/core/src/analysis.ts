@@ -84,6 +84,8 @@ export interface CampaignAnalysis {
     porDia: { date: string; ventas: number; aprobadas: number; monto: number; montoAprobado: number }[];
     porProceso: Count[];
     mensual: MonthlySalesRow[];
+    /** Cosecha: ventas de meses anteriores que trae la sábana de este mes (por fecha de venta). */
+    cosecha: { total: number; monto: number; porMes: { month: string; ventas: number; monto: number }[] };
   };
 
   base: null | {
@@ -173,6 +175,13 @@ export interface CampaignAnalysis {
     esperado: number | null;
     /** Cumplimiento MTD: ventas ÷ meta MTD, en %. */
     avanceMTD: number | null;
+    /**
+     * Cosecha: de lo que cuenta para la meta, lo vendido en meses anteriores que el banco entregó, aplicó
+     * o activó en este mes (ventas o dólares según `unidad`, y número de operaciones).
+     */
+    cosecha: { valor: number; operaciones: number; porMes: { month: string; valor: number; operaciones: number }[] };
+    /** Ventas que ya contaron para la meta de un mes anterior: aparecen otra vez en la sábana pero no se repiten. */
+    yaContadas: { valor: number; operaciones: number };
     porAgente: {
       agent: string;
       ventas: number;

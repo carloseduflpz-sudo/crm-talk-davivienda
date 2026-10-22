@@ -141,6 +141,8 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       ritmoNecesario: null,
       esperado: null,
       avanceMTD: null,
+      cosecha: { valor: 0, operaciones: 0, porMes: [] },
+      yaContadas: { valor: 0, operaciones: 0 },
       porAgente: [],
       config: { estatus: [], estatusPorDefecto: true, diasSemana: [...DEFAULT_WORK_DAYS], feriados: [] },
       estatusDisponibles: [],
@@ -175,7 +177,8 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       res.forEach((r, i) => {
         const row = r.results[0] as { hasta: string | null; fuera: number | null; meses: string | null } | undefined;
         if (row?.hasta && (!hasta || row.hasta > hasta)) hasta = row.hasta;
-        if (n(row?.fuera) > 0) out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
+        // La sábana trae ventas de meses anteriores a propósito (cosecha): no es un error.
+        if (n(row?.fuera) > 0 && dated[i]![0] !== "sabana") out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
       });
       out.fechas.hasta = hasta;
     }
@@ -269,7 +272,23 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         monto: n(r.monto),
         montoAprobado: n(r.monto_aprobado),
       })),
+      cosecha: { total: 0, monto: 0, porMes: [] },
     };
+    // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
+    if (month) {
+      const { results: prevRows } = await db
+        .prepare(
+          `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
+            WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
+        )
+        .bind(id, ...fb, month)
+        .all<{ m: string; n: number; monto: number }>();
+      out.ventas.cosecha = {
+        total: prevRows.reduce((t, r) => t + n(r.n), 0),
+        monto: prevRows.reduce((t, r) => t + n(r.monto), 0),
+        porMes: prevRows.map((r) => ({ month: r.m, ventas: n(r.n), monto: n(r.monto) })),
+      };
+    }
   }
 
   /* ---------- base ---------- */
@@ -529,16 +548,48 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       const inList = counted.length ? `${label} IN (${placeholders(counted.length)})` : "0";
       // CDC y Extra se miden en dólares: se suma el monto de la sábana en vez de contar ventas.
       const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
-      const [porAgente, porDia] = await db.batch([
+      /* Cosecha: la sábana del mes trae también ventas de meses anteriores. Cuenta para la meta de este mes
+         lo que el banco entregó, aplicó o activó y que NO contó ya en la sábana de un mes anterior
+         (misma venta = mismo NIU y misma fecha de venta). k: 0 no cuenta, 1 cuenta, 2 ya contó antes. */
+      const prevLabel = "COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)')";
+      const prevCte = counted.length
+        ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
+             WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
+               AND ${prevLabel} IN (${placeholders(counted.length)}))`
+        : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
+      const prevBinds = counted.length ? [campaign, month, ...counted] : [];
+      const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
+             CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
+           FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
+      const cteBinds = [...prevBinds, ...counted, sabana.id, ...fb];
+      const [porAgente, porDia, origen] = await db.batch([
         db
           .prepare(
-            `SELECT ${agentLabel("executive")} AS agent, SUM(${measure}) AS total, SUM(CASE WHEN ${inList} THEN ${measure} ELSE 0 END) AS ventas,
-                    SUM(${inList}) AS operaciones, COUNT(*) AS operaciones_total, SUM(status_class = 'aprobado') AS aprobadas
-               FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC, total DESC`,
+            `WITH ${prevCte}, ${rowsCte}
+             SELECT agent, SUM(m) AS total, SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS ventas,
+                    SUM(k = 1) AS operaciones, COUNT(*) AS operaciones_total, SUM(status_class = 'aprobado') AS aprobadas
+               FROM s GROUP BY 1 ORDER BY ventas DESC, total DESC`,
           )
-          .bind(...counted, ...counted, sabana.id, ...fb), // la lista aparece dos veces en el SELECT
+          .bind(...cteBinds),
         db.prepare(`SELECT MAX(sale_date) AS corte FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`).bind(sabana.id, ...fb, `${month}%`),
+        db
+          .prepare(
+            `WITH ${prevCte}, ${rowsCte}
+             SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE substr(sale_date, 1, 7) END AS origen,
+                    SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS valor, SUM(k = 1) AS ops,
+                    SUM(CASE WHEN k = 2 THEN m ELSE 0 END) AS valor_rep, SUM(k = 2) AS ops_rep
+               FROM s GROUP BY 1`,
+          )
+          .bind(...cteBinds, month),
       ]);
+      const origenes = origen!.results as { origen: string; valor: number; ops: number; valor_rep: number; ops_rep: number }[];
+      const cosecha = origenes.filter((o) => o.origen !== "mes" && n(o.ops) > 0).sort((x, y) => y.origen.localeCompare(x.origen));
+      c.cosecha = {
+        valor: cosecha.reduce((t, o) => t + n(o.valor), 0),
+        operaciones: cosecha.reduce((t, o) => t + n(o.ops), 0),
+        porMes: cosecha.map((o) => ({ month: o.origen, valor: n(o.valor), operaciones: n(o.ops) })),
+      };
+      c.yaContadas = { valor: origenes.reduce((t, o) => t + n(o.valor_rep), 0), operaciones: origenes.reduce((t, o) => t + n(o.ops_rep), 0) };
       const agentes = porAgente!.results as { agent: string; total: number; ventas: number; operaciones: number; operaciones_total: number; aprobadas: number }[];
       c.ventas = agentes.reduce((sum, r) => sum + n(r.ventas), 0);
       c.ventasTotales = agentes.reduce((sum, r) => sum + n(r.total), 0);

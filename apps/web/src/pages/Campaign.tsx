@@ -107,7 +107,9 @@ const Aside = ({ children }: { children: ReactNode }) => <p className="px-1 text
 /** Serie del mes anterior por día del mes, para la línea punteada de referencia. */
 function compareOf<T extends { date: string }>(prev: CampaignAnalysis | undefined, rows: T[] | undefined, value: (r: T) => number): Compare | undefined {
   if (!prev?.month || !rows?.length) return undefined;
-  return { label: monthLabel(prev.month).split(" ")[0]!, byDay: Object.fromEntries(rows.map((r) => [dayNum(r.date), value(r)])) };
+  // Solo los días de ese mes (la sábana trae también ventas de meses anteriores: la cosecha).
+  const month = prev.month;
+  return { label: monthLabel(month).split(" ")[0]!, byDay: Object.fromEntries(rows.filter((r) => r.date.startsWith(month)).map((r) => [dayNum(r.date), value(r)])) };
 }
 
 /* ---------- Ventas ---------- */
@@ -119,9 +121,13 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   const vs = vsLabel(prev, a);
   // Mes en curso: el total y las aprobadas se comparan contra el mes anterior al mismo día.
   const corte = a.month === currentMonth() && a.fechas.hasta ? dayNum(a.fechas.hasta) : null;
-  const pDays = p && corte ? p.porDia.filter((d) => dayNum(d.date) <= corte) : null;
+  // Por día solo cuentan las fechas del mes; las ventas de meses anteriores (cosecha) van aparte.
+  const days = v.porDia.filter((d) => d.date.startsWith(a.month!));
+  const pDays = p && corte && prev?.month ? p.porDia.filter((d) => d.date.startsWith(prev.month!) && dayNum(d.date) <= corte) : null;
   const pSum = (k: "ventas" | "aprobadas" | "monto" | "montoAprobado") => (pDays ? pDays.reduce((t, d) => t + d[k], 0) : undefined);
-  const vsDay = pDays && prev?.month ? `vs ${monthLabel(prev.month).split(" ")[0]} al día ${corte}` : vs;
+  const cSum = (k: "ventas" | "aprobadas" | "monto" | "montoAprobado") => days.reduce((t, d) => t + d[k], 0);
+  const vsDay = pDays && prev?.month ? `vendidas en el mes vs ${monthLabel(prev.month).split(" ")[0]} al día ${corte}` : vs;
+  const cosechaTxt = v.cosecha.total ? `${fmtInt.format(v.cosecha.total)} de meses anteriores (cosecha)` : "";
   // CDC y Extra: los indicadores van en dólares (con la cantidad de ventas como referencia).
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
@@ -150,18 +156,18 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 label: `Monto de ${monthLabel(a.month!)}`,
                 num: v.monto.total,
                 format: fmtMoney,
-                foot: `${ventasN(v.total)} en la sábana del banco`,
-                delta: pDays ? deltaOf(v.monto.total, pSum("monto"), vsDay) : deltaOf(v.monto.total, p?.monto.total, vs),
-                spark: v.porDia.map((d) => d.monto),
+                foot: `${ventasN(v.total)} en la sábana del banco${cosechaTxt ? `; ${cosechaTxt}` : ""}`,
+                delta: pDays ? deltaOf(cSum("monto"), pSum("monto"), vsDay) : deltaOf(v.monto.total, p?.monto.total, vs),
+                spark: days.map((d) => d.monto),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               }
             : {
                 label: `Ventas de ${monthLabel(a.month!)}`,
                 num: v.total,
                 format: intOf,
-                foot: "Todas las de la sábana del banco",
-                delta: pDays ? deltaOf(v.total, pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
-                spark: v.porDia.map((d) => d.ventas),
+                foot: cosechaTxt ? `Toda la sábana del banco, con ${cosechaTxt}` : "Todas las de la sábana del banco",
+                delta: pDays ? deltaOf(cSum("ventas"), pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
+                spark: days.map((d) => d.ventas),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               },
           {
@@ -171,8 +177,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             foot: money ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto` : `${fmtPct(share(v.aprobadas, v.total))} del total`,
             delta: pDays
               ? money
-                ? deltaOf(v.monto.aprobado, pSum("montoAprobado"), vsDay)
-                : deltaOf(v.aprobadas, pSum("aprobadas"), vsDay)
+                ? deltaOf(cSum("montoAprobado"), pSum("montoAprobado"), vsDay)
+                : deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay)
               : money
                 ? deltaOf(v.monto.aprobado, p?.monto.aprobado, vs)
                 : deltaOf(v.aprobadas, p?.aprobadas, vs),
@@ -205,14 +211,17 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         />
       </FigureStrip>
 
-      <ChartCard title={money ? "Monto por día" : "Ventas por día"} note="Fecha de venta según la sábana. Haz clic en un día para ver sus ventas o arrastra para elegir varios.">
+      <ChartCard
+        title={money ? "Monto por día" : "Ventas por día"}
+        note={`Fecha de venta según la sábana${cosechaTxt ? `; no incluye ${cosechaTxt}` : ""}. Haz clic en un día para ver sus ventas o arrastra para elegir varios.`}
+      >
         <AreaChart
           seriesLabel={money ? "Monto" : "Ventas"}
           unit={money ? "monto" : "ventas"}
           format={money ? fmtMoney : undefined}
           tickPrefix={money ? "$" : ""}
           compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
-          data={v.porDia.map((d) => ({
+          data={days.map((d) => ({
             key: d.date,
             day: dayNum(d.date),
             label: String(dayNum(d.date)),
@@ -761,6 +770,11 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
   const mtdTone = c.avanceMTD === null ? undefined : c.avanceMTD >= 100 ? ("good" as const) : c.avanceMTD >= 90 ? ("warn" as const) : ("bad" as const);
   type Row = (typeof c.porAgente)[number];
+  // Lo que cuenta, separado por mes de venta: el mes actual y la cosecha de meses anteriores.
+  const origenParts = [
+    { key: a.month, label: `Vendido en ${mes.split(" ")[0]}`, value: Math.max(0, c.ventas - c.cosecha.valor), color: "var(--viz-1)" },
+    ...c.cosecha.porMes.map((m, i) => ({ key: m.month, label: `Cosecha de ${monthLabel(m.month).split(" ")[0]}`, value: m.valor, color: `var(--viz-${(i % 3) + 2})` })),
+  ];
   return (
     <Stack>
       <FigureStrip
@@ -826,6 +840,34 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           </button>
         </p>
       </FigureStrip>
+
+      {(c.cosecha.operaciones > 0 || c.yaContadas.operaciones > 0) && (
+        <ChartCard
+          title="De dónde sale lo que cuenta"
+          note={`Cosecha: lo vendido en meses anteriores que el banco ${money ? "aplicó o desembolsó" : "entregó o activó"} en ${mes} cuenta para la meta de ${mes}. Clic en una parte para ver sus ventas.`}
+        >
+          <ShareBar
+            format={money ? fmtMoney : intOf}
+            label="Lo que cuenta para la meta según el mes de venta"
+            parts={origenParts}
+            onSelect={(x) => {
+              const m = origenParts.find((q) => q.label === x.label)?.key ?? a.month!;
+              open({
+                fuente: "ventas",
+                title: m === a.month ? `Vendidas en ${mes.split(" ")[0]} que cuentan` : `Cosecha de ${monthLabel(m)}`,
+                filters: { estatus: c.config.estatus, ...(m === a.month ? { desde: `${m}-01` } : { desde: `${m}-01`, hasta: `${m}-31` }) },
+              });
+            }}
+          />
+          {c.yaContadas.operaciones > 0 && (
+            <p className="mt-5 text-[13px] text-ink-soft">
+              {fmtInt.format(c.yaContadas.operaciones)} {c.yaContadas.operaciones === 1 ? "venta vuelve" : "ventas vuelven"} a aparecer en la sábana de {mes.split(" ")[0]} pero ya
+              {c.yaContadas.operaciones === 1 ? " contó" : " contaron"} para la meta de un mes anterior: no se repite{c.yaContadas.operaciones === 1 ? "" : "n"}
+              {money ? ` (${fmtMoney(c.yaContadas.valor)})` : ""}.
+            </p>
+          )}
+        </ChartCard>
+      )}
 
       <ChartCard
         title="Gap por agente"

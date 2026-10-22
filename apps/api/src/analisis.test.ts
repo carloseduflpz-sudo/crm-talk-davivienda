@@ -375,17 +375,30 @@ describe("histórico", () => {
   });
 });
 
-describe("filas con fecha de otro mes", () => {
-  it("se avisan: cuántas y de qué meses", async () => {
+describe("cosecha: la sábana del mes trae ventas de meses anteriores", () => {
+  it("cuenta para la meta lo que se activó este mes, sin repetir lo que ya contó antes", async () => {
     await load("tdc:sabana", "2026-10", [
       { niu: "1", saleDate: "2026-10-01", executive: "Ana", statusRaw: "ENTREGADA" },
-      { niu: "2", saleDate: "2026-10-05", executive: "Ana", statusRaw: "ENTREGADA" },
-      { niu: "3", saleDate: "2026-09-29", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "2", saleDate: "2026-10-05", executive: "Ana", statusRaw: "EN ANALISIS" },
+      { niu: "3", saleDate: "2026-09-29", executive: "Luis", statusRaw: "ENTREGADA" }, // vendida en septiembre, entregada en octubre
       { niu: "4", saleDate: "2026-09-30", executive: "Ana", statusRaw: "ENTREGADA" },
       { niu: "5", saleDate: "2026-08-30", executive: "Ana", statusRaw: "ENTREGADA" },
+      { niu: "100", saleDate: "2026-09-01", executive: "Luis", statusRaw: "ENTREGADA" }, // ya contó en la sábana de septiembre
     ]);
     const oct = (await call("GET", "/analisis/tdc?mes=2026-10")).data.analysis as CampaignAnalysis;
-    expect(oct.fechas).toEqual({ hasta: "2026-10-05", fuera: [{ kind: "sabana", filas: 3, meses: ["2026-08", "2026-09"] }] });
+    // No es un error: no se avisa como "filas de otro mes".
+    expect(oct.fechas).toEqual({ hasta: "2026-10-05", fuera: [] });
+    expect(oct.ventas!.total).toBe(6);
+    expect(oct.ventas!.cosecha).toMatchObject({ total: 4, porMes: [{ month: "2026-09", ventas: 3, monto: 0 }, { month: "2026-08", ventas: 1, monto: 0 }] });
+    const c = oct.cumplimiento;
+    expect(c.ventas).toBe(4); // 1 de octubre + 3 de cosecha; la 100 no se repite
+    expect(c.cosecha).toEqual({ valor: 3, operaciones: 3, porMes: [{ month: "2026-09", valor: 2, operaciones: 2 }, { month: "2026-08", valor: 1, operaciones: 1 }] });
+    expect(c.yaContadas).toEqual({ valor: 1, operaciones: 1 });
+    expect(c.porAgente.find((r) => r.agent === "Luis")?.ventas).toBe(1);
+    // Septiembre no cambia por la sábana de octubre.
+    const sep = (await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis as CampaignAnalysis;
+    expect(sep.cumplimiento.yaContadas.operaciones).toBe(0);
+    expect(sep.cumplimiento.ventas).toBe(a.cumplimiento.ventas);
   });
 });
 

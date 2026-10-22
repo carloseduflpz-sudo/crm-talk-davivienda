@@ -435,7 +435,9 @@ export function Upload() {
   const outside = analysis ? analysis.rows.length - inMonth : 0;
   const [scope, setScope] = useState<"mes" | "todo">("mes");
   useEffect(() => setScope("mes"), [analysis?.sha, analysis?.datasetId]);
-  const filtering = outside > 0 && scope === "mes";
+  // La sábana trae a propósito ventas de meses anteriores (cosecha): se guarda completa.
+  const sabanaFile = analysis?.datasetId ? kindOf(analysis.datasetId) === "sabana" : false;
+  const filtering = outside > 0 && scope === "mes" && !sabanaFile;
   const toSave = filtering ? inMonth : (analysis?.rows.length ?? 0);
   const monthOk = VALID_MONTH.test(month);
 
@@ -725,7 +727,16 @@ export function Upload() {
                       </button>
                     </div>
                   )}
-                  {monthOk && outside > 0 && inMonth > split.sinFecha && (
+                  {monthOk && sabanaFile && outside > 0 && inMonth > split.sinFecha && (
+                    <p className="flex gap-2 rounded-xl bg-blue-50 px-3.5 py-2.5 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
+                      <CircleCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
+                      <span>
+                        Trae ventas de otros meses (cosecha): {monthsInFile.filter(([m]) => m !== month).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ")}. Se guarda toda la sábana:
+                        lo que el banco entregó, aplicó o activó en {monthLabel(month)} cuenta para su meta, y lo que ya contó en un mes anterior no se repite.
+                      </span>
+                    </p>
+                  )}
+                  {monthOk && !sabanaFile && outside > 0 && inMonth > split.sinFecha && (
                     <fieldset className="rounded-2xl border border-amber-200 p-4 dark:border-amber-500/30">
                       <legend className="px-1 text-sm font-semibold">
                         El archivo trae filas de otros meses ({monthsInFile.filter(([m]) => m !== month).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ")})
