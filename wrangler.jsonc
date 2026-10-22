@@ -7,6 +7,11 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Dirección pública https://crm-talk-davivienda.<cuenta>.workers.dev siempre activa.
+  // Las vistas previas quedan apagadas: compartirían la base de datos real.
+  "workers_dev": true,
+  "preview_urls": false,
+
   // App web ya compilada. Las rutas /api/* siempre las atiende el Worker;
   // cualquier otra ruta que no sea un archivo abre la app (navegación del lado del navegador).
   "assets": {
