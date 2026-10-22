@@ -21,7 +21,7 @@
     {
       "binding": "DB",
       "database_name": "crm-talk",
-      "database_id": "REEMPLAZAR_CON_ID_DE_D1",
+      "database_id": "f35f6b24-4e2f-45da-9a78-33ec75ecffbe",
       "migrations_dir": "packages/db/migrations"
     }
   ],
