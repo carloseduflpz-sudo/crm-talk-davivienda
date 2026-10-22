@@ -40,6 +40,12 @@ const get = <T>(path: string) => request<T>("GET", path);
 const post = <T>(path: string, body: unknown = {}) => request<T>("POST", path, body);
 const patch = <T>(path: string, body: unknown) => request<T>("PATCH", path, body);
 
+export interface DetailResult {
+  total: number;
+  columns: { key: string; label: string }[];
+  rows: Record<string, string | number | null>[];
+}
+
 export interface Me {
   id: number;
   username: string;
@@ -134,7 +140,18 @@ export const api = {
   discardUpload: (id: string) => post(`/cargas/${id}/descartar`),
   activateUpload: (id: string) => post(`/cargas/${id}/activar`),
 
-  analysis: (campaign: string, month?: string | null) =>
-    get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${month ? `?mes=${month}` : ""}`).then((r) => r.analysis),
+  analysis: (campaign: string, month?: string | null, agent?: string | null) => {
+    const q = new URLSearchParams();
+    if (month) q.set("mes", month);
+    if (agent) q.set("agente", agent);
+    const qs = q.toString();
+    return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
+  },
+  /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
+  detail: (campaign: string, params: Record<string, string | number | null | undefined>) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== "") q.set(k, String(v));
+    return get<DetailResult>(`/analisis/${campaign}/detalle?${q}`);
+  },
   setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null }) => request("PUT", "/metas", b),
 };

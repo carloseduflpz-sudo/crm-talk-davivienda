@@ -1,0 +1,229 @@
+/* Las cifras del análisis se comparan contra un cálculo hecho a mano sobre los mismos datos. */
+import type { CampaignAnalysis } from "@crm/core";
+import { beforeAll, describe, expect, it } from "vitest";
+import { memoryD1 } from "../test/d1";
+import { createApp } from "./app";
+import { SESSION_COOKIE } from "./auth";
+import type { Env } from "./env";
+
+const app = createApp();
+let env: Env;
+let cookie = "";
+
+async function call(method: string, path: string, body?: unknown) {
+  const res = await app.handle(
+    new Request("https://crm.test/api" + path, {
+      method,
+      headers: { cookie: `${SESSION_COOKIE}=${cookie}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    env,
+    () => {},
+  );
+  const set = res.headers.get("set-cookie");
+  if (set) cookie = set.match(new RegExp(`${SESSION_COOKIE}=([^;]*)`))?.[1] ?? "";
+  return { status: res.status, data: (await res.json()) as Record<string, unknown> };
+}
+
+async function load(dataset: string, month: string, rows: unknown[]) {
+  const c = await call("POST", "/cargas", { campaign: dataset.split(":")[0], dataset, month, fileName: "x.xlsx", fileSha256: "c".repeat(64), rowsTotal: rows.length, rowsValid: rows.length, rowsDiscarded: 0 });
+  expect(c.status, String(c.data.error)).toBe(201);
+  expect((await call("POST", `/cargas/${c.data.id}/filas`, { seq: 0, rows })).status).toBe(200);
+  expect((await call("POST", `/cargas/${c.data.id}/confirmar`, {})).status).toBe(200);
+}
+
+/* ---------- datos inventados con resultado conocido ---------- */
+const STATUS = ["ENTREGADA", "APROBADA", "RECHAZADA", "EN ANALISIS", "RECHAZADA"];
+const sabanaSep = Array.from({ length: 20 }, (_, i) => ({
+  niu: String(100 + i),
+  saleDate: `2026-09-${String(1 + (i % 10)).padStart(2, "0")}`,
+  executive: i % 2 ? "Ana" : "Luis",
+  statusRaw: STATUS[i % 5],
+  reason: STATUS[i % 5] === "RECHAZADA" ? (i % 3 ? "Score" : "Capacidad") : null,
+}));
+const sabanaAgo = Array.from({ length: 6 }, (_, i) => ({ niu: String(900 + i), saleDate: "2026-08-15", executive: "Ana", statusRaw: i < 4 ? "ENTREGADA" : "RECHAZADA" }));
+const basePrimeras = Array.from({ length: 30 }, (_, i) => ({ niu: String(100 + i), profile: i % 3 ? "Asalariado" : "Independiente" }));
+const baseSegundas = Array.from({ length: 10 }, (_, i) => ({ niu: String(125 + i), profile: "Asalariado" })); // 5 repetidos con primeras
+const calls = [
+  // cliente 100: no contesta, luego venta en el 2.º intento
+  { niu: "100", agent: "Ana", calledAt: "2026-09-01T09:00:00", category: "No contacto", tipologia: "No contesta" },
+  { niu: "100", agent: "Ana", calledAt: "2026-09-02T09:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },
+  // cliente 101: venta al primer intento
+  { niu: "101", agent: "Luis", calledAt: "2026-09-01T10:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },
+  // cliente 102: negativo
+  { niu: "102", agent: "Luis", calledAt: "2026-09-01T11:00:00", category: "Contacto efectivo negativo", tipologia: "No le interesa" },
+  // cliente 103: mensaje con familiar (no efectivo), 3 intentos
+  { niu: "103", agent: "Ana", calledAt: "2026-09-01T12:00:00", category: "Contacto no efectivo", tipologia: "Mensaje con familiar" },
+  { niu: "103", agent: "Ana", calledAt: "2026-09-02T12:00:00", category: "No contacto", tipologia: "Buzon de voz" },
+  { niu: "103", agent: "Luis", calledAt: "2026-09-03T12:00:00", category: "No contacto", tipologia: "Buzon de voz" },
+  // llamada sin NIU
+  { niu: "", agent: "Luis", calledAt: "2026-09-03T13:00:00", category: "Sin Tipificar", tipologia: "Sin Tipificar" },
+];
+const crm = [
+  { niu: "100", agent: "Ana", enteredAt: "2026-09-02T09:10:00", product: "Clásica" },
+  { niu: "101", agent: "Luis", enteredAt: "2026-09-01T10:10:00", product: "Oro" },
+  { niu: "555", agent: "Luis", enteredAt: "2026-09-03T10:10:00", product: "Oro" }, // aún sin estatus del banco
+];
+
+let a: CampaignAnalysis;
+beforeAll(async () => {
+  env = { ASSETS: {} as Fetcher, DB: memoryD1(), FILES: { head: async () => null } as unknown as R2Bucket, APP_ENV: "production", SETUP_TOKEN: "clave-de-configuracion-123" };
+  await call("POST", "/auth/configurar", { token: env.SETUP_TOKEN, username: "carlos", displayName: "Carlos", password: "Davivienda2026" });
+  await load("tdc:sabana", "2026-08", sabanaAgo);
+  await load("tdc:sabana", "2026-09", sabanaSep);
+  await load("tdc:base:primeras", "2026-09", basePrimeras);
+  await load("tdc:base:segundas", "2026-09", baseSegundas);
+  await load("tdc:tipif", "2026-09", calls);
+  await load("tdc:ventas", "2026-09", crm);
+  expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 40, agents: 2 })).status).toBe(200);
+  const r = await call("GET", "/analisis/tdc?mes=2026-09");
+  expect(r.status, String(r.data.error)).toBe(200);
+  a = r.data.analysis as CampaignAnalysis;
+});
+
+describe("análisis TDC septiembre (datos de prueba)", () => {
+  it("meses disponibles y archivos vigentes", () => {
+    expect(a.months).toEqual(["2026-09", "2026-08"]);
+    expect(a.loaded.map((l) => l.dataset).sort()).toEqual(["tdc:base:primeras", "tdc:base:segundas", "tdc:sabana", "tdc:tipif", "tdc:ventas"]);
+  });
+
+  it("ventas: totales, aprobación y rechazo por motivo", () => {
+    const apr = sabanaSep.filter((r) => r.statusRaw === "ENTREGADA" || r.statusRaw === "APROBADA").length;
+    const rech = sabanaSep.filter((r) => r.statusRaw === "RECHAZADA").length;
+    expect(a.ventas).toMatchObject({ total: 20, aprobadas: apr, rechazadas: rech, enProceso: 20 - apr - rech });
+    expect(a.ventas!.aprobacion).toBeCloseTo((apr / (apr + rech)) * 100, 6);
+    const motivos = Object.entries(
+      sabanaSep.filter((r) => r.reason).reduce<Record<string, number>>((m, r) => ((m[r.reason!] = (m[r.reason!] ?? 0) + 1), m), {}),
+    ).sort((x, y) => y[1] - x[1]);
+    expect(a.ventas!.rechazoPorMotivo.map((m) => [m.label, m.value])).toEqual(motivos);
+  });
+
+  it("ventas por ejecutivo y por día", () => {
+    const ana = sabanaSep.filter((r) => r.executive === "Ana");
+    const row = a.ventas!.porEjecutivo.find((e) => e.agent === "Ana")!;
+    expect(row.ventas).toBe(ana.length);
+    expect(row.aprobadas).toBe(ana.filter((r) => ["ENTREGADA", "APROBADA"].includes(r.statusRaw!)).length);
+    expect(a.ventas!.porDia).toHaveLength(10);
+    expect(a.ventas!.porDia.reduce((s, d) => s + d.ventas, 0)).toBe(20);
+  });
+
+  it("comparativo mensual incluye agosto y septiembre", () => {
+    expect(a.ventas!.mensual.map((m) => [m.month, m.ventas, m.aprobadas, m.rechazadas])).toEqual([
+      ["2026-08", 6, 4, 2],
+      ["2026-09", 20, a.ventas!.aprobadas, a.ventas!.rechazadas],
+    ]);
+  });
+
+  it("base: clientes únicos entre las dos bases y cruce por perfil", () => {
+    const unicos = new Set([...basePrimeras, ...baseSegundas].map((b) => b.niu));
+    expect(a.base!.total).toBe(unicos.size); // 35
+    const sabanaNius = new Set(sabanaSep.map((s) => s.niu));
+    const conVenta = [...unicos].filter((nu) => sabanaNius.has(nu)).length;
+    expect(a.base!.porPerfil.reduce((s, p) => s + p.conVenta, 0)).toBe(conVenta);
+    expect(a.base!.porPerfil.reduce((s, p) => s + p.base, 0)).toBe(unicos.size);
+  });
+
+  it("llamadas: contactabilidad, registros, intentos y ventas por intento", () => {
+    const L = a.llamadas!;
+    expect(L.total).toBe(8);
+    expect(L.registros).toBe(4);
+    // efectivo = venta + negativo + no efectivo (regla por defecto): 2 ventas + 1 negativo + 1 mensaje
+    expect(L.efectivos).toBe(4);
+    expect(L.contactabilidad).toBeCloseTo(50, 6);
+    expect(L.ventasPrimerIntento).toBe(1);
+    expect(L.ventasRellamado).toBe(1);
+    expect(L.primerContacto).toBe(4);
+    expect(L.seguimiento).toBe(3);
+    expect(L.intentos).toEqual([
+      { intentos: "1", clientes: 2 },
+      { intentos: "2", clientes: 1 },
+      { intentos: "3", clientes: 1 },
+    ]);
+    expect(L.ventasUnicas).toBe(2);
+    expect(L.penetracion).toBeCloseTo((2 / 35) * 100, 6);
+    const ana = L.porAgente.find((x) => x.agent === "Ana")!;
+    expect(ana).toMatchObject({ llamadas: 4, registros: 2, ventas: 1, noContacto: 2, efectivos: 2 });
+  });
+
+  it("CRM: ventas capturadas y cuántas ya tienen estatus del banco", () => {
+    expect(a.crm).toMatchObject({ total: 3, conEstatusBanco: 2 });
+  });
+
+  it("cumplimiento: meta, avance, ritmo, proyección y gap por agente", () => {
+    const c = a.cumplimiento;
+    expect(c).toMatchObject({ meta: 40, agentes: 2, metaPorAgente: 20, ventas: 20, faltan: 20, diaDelMes: 10, diasDelMes: 30 });
+    expect(c.avance).toBeCloseTo(50, 6);
+    expect(c.ritmoDiario).toBeCloseTo(2, 6);
+    expect(c.proyeccion).toBe(60);
+    expect(c.ritmoNecesario).toBeCloseTo(1, 6);
+    const ana = c.porAgente.find((x) => x.agent === "Ana")!;
+    expect(ana.gap).toBe(20 - sabanaSep.filter((r) => r.executive === "Ana").length);
+  });
+
+  it("sin mes pedido usa el más reciente; un mes sin archivos no rompe nada", async () => {
+    const r = await call("GET", "/analisis/tdc");
+    expect((r.data.analysis as CampaignAnalysis).month).toBe("2026-09");
+    const vacio = (await call("GET", "/analisis/upin")).data.analysis as CampaignAnalysis;
+    expect(vacio).toMatchObject({ month: null, months: [], ventas: null, base: null, llamadas: null, crm: null });
+  });
+
+  it("validaciones de la meta", async () => {
+    expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: -1 })).status).toBe(400);
+    expect((await call("PUT", "/metas", { campaign: "xx", month: "2026-09", salesGoal: 10 })).status).toBe(400);
+  });
+
+  it("lista de agentes del mes, sin repetir", () => {
+    expect(a.agentes).toEqual(["Ana", "Luis"]);
+    expect(a.agente).toBeNull();
+  });
+
+  it("filtro por agente: ventas, llamadas, CRM y meta individual", async () => {
+    const r = await call("GET", "/analisis/tdc?mes=2026-09&agente=Ana");
+    const f = r.data.analysis as CampaignAnalysis;
+    const ana = sabanaSep.filter((x) => x.executive === "Ana");
+    expect(f.agente).toBe("Ana");
+    expect(f.ventas!.total).toBe(ana.length);
+    expect(f.ventas!.porEjecutivo.map((e) => e.agent)).toEqual(["Ana"]);
+    expect(f.ventas!.porDia.reduce((s, d) => s + d.ventas, 0)).toBe(ana.length);
+    expect(f.llamadas!.total).toBe(calls.filter((c) => c.agent === "Ana").length);
+    expect(f.crm!.total).toBe(crm.filter((c) => c.agent === "Ana").length);
+    expect(f.base!.total).toBe(a.base!.total); // la base no depende del agente
+    expect(f.cumplimiento.meta).toBe(20); // meta individual: 40 ÷ 2 agentes
+    expect(f.cumplimiento.ventas).toBe(ana.length);
+    expect(f.agentes).toEqual(["Ana", "Luis"]);
+  });
+});
+
+describe("detalle de clientes", () => {
+  const det = async (qs: string) => (await call("GET", `/analisis/tdc/detalle?mes=2026-09&${qs}`)).data as { total: number; rows: Record<string, unknown>[]; columns: { key: string }[] };
+
+  it("ventas por estatus, clase, motivo, día y agente", async () => {
+    expect((await det("fuente=ventas&estatus=RECHAZADA")).total).toBe(sabanaSep.filter((r) => r.statusRaw === "RECHAZADA").length);
+    expect((await det("fuente=ventas&clase=aprobado")).total).toBe(a.ventas!.aprobadas);
+    expect((await det("fuente=ventas&motivo=Score")).total).toBe(sabanaSep.filter((r) => r.reason === "Score").length);
+    const d = await det("fuente=ventas&dia=2026-09-03");
+    expect(d.total).toBe(sabanaSep.filter((r) => r.saleDate === "2026-09-03").length);
+    expect(d.rows.every((r) => r.sale_date === "2026-09-03")).toBe(true);
+    expect((await det("fuente=ventas&agente=Luis")).total).toBe(sabanaSep.filter((r) => r.executive === "Luis").length);
+    expect((await det("fuente=ventas&desde=2026-09-01&hasta=2026-09-05")).total).toBe(sabanaSep.filter((r) => r.saleDate <= "2026-09-05").length);
+  });
+
+  it("llamadas por clase y tipificación; base por perfil; búsqueda por NIU", async () => {
+    expect((await det("fuente=llamadas&clase=no_contacto")).total).toBe(calls.filter((c) => c.category === "No contacto").length);
+    expect((await det("fuente=llamadas&tipologia=" + encodeURIComponent("Buzon de voz"))).total).toBe(2);
+    expect((await det("fuente=base&perfil=Independiente")).total).toBe(basePrimeras.filter((b) => b.profile === "Independiente").length);
+    const b = await det("fuente=ventas&buscar=105");
+    expect(b.rows.map((r) => r.niu)).toEqual(["105"]);
+    expect((await det("fuente=ventas&buscar=" + encodeURIComponent("%"))).total).toBe(0); // comodines escapados
+  });
+
+  it("límite de filas y validaciones", async () => {
+    const d = await det("fuente=ventas&limite=3");
+    expect(d.rows).toHaveLength(3);
+    expect(d.total).toBe(20);
+    expect(d.columns[0]!.key).toBe("niu");
+    expect((await call("GET", "/analisis/tdc/detalle?mes=2026-09&fuente=usuarios")).status).toBe(400);
+    expect((await call("GET", "/analisis/tdc/detalle?mes=2026-09&fuente=ventas&dia=ayer")).status).toBe(400);
+    expect((await det("fuente=crm&agente=Luis")).total).toBe(2);
+  });
+});

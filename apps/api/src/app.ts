@@ -3,6 +3,7 @@ import { CAMPAIGNS, ROLES, permissionsOf, type Role } from "@crm/core";
 import { audit } from "./audit";
 import { registerAnalisis } from "./analisis";
 import { registerCargas } from "./cargas";
+import { registerDetalle } from "./detalle";
 import {
   LOCK_MINUTES,
   MAX_FAILED_ATTEMPTS,
@@ -15,7 +16,7 @@ import {
 import { HttpError, Router, json, readJson, requireString } from "./http";
 import { hashPassword, passwordProblem, timingSafeEqualText, verifyPassword } from "./password";
 
-export const VERSION = "2.0.1-lectura";
+export const VERSION = "2.1.0-interactiva";
 
 const INVALID_LOGIN = "Usuario o contraseña incorrectos.";
 
@@ -313,6 +314,7 @@ export function createApp(): Router {
 
   registerCargas(r);
   registerAnalisis(r);
+  registerDetalle(r);
 
   return r;
 }
