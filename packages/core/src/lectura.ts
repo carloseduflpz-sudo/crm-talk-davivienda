@@ -43,6 +43,8 @@ export interface ExcelReading {
   sheet: string;
   missingOptional: string[];
   month: { month: string; share: number; byMonth: Record<string, number> } | null;
+  /** Hojas cuyos clientes ya venían en la hoja principal (no se suman; se anota en "Cargas"). */
+  covered: string[];
   /** Cada hoja del libro: cuántas filas tiene (si se sabe) y a qué tipo(s) de archivo va. */
   hojas: { name: string; rows: number | null; tipos: string[] }[];
 }
@@ -137,7 +139,7 @@ export function readDataset(
 ): ExcelReading {
   const assigned = sheetAssignments(peek, detections);
   const hojas = peek.sheetNames.map((name) => ({ name, rows: countRows ? sheetRowCount(peek.wb, name) : null, tipos: assigned[name] ?? [] }));
-  const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null, hojas };
+  const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null, hojas, covered: [] };
   if (!datasetId) {
     return {
       ...base,
@@ -170,6 +172,7 @@ export function readDataset(
     chunkEnds: chunkEnds(rows),
     dropped: res.dropped,
     sheet: res.sheet,
+    covered: res.covered ?? [],
     missingOptional: res.missingOptional,
     month: dominantMonth(res.rows, datasetId),
   };

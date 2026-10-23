@@ -9,7 +9,7 @@ import { Button, ErrorMessage } from "../components/form";
 import { Badge, Card, PageHeader } from "../components/ui";
 import { ApiError, api, type UploadInfo } from "../lib/api";
 import { ExcelReader, ReadCancelled } from "../lib/excel";
-import { monthLabel } from "../lib/xlsx";
+import { monthFromName, monthLabel } from "../lib/xlsx";
 
 const ACCEPT = ".xlsx,.xlsb,.xls,.csv";
 const MAX_BACKUP_BYTES = 60 * 1024 * 1024;
@@ -321,6 +321,7 @@ export function Upload() {
   const [phase, setPhase] = useState<Phase>({ name: "idle" });
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [month, setMonth] = useState(currentMonth());
+  const [monthFromFile, setMonthFromFile] = useState(false);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -364,8 +365,11 @@ export function Upload() {
       try {
         const { result, sha } = await excel.open(file, campaign, onStep);
         setAnalysis({ ...result, file, sha });
-        // Sin fechas en el archivo (las bases) no se adivina el mes: se pide elegirlo.
-        setMonth(result.month?.month ?? "");
+        // Sin fechas en el archivo (las bases), el mes sale del nombre del archivo ("…Octubre…", "…Oct26…");
+        // si tampoco lo dice, se pide elegirlo.
+        const fromName = result.month ? null : monthFromName(file.name);
+        setMonthFromFile(Boolean(fromName));
+        setMonth(result.month?.month ?? fromName ?? "");
         setPhase({ name: "ready" });
       } catch (e) {
         if (e instanceof ReadCancelled) return;
@@ -654,7 +658,10 @@ export function Upload() {
                     type="month"
                     disabled={phase.name === "saving"}
                     value={month}
-                    onChange={(e) => setMonth(e.target.value)}
+                    onChange={(e) => {
+                      setMonth(e.target.value);
+                      setMonthFromFile(false);
+                    }}
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
                   />
                   {hasDates ? (
@@ -663,13 +670,18 @@ export function Upload() {
                     </p>
                   ) : (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                      <span className={monthOk ? "" : "font-medium text-amber-700 dark:text-amber-300"}>Este archivo no trae fechas: {monthOk ? "revisa que sea el mes correcto." : "elige de qué mes es."}</span>
+                      <span className={monthOk ? "" : "font-medium text-amber-700 dark:text-amber-300"}>
+                        {monthOk && monthFromFile ? "Tomado del nombre del archivo; cámbialo si no es." : `Este archivo no trae fechas: ${monthOk ? "revisa que sea el mes correcto." : "elige de qué mes es."}`}
+                      </span>
                       {[currentMonth(), previousMonth()].map((m) => (
                         <button
                           key={m}
                           type="button"
                           disabled={phase.name === "saving"}
-                          onClick={() => setMonth(m)}
+                          onClick={() => {
+                            setMonth(m);
+                            setMonthFromFile(false);
+                          }}
                           aria-pressed={month === m}
                           className={`rounded-full px-2.5 py-1 font-medium capitalize ring-1 transition-colors ${month === m ? "bg-brand-500 text-white ring-brand-500" : "text-slate-600 ring-slate-300 hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"}`}
                         >
@@ -734,6 +746,7 @@ export function Upload() {
                       <ul className="space-y-1.5">
                         {analysis.hojas.map((h) => {
                           const now = analysis.sheet.split(" + ").includes(h.name);
+                          const inside = analysis.covered.includes(h.name);
                           const other = h.tipos.find((t) => t !== analysis.datasetId);
                           return (
                             <li key={h.name} className="flex flex-wrap items-baseline gap-x-2">
@@ -742,6 +755,8 @@ export function Upload() {
                               <span className="text-xs text-slate-500">
                                 {now
                                   ? `→ se guarda ahora como ${datasetLabel(analysis.datasetId!)}`
+                                  : inside
+                                    ? `→ sus clientes ya vienen en «${analysis.sheet}»: no se suman, se anota en qué carga venía cada uno`
                                   : other
                                     ? `→ es ${datasetLabel(other)}: después vuelve a subir el archivo y elige ese tipo`
                                     : "→ no se usa"}

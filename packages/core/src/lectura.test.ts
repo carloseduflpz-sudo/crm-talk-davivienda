@@ -187,6 +187,21 @@ describe("TDC: base de primeras vs. segundas cuentas", () => {
     expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras").rows.map((r) => r.niu)).toEqual(["111"]);
   });
 
+  it("una hoja consolidada y otras con partes de ella (cargas): se usa la consolidada y se anota la carga", () => {
+    const wb = XLSX.utils.book_new();
+    const sheet = (nius: string[]) => XLSX.utils.aoa_to_sheet([PRI, ...nius.map((n) => PRI.map((h, i) => (i === 0 ? n : `${h} ${n}`)))]);
+    XLSX.utils.book_append_sheet(wb, sheet(["1", "2"]), "EMPRESA 1");
+    XLSX.utils.book_append_sheet(wb, sheet(["3", "4", "5"]), "CARGA 3");
+    XLSX.utils.book_append_sheet(wb, sheet(["1", "2", "3", "4", "5", "6"]), "Tarjeta Nueva");
+    const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    const r = readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras");
+    expect(r.rows.map((x) => x.niu)).toEqual(["1", "2", "3", "4", "5", "6"]);
+    expect(r.sheet).toBe("Tarjeta Nueva");
+    expect(r.covered).toEqual(["EMPRESA 1", "CARGA 3"]);
+    expect(r.rows.map((x) => (x.extra as Record<string, unknown>).Cargas ?? null)).toEqual(["EMPRESA 1", "EMPRESA 1", "CARGA 3", "CARGA 3", "CARGA 3", null]);
+  });
+
   it("si no se reconoce, el mensaje dice qué encabezados trae el archivo", () => {
     const bytes = book([["Datos", ["Cliente", "Telefono", "Monto"]]]);
     const { reader, detections } = peekWorkbook(X, bytes, "tdc");

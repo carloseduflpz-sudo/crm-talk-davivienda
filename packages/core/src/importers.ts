@@ -531,6 +531,8 @@ export interface ParseResult {
   sheet: string;
   /** Columnas opcionales que el archivo no trae. */
   missingOptional: string[];
+  /** Hojas cuyos clientes ya vienen en la hoja principal (cargas o asignaciones parciales): no se suman. */
+  covered?: string[];
 }
 export type ParseOutcome = ParseResult | { error: string };
 
@@ -616,21 +618,46 @@ export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseO
     };
   }
   if (sheets.length === 1) return readWithProfile(reader, prof, sheets[0]!);
-  // Una base repartida en varias hojas (p. ej. una por segmento): se leen todas y se juntan.
-  const all: RawRecord[] = [];
-  let dropped = 0;
-  const used: string[] = [];
-  let missingOptional: string[] | null = null;
+  // Varias hojas con las mismas columnas. Dos casos:
+  //  - una hoja consolidada y otras con partes de ella (cargas, empresas, asignaciones): se usa la consolidada y
+  //    a cada cliente se le anota en qué otras hojas venía;
+  //  - la base partida en varias hojas (una por segmento): se juntan, sin repetir clientes.
+  const key = prof.keyField ?? "NIU";
+  const parts: { sheet: string; r: ParseResult; nius: Set<string> }[] = [];
   for (const sn of sheets) {
     const r = readWithProfile(reader, prof, sn);
     if ("error" in r) continue;
-    all.push(...r.rows);
-    dropped += r.dropped;
-    used.push(sn);
-    missingOptional = missingOptional === null ? r.missingOptional : missingOptional.filter((m) => r.missingOptional.includes(m));
+    parts.push({ sheet: sn, r, nius: new Set(r.rows.map((x) => String(x[key] ?? ""))) });
   }
-  if (!used.length) return readWithProfile(reader, prof, sheets[0]!);
-  return { rows: all, dropped, sheet: used.join(" + "), missingOptional: missingOptional ?? [] };
+  if (!parts.length) return readWithProfile(reader, prof, sheets[0]!);
+  if (parts.length === 1) return parts[0]!.r;
+  const union = new Set(parts.flatMap((p) => [...p.nius]));
+  const main = [...parts].sort((a, b) => b.nius.size - a.nius.size)[0]!;
+  const sheetsOf = new Map<string, string[]>();
+  for (const p of parts) if (p !== main) for (const n of p.nius) sheetsOf.set(n, [...(sheetsOf.get(n) ?? []), p.sheet]);
+  if (main.nius.size >= union.size * 0.95) {
+    const others = parts.filter((p) => p !== main).map((p) => p.sheet);
+    const rows = main.r.rows.map((x) => {
+      const en = sheetsOf.get(String(x[key] ?? ""));
+      return en ? { ...x, Cargas: en.join(", ") } : x;
+    });
+    return { rows, dropped: main.r.dropped, sheet: main.sheet, missingOptional: main.r.missingOptional, covered: others };
+  }
+  const seen = new Set<string>();
+  const all: RawRecord[] = [];
+  let dropped = 0;
+  let missingOptional: string[] | null = null;
+  for (const p of parts) {
+    dropped += p.r.dropped;
+    missingOptional = missingOptional === null ? p.r.missingOptional : missingOptional.filter((m) => p.r.missingOptional.includes(m));
+    for (const x of p.r.rows) {
+      const n = String(x[key] ?? "");
+      if (seen.has(n)) continue;
+      seen.add(n);
+      all.push({ ...x, Hoja: p.sheet });
+    }
+  }
+  return { rows: all, dropped, sheet: parts.map((p) => p.sheet).join(" + "), missingOptional: missingOptional ?? [] };
 }
 
 /** Parecido de una hoja con un perfil: columnas en común, columnas exclusivas y nombre de hoja esperado. */
