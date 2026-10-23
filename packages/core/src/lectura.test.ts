@@ -148,6 +148,20 @@ describe("TDC: base de primeras vs. segundas cuentas", () => {
     expect(r.rows[0]!.extra).toMatchObject({ Nombre: "NombreSociedad 1", DUI: "NumeroDUI 1", "TEL Notificaciones": "TelNotificaciones 1" });
   });
 
+  it("una base repartida en varias hojas se lee completa (sin mezclar la otra base)", () => {
+    const bytes = book([
+      ["Asalariados", PRI, "111"],
+      ["Independientes", PRI, "112"],
+      ["Resumen", ["Segmento", "Total"]],
+      ["2a TDC", SEG, "222"],
+    ]);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    const pri = readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras");
+    expect(pri.rows.map((r) => r.niu)).toEqual(["111", "112"]);
+    expect(pri.sheet).toBe("Asalariados + Independientes");
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:segundas").rows.map((r) => r.niu)).toEqual(["222"]);
+  });
+
   it("si no se reconoce, el mensaje dice qué encabezados trae el archivo", () => {
     const bytes = book([["Datos", ["Cliente", "Telefono", "Monto"]]]);
     const { reader, detections } = peekWorkbook(X, bytes, "tdc");

@@ -599,13 +599,67 @@ export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseO
     return { rows: all, dropped, sheet: used.join(" + "), missingOptional: [] };
   }
 
-  const sn = bestSheet(reader, prof);
-  if (!sn) {
+  const sheets = sheetsFor(reader, datasetId);
+  if (!sheets.length) {
     return {
       error: `No encontré la hoja esperada (${(prof.sheets ?? []).join(", ") || "con los encabezados correctos"}). Hojas del archivo: ${reader.sheetNames.join(", ")}.`,
     };
   }
-  return readWithProfile(reader, prof, sn);
+  if (sheets.length === 1) return readWithProfile(reader, prof, sheets[0]!);
+  // Una base repartida en varias hojas (p. ej. una por segmento): se leen todas y se juntan.
+  const all: RawRecord[] = [];
+  let dropped = 0;
+  const used: string[] = [];
+  let missingOptional: string[] | null = null;
+  for (const sn of sheets) {
+    const r = readWithProfile(reader, prof, sn);
+    if ("error" in r) continue;
+    all.push(...r.rows);
+    dropped += r.dropped;
+    used.push(sn);
+    missingOptional = missingOptional === null ? r.missingOptional : missingOptional.filter((m) => r.missingOptional.includes(m));
+  }
+  if (!used.length) return readWithProfile(reader, prof, sheets[0]!);
+  return { rows: all, dropped, sheet: used.join(" + "), missingOptional: missingOptional ?? [] };
+}
+
+/** Parecido de una hoja con un perfil: columnas en común, columnas exclusivas y nombre de hoja esperado. */
+function sheetScore(reader: WorkbookReader, prof: Profile, sn: string): number {
+  const rows = reader.rows(sn);
+  if (!findHeader(rows, prof.required)) return -1;
+  if (prof.detectMin) {
+    const hdr = findHeader(rows, prof.required)!;
+    if (prof.detectMin.cols.filter((c) => hdr.idx.has(normHeader(c))).length < prof.detectMin.min) return -1;
+  }
+  const named = (prof.sheets ?? []).map(normHeader).includes(normHeader(sn));
+  return coverage(rows, prof, prof.required) + markerHits(rows, prof) + (named ? 5 : 0);
+}
+
+/**
+ * Hojas que se leen para ese tipo de archivo. Una base puede venir repartida en varias hojas con los mismos
+ * encabezados: se leen todas las que se le parecen, salvo las que se parecen más a OTRA base de la misma
+ * campaña (un libro con Primeras y Segundas Cuentas no se mezcla).
+ */
+function sheetsFor(reader: WorkbookReader, datasetId: string): string[] {
+  const prof = PROFILES[datasetId]!;
+  const best = bestSheet(reader, prof);
+  const campaign = datasetId.split(":")[0] as CampaignCode;
+  let def;
+  try {
+    def = getCampaign(campaign).datasets.find((d) => d.id === datasetId);
+  } catch {
+    def = undefined;
+  }
+  if (!prof.anySheet || def?.kind !== "base") return best ? [best] : [];
+  const siblings = getCampaign(campaign)
+    .datasets.filter((d) => d.kind === "base" && d.id !== datasetId && PROFILES[d.id])
+    .map((d) => PROFILES[d.id]!);
+  const mine = reader.sheetNames.filter((sn) => {
+    const own = sheetScore(reader, prof, sn);
+    return own >= 0 && siblings.every((sp) => sheetScore(reader, sp, sn) <= own);
+  });
+  if (!mine.length) return best ? [best] : [];
+  return mine;
 }
 
 /** Hojas que `parseWorkbook` va a leer para ese tipo de archivo. Basta con los encabezados, así que
@@ -614,8 +668,7 @@ export function neededSheets(reader: WorkbookReader, datasetId: string): string[
   const prof = PROFILES[datasetId];
   if (!prof) return [];
   if (prof.multiSheet) return prof.multiSheet.map((p) => reader.pickSheet([p.sheet])).filter((s): s is string => Boolean(s));
-  const sn = bestSheet(reader, prof);
-  return sn ? [sn] : [];
+  return sheetsFor(reader, datasetId);
 }
 
 /** Cuántas columnas exclusivas de este archivo trae la hoja. */

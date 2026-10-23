@@ -431,6 +431,8 @@ export function Upload() {
   // Meses que trae el archivo según la fecha de cada fila: para no mezclar un mes con otro.
   const split = useMemo(() => (analysis ? rowsByMonth(analysis.rows) : { byMonth: {}, sinFecha: 0 }), [analysis]);
   const monthsInFile = Object.entries(split.byMonth).sort((x, y) => y[1] - x[1]);
+  // En una base: cuántos clientes distintos trae (una fila por oferta o producto repite el NIU).
+  const uniqueNius = useMemo(() => (analysis ? new Set(analysis.rows.map((r) => r.niu)).size : 0), [analysis]);
   const hasDates = monthsInFile.length > 0;
   const inMonth = (split.byMonth[month] ?? 0) + split.sinFecha;
   const outside = analysis ? analysis.rows.length - inMonth : 0;
@@ -679,13 +681,25 @@ export function Upload() {
               ) : (
                 <>
                   <div className="grid gap-3 sm:grid-cols-3">
-                    <Stat label="Filas válidas" value={fmt.format(analysis.rows.length)} />
+                    <Stat
+                      label="Filas válidas"
+                      value={fmt.format(analysis.rows.length)}
+                      foot={analysis.sheet.includes(" + ") ? `De las hojas ${analysis.sheet.split(" + ").join(", ")}` : analysis.sheet ? `De la hoja ${analysis.sheet}` : undefined}
+                    />
                     <Stat
                       label={kind === "tipif" ? "Descartadas (sin fecha)" : "Descartadas (sin NIU)"}
                       value={fmt.format(analysis.dropped)}
                       tone={analysis.dropped ? "warn" : "default"}
                     />
-                    <Stat label="Meses en el archivo" value={String(monthsInFile.length || "—")} foot={monthsInFile.slice(0, 3).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ") || "Sin fechas"} />
+                    {isBase ? (
+                      <Stat
+                        label="Clientes únicos"
+                        value={fmt.format(uniqueNius)}
+                        foot={analysis.rows.length > uniqueNius ? `${fmt.format(analysis.rows.length - uniqueNius)} filas repiten un NIU que ya viene en el archivo` : "Ningún NIU repetido"}
+                      />
+                    ) : (
+                      <Stat label="Meses en el archivo" value={String(monthsInFile.length || "—")} foot={monthsInFile.slice(0, 3).map(([m, n]) => `${monthLabel(m)}: ${fmt.format(n)}`).join(" · ") || "Sin fechas"} />
+                    )}
                   </div>
 
                   {doubt && !typeChosen && d0 && d1 && (
