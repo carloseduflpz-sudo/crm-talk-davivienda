@@ -767,6 +767,10 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   const valInt = (x: number | null) => (x === null ? "—" : money ? fmtMoney(x) : fmtInt.format(Math.round(x)));
   const unit = money ? "" : " ventas";
   const corte = c.fechaCorte ? dayLabel(c.fechaCorte) : null;
+  // Mes en curso con una sábana que llega a varios días atrás: se avisa (el MTD ya se mide al corte).
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const stale = Boolean(a.month === currentMonth() && c.fechaCorte && (Date.parse(todayIso) - Date.parse(c.fechaCorte)) / 86_400_000 >= 3);
   const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
   const mtdTone = c.avanceMTD === null ? undefined : c.avanceMTD >= 100 ? ("good" as const) : c.avanceMTD >= 90 ? ("warn" as const) : ("bad" as const);
   type Row = (typeof c.porAgente)[number];
@@ -832,6 +836,12 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             "La sábana del mes no trae fechas de venta."
           )}
         </p>
+        {stale && (
+          <p className="mt-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-[13px] text-amber-900 dark:bg-amber-500/10 dark:text-amber-100">
+            La sábana de {mes.split(" ")[0]} llega hasta el {corte}: puede venir incompleta o atrasada. El MTD se mide a esa fecha (día hábil {c.diaDelMes}), así que no
+            cuenta como atraso lo que la sábana aún no trae. Al cargar la sábana actualizada se recalcula todo.
+          </p>
+        )}
         <p className="mt-1.5 text-[12.5px] text-ink-faint">
           {reglas}
           {c.agentes ? ` HC: ${c.agentes} agentes autorizados.` : ""}{" "}

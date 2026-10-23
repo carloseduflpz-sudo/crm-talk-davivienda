@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, Role } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, Role, SabanaSummary } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -170,6 +170,8 @@ export const api = {
   /** Elimina un archivo cargado (también el vigente): sus filas y su respaldo se borran. */
   deleteUpload: (id: string) => post(`/cargas/${id}/eliminar`),
   activateUpload: (id: string) => post(`/cargas/${id}/activar`),
+  /** Resumen de una sábana cargada (para compararla con una nueva). */
+  sabanaSummary: (id: string) => get<SabanaSummary>(`/cargas/${id}/resumen`),
   removeAddition: (id: string) => post(`/cargas/${id}/quitar`),
 
   analysis: (campaign: string, month?: string | null, agent?: string | null) => {

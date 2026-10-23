@@ -307,6 +307,20 @@ export function registerCargas(r: Router): void {
     { raw: true },
   );
 
+  /** Resumen de una sábana cargada, para compararla con una nueva antes de reemplazarla. */
+  r.on("GET", "/cargas/:id/resumen", "datos:ver", async ({ env, params }) => {
+    const u = await getUpload(env, params.id!);
+    if (u.kind !== "sabana") throw new HttpError(400, "Solo las sábanas tienen resumen.");
+    const [tot, meses, procesos] = await env.DB.batch([
+      env.DB.prepare("SELECT COUNT(*) AS n, MAX(CASE WHEN sale_date LIKE ? THEN sale_date END) AS hasta FROM bank_sales WHERE upload_id = ?").bind(`${u.month}%`, u.id),
+      env.DB.prepare("SELECT COALESCE(substr(sale_date, 1, 7), '') AS k, COUNT(*) AS n FROM bank_sales WHERE upload_id = ? GROUP BY 1").bind(u.id),
+      env.DB.prepare("SELECT COALESCE(process, '') AS k, COUNT(*) AS n FROM bank_sales WHERE upload_id = ? GROUP BY 1").bind(u.id),
+    ]);
+    const t = tot!.results[0] as { n: number; hasta: string | null };
+    const obj = (rs: unknown[]) => Object.fromEntries((rs as { k: string; n: number }[]).map((x) => [x.k, Number(x.n)]));
+    return json({ ok: true, filas: Number(t.n), hasta: t.hasta, porMes: obj(meses!.results), porProceso: obj(procesos!.results), cargada: u.created_at });
+  });
+
   r.on("GET", "/cargas/:id/archivo", "datos:ver", async ({ env, params }) => {
     const u = await getUpload(env, params.id!);
     if (!u.file_key) throw new HttpError(404, "Esta carga no tiene guardado el Excel original.");

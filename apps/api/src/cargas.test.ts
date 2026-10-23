@@ -149,6 +149,14 @@ describe("centro de carga", () => {
     expect((await call("POST", `/cargas/${v2.id}/eliminar`, {})).status).toBe(400);
   });
 
+  it("resumen de la sábana vigente para compararla con una nueva", async () => {
+    const v1 = await upload("tdc:sabana", "2026-09", [...saleRows(3), { ...saleRows(1, 50)[0], saleDate: "2026-08-30" }]);
+    await call("POST", `/cargas/${v1.id}/confirmar`, {});
+    const r = await call("GET", `/cargas/${v1.id}/resumen`);
+    expect(r.status, String(r.data.error)).toBe(200);
+    expect(r.data).toMatchObject({ filas: 4, hasta: "2026-09-15", porMes: { "2026-09": 3, "2026-08": 1 } });
+  });
+
   it("clasifica las llamadas de VICI con las tipologías de la campaña y acepta llamadas sin NIU", async () => {
     const rows = [
       { niu: "123", agent: "Ana", calledAt: "2026-09-10T10:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" },

@@ -1,10 +1,11 @@
 /* Centro de carga: arrastrar el Excel → la app lo reconoce y lo valida → vista previa →
    se guarda por lotes con versión, sin borrar la versión anterior. */
-import { CAMPAIGNS, PREVIEW_HIDDEN, chunkEnds, getCampaign, onlyMonth, rowsByMonth, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
+import { CAMPAIGNS, PREVIEW_HIDDEN, chunkEnds, compareSabanas, getCampaign, summarizeSales, onlyMonth, rowsByMonth, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, CircleCheck, CloudUpload, Download, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useSearchParams } from "react-router";
+import { dayLabel } from "../components/charts";
 import { Button, ErrorMessage } from "../components/form";
 import { Badge, Card, PageHeader } from "../components/ui";
 import { ApiError, api, type UploadInfo } from "../lib/api";
@@ -446,6 +447,20 @@ export function Upload() {
   // La sábana trae a propósito ventas de meses anteriores (cosecha): se guarda completa.
   const sabanaFile = analysis?.datasetId ? kindOf(analysis.datasetId) === "sabana" : false;
   const filtering = outside > 0 && scope === "mes" && !sabanaFile;
+
+  // Sábana que reemplaza a la vigente del mes: se comparan antes de guardar por si viene incompleta.
+  const vigente = useQuery({
+    queryKey: ["resumen-sabana", current?.id ?? null],
+    queryFn: () => api.sabanaSummary(current!.id),
+    enabled: Boolean(sabanaFile && current),
+  });
+  const diff = useMemo(
+    () => (sabanaFile && current && vigente.data && analysis && VALID_MONTH.test(month) ? compareSabanas(vigente.data, summarizeSales(analysis.rows, month), month) : null),
+    [sabanaFile, current, vigente.data, analysis, month],
+  );
+  const [replaceAnyway, setReplaceAnyway] = useState(false);
+  useEffect(() => setReplaceAnyway(false), [analysis?.sha, month]);
+  const blockedIncomplete = Boolean(diff?.menos && !replaceAnyway);
   const toSave = filtering ? inMonth : (analysis?.rows.length ?? 0);
   const monthOk = VALID_MONTH.test(month);
 
@@ -854,7 +869,53 @@ export function Upload() {
                       )}
                     </fieldset>
                   )}
-                  {current && !needsMode && (
+                  {diff && current && (
+                    <div
+                      className={`rounded-2xl border p-4 text-sm ${
+                        diff.menos ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100" : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100"
+                      }`}
+                    >
+                      <p className="font-medium">
+                        {diff.menos
+                          ? `Esta sábana trae menos que la vigente de ${monthLabel(month)}: puede venir incompleta`
+                          : `Trae todo lo de la sábana vigente de ${monthLabel(month)}${diff.puntos.some((x) => x.antes !== x.ahora) ? " y más" : ""}`}
+                      </p>
+                      <table className="mt-3 w-full max-w-xl text-[13px]">
+                        <thead>
+                          <tr className="text-left text-xs opacity-70">
+                            <th className="py-1 font-normal" />
+                            <th className="py-1 text-right font-normal">Vigente (cargada el {fmtDate(current.createdAt)})</th>
+                            <th className="py-1 text-right font-normal">Nueva</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {diff.puntos.map((x) => {
+                            const show = (v: string | number) => (typeof v === "number" ? fmt.format(v) : /^\d{4}-\d{2}-\d{2}$/.test(v) ? dayLabel(v) : v);
+                            const que = x.que.startsWith("Cosecha de ") ? `Cosecha de ${monthLabel(x.que.slice(11))}` : x.que;
+                            return (
+                              <tr key={x.que} className={x.menos ? "font-medium" : ""}>
+                                <td className="py-1 pr-3">{que}</td>
+                                <td className="py-1 text-right tabular-nums">{show(x.antes)}</td>
+                                <td className="py-1 text-right tabular-nums">
+                                  {show(x.ahora)}
+                                  {x.menos && <span aria-hidden> ↓</span>}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      {diff.menos ? (
+                        <label className="mt-3 flex cursor-pointer items-start gap-2">
+                          <input type="checkbox" className="mt-0.5 accent-amber-600" checked={replaceAnyway} onChange={(e) => setReplaceAnyway(e.target.checked)} />
+                          <span>Sí, reemplazar de todos modos. La vigente queda de respaldo y puedes volver a ella desde el historial.</span>
+                        </label>
+                      ) : (
+                        <p className="mt-3 text-[13px]">Al guardar, el cumplimiento, el MTD, el ritmo y la proyección se recalculan con el nuevo corte.</p>
+                      )}
+                    </div>
+                  )}
+                  {current && !needsMode && !diff && (
                     <p className="flex gap-2 rounded-xl bg-blue-50 px-3.5 py-2.5 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
                       <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                       <span>
@@ -899,7 +960,7 @@ export function Upload() {
               ) : (
                 !analysis.error && (
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={save} disabled={!monthOk || toSave === 0 || (needsMode && !mode) || (doubt && !typeChosen)}>
+                    <Button onClick={save} disabled={!monthOk || toSave === 0 || (needsMode && !mode) || (doubt && !typeChosen) || blockedIncomplete}>
                       <CloudUpload className="size-4" aria-hidden />{" "}
                       {!monthOk
                         ? "Guardar"
@@ -908,6 +969,7 @@ export function Upload() {
                           : `Guardar ${fmt.format(toSave)} filas en ${monthLabel(month)}`}
                     </Button>
                     {doubt && !typeChosen && <span className="self-center text-xs text-slate-500">Elige cuál base es.</span>}
+                    {blockedIncomplete && <span className="self-center text-xs text-slate-500">Confirma arriba si quieres reemplazar la sábana vigente.</span>}
                     {!(doubt && !typeChosen) && !monthOk && <span className="self-center text-xs text-slate-500">Elige el mes al que corresponde.</span>}
                     {monthOk && needsMode && !mode && <span className="self-center text-xs text-slate-500">Elige si es una base adicional o un reemplazo.</span>}
                   </div>

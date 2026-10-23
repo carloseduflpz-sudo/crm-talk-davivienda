@@ -9,3 +9,4 @@ export * from "./lectura";
 export * from "./compactar";
 export * from "./metas";
 export * from "./agentes";
+export * from "./sabana";
