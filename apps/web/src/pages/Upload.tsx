@@ -20,7 +20,7 @@ interface Analysis extends ExcelReading {
   sha: string;
 }
 
-type Phase = { name: "idle" } | { name: "reading"; fileName: string; step: string } | { name: "ready" } | { name: "saving"; done: number; total: number; step: string } | { name: "done"; upload: UploadInfo; warning?: string };
+type Phase = { name: "idle" } | { name: "reading"; fileName: string; step: string } | { name: "ready" } | { name: "saving"; done: number; total: number; step: string } | { name: "done"; upload: UploadInfo; warning?: string; others?: string[] };
 
 const fmt = new Intl.NumberFormat("es-SV");
 const fmtDate = (ms: number) => new Intl.DateTimeFormat("es-SV", { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms));
@@ -416,9 +416,10 @@ export function Upload() {
   const [d0, d1] = analysis?.detections ?? [];
   const doubt = Boolean(d0 && d1 && kindOf(d0.datasetId) === "base" && kindOf(d1.datasetId) === "base" && d0.sheet === d1.sheet && d0.score - d1.score < 3);
   const [typeChosen, setTypeChosen] = useState(false);
+  // Tipos ya guardados de este mismo archivo (un libro puede traer dos bases).
+  const [savedHere, setSavedHere] = useState<Set<string>>(new Set());
+  useEffect(() => setSavedHere(new Set()), [analysis?.sha]);
   useEffect(() => setTypeChosen(false), [analysis?.sha]);
-  // Un libro con las dos bases en hojas distintas: se avisa que la otra también se puede cargar.
-  const otherBase = analysis?.detections.find((d) => d.datasetId !== analysis.datasetId && kindOf(d.datasetId) === "base" && d.sheet !== analysis.sheet && isBase);
   // Si ya hay base ese mes, hay que elegir: sumar como adicional o reemplazar.
   const needsMode = Boolean(isBase && current);
   const [mode, setMode] = useState<null | "adicional" | "reemplazar">(null);
@@ -490,8 +491,12 @@ export function Upload() {
       const { upload } = await api.confirmUpload(c.id);
       // La ficha del cliente también se arma con estos archivos: se vuelve a consultar.
       await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] }), qc.invalidateQueries({ queryKey: ["cliente"] })]);
-      closeReader(); // ya no hace falta el archivo en memoria
-      setPhase({ name: "done", upload, warning });
+      // Si el mismo libro trae otra base (p. ej. Primeras y Segundas), se ofrece guardarla sin volver a subirlo.
+      const saved = new Set([...savedHere, a.datasetId!]);
+      setSavedHere(saved);
+      const others = [...new Set(a.hojas.flatMap((h) => h.tipos))].filter((t) => !saved.has(t) && kindOf(t) === "base");
+      if (!others.length) closeReader(); // ya no hace falta el archivo en memoria
+      setPhase({ name: "done", upload, warning, others });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "No se pudo guardar.";
       setError(`${msg} No se activó nada: la versión vigente sigue igual.`);
@@ -723,14 +728,29 @@ export function Upload() {
                       </div>
                     </div>
                   )}
-                  {otherBase && (
-                    <p className="flex gap-2 rounded-xl bg-blue-50 px-3.5 py-2.5 text-sm text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
-                      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-                      <span>
-                        Este archivo también trae la {datasetLabel(otherBase.datasetId)} (hoja «{otherBase.sheet}»). Ahora se guarda la hoja «{analysis.sheet}»; después vuelve a subir el mismo
-                        archivo y elige {datasetLabel(otherBase.datasetId)} en el tipo.
-                      </span>
-                    </p>
+                  {analysis.hojas.length > 1 && (
+                    <div className="rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
+                      <p className="mb-2 text-xs font-medium text-slate-500">Hojas del archivo</p>
+                      <ul className="space-y-1.5">
+                        {analysis.hojas.map((h) => {
+                          const now = analysis.sheet.split(" + ").includes(h.name);
+                          const other = h.tipos.find((t) => t !== analysis.datasetId);
+                          return (
+                            <li key={h.name} className="flex flex-wrap items-baseline gap-x-2">
+                              <span className={now ? "font-medium text-slate-800 dark:text-slate-100" : "text-slate-600 dark:text-slate-300"}>{h.name}</span>
+                              {h.rows !== null && <span className="text-xs text-slate-400 tabular-nums">≈ {fmt.format(Math.max(0, h.rows - 1))} filas</span>}
+                              <span className="text-xs text-slate-500">
+                                {now
+                                  ? `→ se guarda ahora como ${datasetLabel(analysis.datasetId!)}`
+                                  : other
+                                    ? `→ es ${datasetLabel(other)}: después vuelve a subir el archivo y elige ese tipo`
+                                    : "→ no se usa"}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
                   )}
                   {monthOk && hasDates && inMonth === split.sinFecha && (
                     <div className="flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
@@ -898,8 +918,21 @@ export function Upload() {
                 {phase.upload.rowsDiscarded ? ` · ${fmt.format(phase.upload.rowsDiscarded)} descartadas` : ""}.
               </p>
               {phase.warning && <p className="mt-2 text-sm text-amber-700">{phase.warning}</p>}
-              <div className="mt-4">
-                <Button onClick={reset}>Cargar otro archivo</Button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {phase.others?.map((t) => (
+                  <Button
+                    key={t}
+                    onClick={() => {
+                      setTypeChosen(true);
+                      void changeType(t);
+                    }}
+                  >
+                    Guardar también la {datasetLabel(t)} de este archivo
+                  </Button>
+                ))}
+                <Button variant={phase.others?.length ? "secondary" : undefined} onClick={reset}>
+                  Cargar otro archivo
+                </Button>
               </div>
             </div>
           </div>

@@ -262,13 +262,23 @@ export const PROFILES: Record<string, Profile> = {
     anySheet: true,
     markers: ["Nombre empresa", "Cargo", "Salario a Considerar", "Perfil SS", "Condicion", "Aplica CDC", "Tipo CDC", "ASIGNACION", "TelNotificaciones", "Dirección de Casa", "Dirección Lugar de Trabajo"],
     fileHint: /segund|(^|[^0-9])2\s*(a|da|nda)?[\s_.-]*(tdc|cuentas?|tarjetas?)/i,
-    required: ["NIU", "Nombre legal según IBS"],
+    // Como la de Primeras: el formato de siempre (NIU, Nombre legal según IBS) o el "entregable" del banco (NIUCliente...).
+    required: [["NIU", "NIUCliente", "NIU Cliente", "NIU_CLIENTE"]],
+    detectMin: {
+      min: 2,
+      cols: [
+        "Nombre legal según IBS", "NombreSociedad", "Nombre empresa", "Cargo", "Perfil", "Municipio", "Departamento", "TelNotificaciones", "Salario a Considerar",
+        "DUI", "NumeroDUI", "Edad", "Tipo empresa", "Marca", "Tipo",
+      ],
+    },
     fields: {
-      NIU: ["NIU", "niu"], DUI: ["DUI"], Nombre: ["Nombre legal según IBS"], NombreEmpresa: ["Nombre empresa"], Cargo: ["Cargo"],
-      Municipio: ["Municipio"], Departamento: ["Departamento"], TelNotif: ["TelNotificaciones"], DireccionCasa: ["Dirección de Casa"],
-      DireccionTrabajo: ["Dirección Lugar de Trabajo"], TipoEmpresa: ["Tipo empresa"], Perfil: ["Perfil"], Tipo: ["Tipo"], Marca: ["Marca"],
-      Salario: ["Salario a Considerar", "num"], Edad: ["Edad", "int"], PerfilSS: ["Perfil SS"], CI: [["CI", "Condicion"]], AplicaCDC: ["Aplica CDC"],
-      TipoCDC: ["Tipo CDC"], BASE: ["BASE"], ASIGNACION: ["ASIGNACION"],
+      NIU: [["NIU", "NIUCliente", "NIU Cliente", "NIU_CLIENTE"], "niu"], DUI: [["DUI", "NumeroDUI", "Dui"]],
+      Nombre: [["Nombre legal según IBS", "NombreSociedad", "Nombre", "Nombre Completo"]], NombreEmpresa: ["Nombre empresa"], Cargo: ["Cargo"],
+      Municipio: ["Municipio"], Departamento: ["Departamento"], TelNotif: [["TelNotificaciones", "TEL Notificaciones", "Telefono", "Teléfono"]],
+      Correo: [["Correo", "Correo Electrónico", "Correo Electronico"]], DireccionCasa: ["Dirección de Casa"], DireccionTrabajo: ["Dirección Lugar de Trabajo"],
+      TipoEmpresa: [["Tipo empresa", "Segmento", "Segmento Empresa"]], Perfil: [["Perfil", "PERFIL"]], Tipo: [["Tipo", "Tipo Tarjeta", "Tipo de TC"]], Marca: ["Marca"],
+      Limite: [["Limite", "Límite", "Limite TC", "Límite TC"], "num"], Salario: ["Salario a Considerar", "num"], Edad: ["Edad", "int"], PerfilSS: ["Perfil SS"],
+      CI: [["CI", "Condicion"]], AplicaCDC: ["Aplica CDC"], TipoCDC: ["Tipo CDC"], BASE: ["BASE"], ASIGNACION: ["ASIGNACION"],
     },
   },
   "tdc:base:primeras": {
@@ -280,7 +290,7 @@ export const PROFILES: Record<string, Profile> = {
       "Producto Principal", "Oferta", "Monto2", "Tasa2", "Cuota", "Limite", "Score Tc", "CANAL", "Estrategia", "Correo", "TEL Notificaciones", "Plazo (meses)",
       "NIUCliente", "NombreSociedad", "NumeroDUI", "Clasificación Riesgo", "Cluster_TC",
     ],
-    fileHint: /(^|[^a-z])bau([^a-z]|$)|primer|tarjetas?[\s_.-]*nuevas?/i,
+    fileHint: /(^|[^a-z])bau([^a-z]|$)|primer|tarjetas?[\s_.-]*nuevas?|(^|[^0-9])1\s*(a|ra|era)?[\s_.-]*(tdc|cuentas?|tarjetas?)/i,
     dashBlank: true,
     required: [["NIU", "NIUCliente", "NIU Cliente", "NIU_CLIENTE"]],
     detectMin: {
@@ -632,7 +642,8 @@ function sheetScore(reader: WorkbookReader, prof: Profile, sn: string): number {
     if (prof.detectMin.cols.filter((c) => hdr.idx.has(normHeader(c))).length < prof.detectMin.min) return -1;
   }
   const named = (prof.sheets ?? []).map(normHeader).includes(normHeader(sn));
-  return coverage(rows, prof, prof.required) + markerHits(rows, prof) + (named ? 5 : 0);
+  // El nombre de la hoja también cuenta ("BAU", "2a TDC", "Segundas"...).
+  return coverage(rows, prof, prof.required) + markerHits(rows, prof) + (named ? 5 : 0) + (prof.fileHint?.test(sn) ? 2 : 0);
 }
 
 /**
@@ -654,12 +665,41 @@ function sheetsFor(reader: WorkbookReader, datasetId: string): string[] {
   const siblings = getCampaign(campaign)
     .datasets.filter((d) => d.kind === "base" && d.id !== datasetId && PROFILES[d.id])
     .map((d) => PROFILES[d.id]!);
+  if (!best) return [];
+  // Solo se juntan hojas con LAS MISMAS columnas que la hoja principal (la misma base partida en varias hojas).
+  // Una hoja con otras columnas es otro archivo (p. ej. la base de la otra cuenta) y nunca se suma.
+  const cols = headerSet(reader, prof, best);
   const mine = reader.sheetNames.filter((sn) => {
+    if (sn === best) return true;
+    // Una hoja que por su nombre es de otra base ("2a TDC", "Segundas") no se suma.
+    if (siblings.some((sp) => sp.fileHint?.test(sn)) && !prof.fileHint?.test(sn)) return false;
     const own = sheetScore(reader, prof, sn);
-    return own >= 0 && siblings.every((sp) => sheetScore(reader, sp, sn) <= own);
+    if (own < 0 || !siblings.every((sp) => sheetScore(reader, sp, sn) <= own)) return false;
+    return similarity(cols, headerSet(reader, prof, sn)) >= 0.9;
   });
-  if (!mine.length) return best ? [best] : [];
   return mine;
+}
+
+/** Encabezados (normalizados) de la fila de títulos de una hoja. */
+function headerSet(reader: WorkbookReader, prof: Profile, sn: string): Set<string> {
+  const rows = reader.rows(sn);
+  const hdr = findHeader(rows, prof.required);
+  return hdr ? new Set(hdr.idx.keys()) : new Set();
+}
+
+/** Qué tanto se parecen dos juegos de columnas (0 a 1). */
+function similarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let both = 0;
+  for (const x of a) if (b.has(x)) both++;
+  return both / (a.size + b.size - both);
+}
+
+/** A qué tipo de archivo va cada hoja del libro (para mostrarlo al cargar). */
+export function sheetAssignments(reader: WorkbookReader, detections: Detection[]): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const d of detections) for (const sn of neededSheets(reader, d.datasetId)) (out[sn] ??= []).push(d.datasetId);
+  return out;
 }
 
 /** Hojas que `parseWorkbook` va a leer para ese tipo de archivo. Basta con los encabezados, así que
@@ -692,7 +732,7 @@ function bestSheet(reader: WorkbookReader, prof: Profile): string | null {
   for (const cand of reader.sheetNames) {
     const rows = reader.rows(cand);
     if (!findHeader(rows, prof.required)) continue;
-    const score = coverage(rows, prof, prof.required) + markerHits(rows, prof);
+    const score = coverage(rows, prof, prof.required) + markerHits(rows, prof) + (prof.fileHint?.test(cand) ? 2 : 0);
     if (score > bestScore) (best = cand), (bestScore = score);
   }
   return best ?? named;

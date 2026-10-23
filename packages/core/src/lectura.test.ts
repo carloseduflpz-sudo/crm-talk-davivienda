@@ -162,6 +162,31 @@ describe("TDC: base de primeras vs. segundas cuentas", () => {
     expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:segundas").rows.map((r) => r.niu)).toEqual(["222"]);
   });
 
+  it("primeras y segundas con LAS MISMAS columnas en hojas distintas: el nombre de la hoja las separa", () => {
+    const ENT = ["NIUCliente", "NombreSociedad", "NumeroDUI", "Municipio", "Departamento", "TelNotificaciones", "Límite", "PERFIL"];
+    const bytes = book([
+      ["Primeras Cuentas", ENT, "111"],
+      ["Segundas Cuentas", ENT, "222"],
+    ]);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    const pri = readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras");
+    expect(pri.rows.map((r) => r.niu)).toEqual(["111"]);
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:segundas").rows.map((r) => r.niu)).toEqual(["222"]);
+    expect(pri.hojas).toEqual([
+      { name: "Primeras Cuentas", rows: 2, tipos: ["tdc:base:primeras"] },
+      { name: "Segundas Cuentas", rows: 2, tipos: ["tdc:base:segundas"] },
+    ]);
+  });
+
+  it("una hoja con otras columnas nunca se suma a la base", () => {
+    const bytes = book([
+      ["Base", PRI, "111"],
+      ["Otra", ["NIU", "Perfil", "Municipio", "Departamento", "Observaciones"], "999"],
+    ]);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    expect(readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras").rows.map((r) => r.niu)).toEqual(["111"]);
+  });
+
   it("si no se reconoce, el mensaje dice qué encabezados trae el archivo", () => {
     const bytes = book([["Datos", ["Cliente", "Telefono", "Monto"]]]);
     const { reader, detections } = peekWorkbook(X, bytes, "tdc");

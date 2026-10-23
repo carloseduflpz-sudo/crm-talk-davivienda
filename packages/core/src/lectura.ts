@@ -11,6 +11,7 @@ import {
   dominantMonth,
   headerPreview,
   neededSheets,
+  sheetAssignments,
   normalizeRow,
   parseWorkbook,
   type Detection,
@@ -42,6 +43,8 @@ export interface ExcelReading {
   sheet: string;
   missingOptional: string[];
   month: { month: string; share: number; byMonth: Record<string, number> } | null;
+  /** Cada hoja del libro: cuántas filas tiene (si se sabe) y a qué tipo(s) de archivo va. */
+  hojas: { name: string; rows: number | null; tipos: string[] }[];
 }
 
 export type Step = (message: string) => void;
@@ -60,6 +63,15 @@ function totalRows(wb: WorkBookLike, sheet: string): number | null {
   const ws = wb.Sheets[sheet] as Record<string, unknown> | undefined;
   // Sin !fullref la hoja cupo completa en la lectura parcial (o SheetJS no lo informó): no se adivina.
   const ref = ws?.["!fullref"] as string | undefined;
+  const m = ref?.match(/^[A-Z]+(\d+)(?::[A-Z]+(\d+))?$/i);
+  return m ? Number(m[2] ?? m[1]) - Number(m[1]) + 1 : null;
+}
+
+/** Filas de una hoja para mostrarlas: el rango completo si se leyó en parte, o el rango leído si cupo entera. */
+function sheetRowCount(wb: WorkBookLike, sheet: string): number | null {
+  const full = totalRows(wb, sheet);
+  if (full !== null) return full;
+  const ref = (wb.Sheets[sheet] as Record<string, unknown> | undefined)?.["!ref"] as string | undefined;
   const m = ref?.match(/^[A-Z]+(\d+)(?::[A-Z]+(\d+))?$/i);
   return m ? Number(m[2] ?? m[1]) - Number(m[1]) + 1 : null;
 }
@@ -123,7 +135,9 @@ export function readDataset(
   /** false cuando el libro se compactó: el rango declarado de la hoja ya no dice cuántas filas hay. */
   countRows = true,
 ): ExcelReading {
-  const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null };
+  const assigned = sheetAssignments(peek, detections);
+  const hojas = peek.sheetNames.map((name) => ({ name, rows: countRows ? sheetRowCount(peek.wb, name) : null, tipos: assigned[name] ?? [] }));
+  const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null, hojas };
   if (!datasetId) {
     return {
       ...base,
