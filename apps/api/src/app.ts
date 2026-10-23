@@ -3,6 +3,7 @@ import { CAMPAIGNS, ROLES, permissionsOf, type Role } from "@crm/core";
 import { audit } from "./audit";
 import { registerAnalisis } from "./analisis";
 import { registerCargas } from "./cargas";
+import { registerClientes } from "./clientes";
 import { registerDetalle } from "./detalle";
 import {
   LOCK_MINUTES,
@@ -269,6 +270,11 @@ export function createApp(): Router {
     const target = await getUser(env, parseId(params.id));
     const body = await readJson(req);
     const displayName = body.displayName === undefined ? target.display_name : parseDisplayName(body.displayName);
+    const username = body.username === undefined ? target.username : parseUsername(body.username);
+    if (username !== target.username) {
+      const taken = await env.DB.prepare("SELECT 1 AS x FROM users WHERE username = ? AND id <> ?").bind(username, target.id).first();
+      if (taken) throw new HttpError(409, `Ya existe el usuario "${username}".`);
+    }
     const role = body.role === undefined ? (target.role as Role) : parseRole(body.role);
     const active = body.active === undefined ? Boolean(target.active) : body.active === true;
     const unlock = body.unlock === true;
@@ -284,15 +290,21 @@ export function createApp(): Router {
     if (target.id === user.id && !active) throw new HttpError(400, "No puedes desactivar tu propio usuario.");
 
     await env.DB.prepare(
-      `UPDATE users SET display_name = ?, role = ?, active = ?, updated_at = ?,
+      `UPDATE users SET display_name = ?, username = ?, role = ?, active = ?, updated_at = ?,
               failed_attempts = CASE WHEN ? THEN 0 ELSE failed_attempts END,
               locked_until = CASE WHEN ? THEN NULL ELSE locked_until END
         WHERE id = ?`,
     )
-      .bind(displayName, role, active ? 1 : 0, Date.now(), unlock ? 1 : 0, unlock ? 1 : 0, target.id)
+      .bind(displayName, username, role, active ? 1 : 0, Date.now(), unlock ? 1 : 0, unlock ? 1 : 0, target.id)
       .run();
     if (!active) await deleteUserSessions(env, target.id);
-    await audit(env, user.username, "usuario_editado", `usuario:${target.username}`, { role, active, unlock });
+    await audit(env, user.username, "usuario_editado", `usuario:${target.username}`, {
+      role,
+      active,
+      unlock,
+      ...(displayName !== target.display_name ? { nombre: displayName } : {}),
+      ...(username !== target.username ? { usuario: username } : {}),
+    });
     return json({ ok: true, user: publicUser(await getUser(env, target.id)) });
   });
 
@@ -315,6 +327,7 @@ export function createApp(): Router {
   registerCargas(r);
   registerAnalisis(r);
   registerDetalle(r);
+  registerClientes(r);
 
   return r;
 }

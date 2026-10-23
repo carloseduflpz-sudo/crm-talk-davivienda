@@ -9,6 +9,7 @@ import {
   WorkbookReader,
   detectDatasets,
   dominantMonth,
+  headerPreview,
   neededSheets,
   normalizeRow,
   parseWorkbook,
@@ -124,7 +125,10 @@ export function readDataset(
 ): ExcelReading {
   const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null };
   if (!datasetId) {
-    return { ...base, error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Revisa que sea el archivo correcto o elige el tipo a mano.` };
+    return {
+      ...base,
+      error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Elige el tipo a mano arriba; si aun así no se lee, comparte estos encabezados para ajustarlo. ${headerPreview(peek)}`,
+    };
   }
   const sheets = neededSheets(peek, datasetId);
   // Sin hojas que leer: el lector da el mensaje exacto de qué falta.

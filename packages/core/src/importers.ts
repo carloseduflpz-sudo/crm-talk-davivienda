@@ -160,6 +160,8 @@ interface Profile {
   markers?: string[];
   /** Nombre de archivo típico ("2a TDC", "BAU"...): si coincide, casi seguro es este. */
   fileHint?: RegExp;
+  /** Para reconocerlo solo: además de las obligatorias, al menos `min` de estas columnas (evita confundirlo con cualquier archivo con NIU). */
+  detectMin?: { min: number; cols: string[] };
 }
 
 /* ---------- perfiles ---------- */
@@ -273,16 +275,31 @@ export const PROFILES: Record<string, Profile> = {
     label: "Base Primeras Cuentas (BAU)",
     sheets: [],
     anySheet: true,
-    markers: ["Producto Principal", "Oferta", "Monto2", "Tasa2", "Cuota", "Limite", "Score Tc", "CANAL", "Estrategia", "Correo", "TEL Notificaciones", "Plazo (meses)"],
+    // Dos formatos: el de siempre (NIU, PERFIL, Oferta...) y el "entregable" del banco (NIUCliente, NombreSociedad, NumeroDUI...).
+    markers: [
+      "Producto Principal", "Oferta", "Monto2", "Tasa2", "Cuota", "Limite", "Score Tc", "CANAL", "Estrategia", "Correo", "TEL Notificaciones", "Plazo (meses)",
+      "NIUCliente", "NombreSociedad", "NumeroDUI", "Clasificación Riesgo", "Cluster_TC",
+    ],
     fileHint: /(^|[^a-z])bau([^a-z]|$)|primer|tarjetas?[\s_.-]*nuevas?/i,
     dashBlank: true,
-    required: ["NIU", ["PERFIL", "Perfil"]],
+    required: [["NIU", "NIUCliente", "NIU Cliente", "NIU_CLIENTE"]],
+    detectMin: {
+      min: 2,
+      cols: [
+        "Perfil", "Municipio", "Departamento", "Correo", "Correo Electrónico", "TEL Notificaciones", "TelNotificaciones", "Oferta", "Limite", "Límite", "Marca",
+        "Tipo", "Tipo Tarjeta", "Score Tc", "NombreSociedad", "Nombre legal según IBS", "DUI", "NumeroDUI", "Edad", "Segmento", "Tipo empresa", "Producto Principal",
+      ],
+    },
     fields: {
-      NIU: ["NIU", "niu"], DUI: ["DUI"], Municipio: ["Municipio"], Departamento: ["Departamento"], Correo: ["Correo"],
-      "TEL Notificaciones": ["TEL Notificaciones"], "Producto Principal": ["Producto Principal"], Oferta: ["Oferta"],
+      NIU: [["NIU", "NIUCliente", "NIU Cliente", "NIU_CLIENTE"], "niu"], DUI: [["DUI", "NumeroDUI", "Dui"]], Municipio: ["Municipio"], Departamento: ["Departamento"],
+      Correo: [["Correo", "Correo Electrónico", "Correo Electronico"]], "TEL Notificaciones": [["TEL Notificaciones", "TelNotificaciones", "Telefono", "Teléfono"]],
+      "Tel. 1": [["Tel. 1", "Tel.1", "Telefono 1"]], "Producto Principal": ["Producto Principal"], Oferta: ["Oferta"],
       Monto2: [["Monto2", "Monto"], "num"], "Plazo (meses)": [["Plazo (meses)", "Plazo"]], Tasa2: [["Tasa2", "Tasa"]], Cuota: ["Cuota", "num"],
-      Limite: [["Limite", "Límite"], "num"], "Score Tc": ["Score Tc"], Edad: ["Edad", "int"], Genero: [["Genero", "Género"]], Marca: ["Marca"], Tipo: ["Tipo"],
-      CANAL: ["CANAL"], Estrategia: ["Estrategia"], Nombre: ["Nombre legal según IBS"], Perfil: [["PERFIL", "Perfil"]], Segmento: [["Tipo empresa", "Segmento"]],
+      Limite: [["Limite", "Límite", "Limite TC", "Límite TC"], "num"], "Score Tc": [["Score Tc", "Score TC", "Score"]], Edad: ["Edad", "int"], Genero: [["Genero", "Género"]],
+      Marca: ["Marca"], Tipo: [["Tipo", "Tipo Tarjeta", "Tipo de TC"]], CANAL: ["CANAL"], Estrategia: ["Estrategia"],
+      Nombre: [["Nombre legal según IBS", "NombreSociedad", "Nombre", "Nombre Completo"]], Perfil: [["PERFIL", "Perfil"]],
+      Segmento: [["Tipo empresa", "Segmento", "Segmento Empresa"]], ClasifRiesgo: [["Clasificación Riesgo", "Clasificacion Riesgo"]], Cluster: [["Cluster_TC", "Cluster TC"]],
+      BASE: [["BASE", "Base"]],
     },
   },
   "tdc:tipif": VICI,
@@ -647,6 +664,19 @@ function coverage(rows: Cell[][], prof: Profile, required: (string | string[])[]
   return specs.length ? hit / specs.length : 0;
 }
 
+/** Encabezados que trae el libro (la fila más llena de las primeras de cada hoja): para explicar por qué no se reconoció. */
+export function headerPreview(reader: WorkbookReader, maxSheets = 3, maxCols = 30): string {
+  return reader.sheetNames
+    .slice(0, maxSheets)
+    .map((sn) => {
+      const rows = reader.rows(sn).slice(0, 15);
+      const best = rows.reduce<Cell[]>((b, r) => ((r ?? []).filter((c) => !isBlank(c)).length > b.filter((c) => !isBlank(c)).length ? (r ?? []) : b), []);
+      const cols = best.filter((c) => !isBlank(c)).map((c) => String(c).trim());
+      return cols.length ? `Hoja "${sn}": ${cols.slice(0, maxCols).join(", ")}${cols.length > maxCols ? "…" : ""}` : `Hoja "${sn}": vacía`;
+    })
+    .join(" | ");
+}
+
 /** Qué tipos de archivo de la campaña coinciden con el libro, del más probable al menos. */
 export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode, fileName = ""): Detection[] {
   const found: Detection[] = [];
@@ -665,6 +695,10 @@ export function detectDatasets(reader: WorkbookReader, campaign: CampaignCode, f
     const sheet = bestSheet(reader, prof);
     if (!sheet || !findHeader(reader.rows(sheet), prof.required)) continue;
     const rows = reader.rows(sheet);
+    if (prof.detectMin) {
+      const hdr = findHeader(rows, prof.required)!;
+      if (prof.detectMin.cols.filter((c) => hdr.idx.has(normHeader(c))).length < prof.detectMin.min) continue;
+    }
     // Hoja con el nombre esperado, columnas obligatorias, parecido general, columnas exclusivas y nombre del archivo.
     const score =
       (sheet === named ? 10 : 0) +

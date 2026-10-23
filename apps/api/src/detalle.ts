@@ -4,6 +4,7 @@
    los archivos VIGENTES del mes. */
 import { isCampaignCode } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
+import { contactFrom, parseExtra } from "./clientes";
 import { HttpError, json, type Router } from "./http";
 
 interface Source {
@@ -97,7 +98,9 @@ export function registerDetalle(r: Router): void {
     const { results: ups } = await env.DB.prepare("SELECT id FROM uploads WHERE campaign = ? AND month = ? AND kind = ? AND is_current = 1")
       .bind(campaign, mes, src.kind)
       .all<{ id: string }>();
-    const columns = src.columns.map(([key, label]) => ({ key, label }));
+    // Datos para dar seguimiento: nombre y teléfono junto al NIU; DUI y correo al final.
+    const [first, ...rest] = src.columns.map(([key, label]) => ({ key, label }));
+    const columns = [first!, { key: "cliente", label: "Cliente" }, { key: "telefono", label: "Teléfono" }, ...rest, { key: "dui", label: "DUI" }, { key: "correo", label: "Correo" }];
     if (!ups.length) return json({ ok: true, total: 0, rows: [], columns });
 
     const where = [`upload_id IN (${ups.map(() => "?").join(", ")})`];
@@ -152,10 +155,22 @@ export function registerDetalle(r: Router): void {
     }
 
     const w = where.join(" AND ");
+    // Lo que el cliente trae en la base del mes (teléfono, correo...) completa lo que no venga en el archivo.
+    const { results: baseUps } =
+      src.table === "base_records"
+        ? { results: [] as { id: string }[] }
+        : await env.DB.prepare("SELECT id FROM uploads WHERE campaign = ? AND month = ? AND kind = 'base' AND is_current = 1").bind(campaign, mes).all<{ id: string }>();
+    const baseExtra = baseUps.length
+      ? `(SELECT b.extra FROM base_records b WHERE b.upload_id IN (${baseUps.map((u) => `'${u.id.replace(/'/g, "''")}'`).join(", ")}) AND b.niu = ${src.table}.niu LIMIT 1)`
+      : "NULL";
     const [count, rows] = await env.DB.batch([
       env.DB.prepare(`SELECT COUNT(*) AS n FROM ${src.table} WHERE ${w}`).bind(...binds),
-      env.DB.prepare(`SELECT ${src.columns.map(([k]) => k).join(", ")} FROM ${src.table} WHERE ${w} ORDER BY ${src.order} LIMIT ?`).bind(...binds, limit),
+      env.DB.prepare(`SELECT ${src.columns.map(([k]) => k).join(", ")}, extra AS __extra, ${baseExtra} AS __base FROM ${src.table} WHERE ${w} ORDER BY ${src.order} LIMIT ?`).bind(...binds, limit),
     ]);
-    return json({ ok: true, total: Number((count!.results[0] as { n: number } | undefined)?.n ?? 0), rows: rows!.results, columns });
+    const out = (rows!.results as Record<string, unknown>[]).map(({ __extra, __base, ...r }) => {
+      const k = contactFrom(parseExtra(__extra), parseExtra(__base));
+      return { ...r, cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
+    });
+    return json({ ok: true, total: Number((count!.results[0] as { n: number } | undefined)?.n ?? 0), rows: out, columns });
   });
 }

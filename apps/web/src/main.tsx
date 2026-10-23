@@ -8,6 +8,7 @@ import { EmptyState } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 import { Campaign } from "./pages/Campaign";
 import { ChangePassword } from "./pages/ChangePassword";
+import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { Placeholder } from "./pages/Placeholder";
@@ -77,14 +78,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Home /> },
       { path: "campanas/:code/:tab?", element: <Campaign /> },
-      {
-        path: "cliente",
-        element: (
-          <Placeholder title="Cliente (NIU)" subtitle="Todo lo que pasó con un cliente, en todas las campañas." icon={Search} phase="Fase 2">
-            Buscador por NIU con la línea de tiempo de bases, llamadas, ventas y estatus del banco.
-          </Placeholder>
-        ),
-      },
+      { path: "cliente", element: <Client /> },
       { path: "carga", element: <Upload /> },
       {
         path: "reportes",

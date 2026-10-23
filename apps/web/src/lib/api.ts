@@ -46,6 +46,21 @@ export interface DetailResult {
   rows: Record<string, string | number | null>[];
 }
 
+/** Ficha de un cliente (ver apps/api/src/clientes.ts). */
+export interface ClientFile {
+  niu: string;
+  contacto: { nombre: string | null; telefono: string | null; telefonos: string[]; dui: string | null; correo: string | null; municipio: string | null; departamento: string | null };
+  campanas: {
+    campaign: string;
+    /** Sábana vigente más reciente de la campaña: con ella está al día la ficha. */
+    sabana: { month: string; cargada: number } | null;
+    ventas: { month: string; fecha: string | null; agente: string; estatus: string | null; clase: string; motivo: string | null; monto: number | null; proceso: string | null; dias: number | null; extra: Record<string, string | number> }[];
+    bases: { month: string; dataset: string; perfil: string | null; oferta: string | null; adicional: boolean; nombreBase: string | null; extra: Record<string, string | number> }[];
+    llamadas: { month: string; fecha: string | null; agente: string; categoria: string | null; tipologia: string | null; clase: string }[];
+    crm: { month: string; fecha: string | null; agente: string; producto: string | null; extra: Record<string, string | number> }[];
+  }[];
+}
+
 export interface Me {
   id: number;
   username: string;
@@ -131,7 +146,7 @@ export const api = {
 
   users: () => get<{ users: UserAccount[] }>("/usuarios").then((r) => r.users),
   createUser: (b: { username: string; displayName: string; role: Role; password: string }) => post("/usuarios", b),
-  updateUser: (id: number, b: Partial<{ displayName: string; role: Role; active: boolean; unlock: boolean }>) => patch(`/usuarios/${id}`, b),
+  updateUser: (id: number, b: Partial<{ displayName: string; username: string; role: Role; active: boolean; unlock: boolean }>) => patch(`/usuarios/${id}`, b),
   resetPassword: (id: number, password: string) => post(`/usuarios/${id}/clave`, { password }),
 
   uploads: (campaign?: string) => get<{ uploads: UploadInfo[] }>(`/cargas${campaign ? `?campana=${campaign}` : ""}`).then((r) => r.uploads),
@@ -166,6 +181,8 @@ export const api = {
   },
   history: (campaign: string, agent?: string | null) =>
     get<{ meses: MonthSummary[] }>(`/analisis/${campaign}/historico${agent ? `?agente=${encodeURIComponent(agent)}` : ""}`).then((r) => r.meses),
+  /** Todo lo que hay de un cliente: contacto, ventas, bases, llamadas y CRM (de una campaña o de todas). */
+  client: (niu: string, campaign?: string | null) => get<ClientFile>(`/clientes/${encodeURIComponent(niu)}${campaign ? `?campana=${campaign}` : ""}`),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {
     const q = new URLSearchParams();

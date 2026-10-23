@@ -137,6 +137,23 @@ describe("TDC: base de primeras vs. segundas cuentas", () => {
     expect(top(comun, "Primeras cuentas septiembre.xlsx")).toBe("tdc:base:primeras");
   });
 
+  it("Primeras Cuentas en formato entregable del banco (NIUCliente, NombreSociedad...) y sin PERFIL", () => {
+    const ENT = ["NIUCliente", "NombreSociedad", "NumeroDUI", "Municipio", "Departamento", "Correo", "TelNotificaciones", "Límite", "Tipo Tarjeta", "Clasificación Riesgo"];
+    const bytes = book([["Entregable", ENT, "4455"]]);
+    expect(top(bytes)).toBe("tdc:base:primeras");
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    const r = readDataset(X, bytes, "tdc", reader, detections, "tdc:base:primeras");
+    expect(r.error).toBeNull();
+    expect(r.rows[0]).toMatchObject({ niu: "4455", profile: null });
+    expect(r.rows[0]!.extra).toMatchObject({ Nombre: "NombreSociedad 1", DUI: "NumeroDUI 1", "TEL Notificaciones": "TelNotificaciones 1" });
+  });
+
+  it("si no se reconoce, el mensaje dice qué encabezados trae el archivo", () => {
+    const bytes = book([["Datos", ["Cliente", "Telefono", "Monto"]]]);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    expect(readDataset(X, bytes, "tdc", reader, detections, null).error).toContain('Hoja "Datos": Cliente, Telefono, Monto');
+  });
+
   it("un libro con las dos bases: cada tipo lee su propia hoja", () => {
     const bytes = book([
       ["Segundas", SEG, "222"],

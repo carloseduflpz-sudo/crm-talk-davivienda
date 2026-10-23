@@ -1,7 +1,7 @@
 /* Administración de usuarios: alta, contraseñas temporales, roles, activar/desactivar y desbloqueo. */
 import { ROLES, type Role } from "@crm/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, Lock, Plus, Unlock, UserCheck, UserX, Wand2 } from "lucide-react";
+import { Copy, KeyRound, Lock, Pencil, Plus, Unlock, UserCheck, UserX, Wand2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Button, ErrorMessage, Field, PASSWORD_HINT } from "../components/form";
 import { Badge, Card, PageHeader } from "../components/ui";
@@ -115,6 +115,51 @@ function NewUserForm({ onCreated, onCancel }: { onCreated: (username: string, pa
   );
 }
 
+/** Editar el perfil: nombre completo y usuario con el que entra. */
+function EditProfile({ u, onDone }: { u: UserAccount; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({ displayName: u.displayName, username: u.username });
+  const save = useMutation({
+    mutationFn: () => api.updateUser(u.id, { displayName: form.displayName, username: form.username.trim().toLowerCase() }),
+    onSuccess: async () => {
+      await Promise.all([qc.invalidateQueries({ queryKey: ["users"] }), qc.invalidateQueries({ queryKey: ["me"] })]);
+      onDone();
+    },
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate();
+  };
+  const changedUser = form.username.trim().toLowerCase() !== u.username;
+  return (
+    <form onSubmit={submit} className="grid gap-4 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-800/40">
+      <Field label="Nombre completo" required autoFocus value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
+      <Field
+        label="Usuario"
+        hint={changedUser ? `Desde ahora entra como "${form.username.trim().toLowerCase()}"; su contraseña no cambia.` : "Con el que entra al CRM"}
+        autoCapitalize="none"
+        spellCheck={false}
+        required
+        value={form.username}
+        onChange={(e) => setForm({ ...form, username: e.target.value })}
+      />
+      {save.error && (
+        <div className="sm:col-span-2">
+          <ErrorMessage>{save.error.message}</ErrorMessage>
+        </div>
+      )}
+      <div className="flex gap-2 sm:col-span-2">
+        <Button type="submit" loading={save.isPending}>
+          Guardar cambios
+        </Button>
+        <Button type="button" variant="secondary" onClick={onDone}>
+          Cancelar
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 function UserRow({ u, me, onTempPassword }: { u: UserAccount; me: Me; onTempPassword: (username: string, password: string) => void }) {
   const qc = useQueryClient();
   const refresh = () => qc.invalidateQueries({ queryKey: ["users"] });
@@ -128,6 +173,15 @@ function UserRow({ u, me, onTempPassword }: { u: UserAccount; me: Me; onTempPass
   });
   const isMe = u.id === me.id;
   const error = update.error?.message || reset.error?.message;
+  const [editing, setEditing] = useState(false);
+
+  if (editing)
+    return (
+      <li className="px-5 py-4">
+        <p className="mb-3 text-sm font-medium">Editar perfil de {u.displayName}</p>
+        <EditProfile u={u} onDone={() => setEditing(false)} />
+      </li>
+    );
 
   return (
     <li className={`flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center ${u.active ? "" : "opacity-60"}`}>
@@ -145,6 +199,9 @@ function UserRow({ u, me, onTempPassword }: { u: UserAccount; me: Me; onTempPass
         {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" onClick={() => setEditing(true)}>
+          <Pencil className="size-4" aria-hidden /> Editar
+        </Button>
         <select
           aria-label={`Rol de ${u.displayName}`}
           className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"

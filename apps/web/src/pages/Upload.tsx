@@ -149,7 +149,8 @@ function History({ campaign, canRestore }: { campaign: CampaignCode; canRestore:
     setError("");
     try {
       await fn();
-      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] })]);
+      // La ficha del cliente también se arma con estos archivos: se vuelve a consultar.
+      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] }), qc.invalidateQueries({ queryKey: ["cliente"] })]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo completar la acción.");
     } finally {
@@ -485,7 +486,8 @@ export function Upload() {
       }
       setPhase({ name: "saving", done, total: rows.length, step: "Verificando y activando la versión…" });
       const { upload } = await api.confirmUpload(c.id);
-      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] })]);
+      // La ficha del cliente también se arma con estos archivos: se vuelve a consultar.
+      await Promise.all([qc.invalidateQueries({ queryKey: ["uploads"] }), qc.invalidateQueries({ queryKey: ["analysis"] }), qc.invalidateQueries({ queryKey: ["cliente"] })]);
       closeReader(); // ya no hace falta el archivo en memoria
       setPhase({ name: "done", upload, warning });
     } catch (e) {

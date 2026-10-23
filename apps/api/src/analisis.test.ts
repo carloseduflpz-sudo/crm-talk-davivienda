@@ -433,3 +433,30 @@ describe("homologación de agentes", () => {
   });
 });
 
+
+describe("seguimiento del cliente", () => {
+  it("el detalle trae nombre y teléfono (de la sábana o de la base) y la ficha junta todo", async () => {
+    await load("upin:sabana", "2026-09", [{ niu: "555", saleDate: "2026-09-03", executive: "ANA RIVERA", statusRaw: "APLICADO", process: "INCREMENTO", extra: { Nombre: "Ana Pérez", Limite: 1500 } }]);
+    await load("upin:base", "2026-09", [{ niu: "555", profile: "Premium", offer: "Incremento", extra: { NombreSociedad: "ANA PEREZ", TelNotificaciones: "7777-0000", Correo: "ana@correo.com", Municipio: "San Salvador" } }]);
+    await load("upin:tipif", "2026-09", [{ niu: "555", agent: "Ana Rivera", calledAt: "2026-09-02T10:00:00", category: "Contacto efectivo positivo", tipologia: "Venta realizada" }]);
+
+    const d = await call("GET", "/analisis/upin/detalle?fuente=ventas&mes=2026-09");
+    expect(d.status, String(d.data.error)).toBe(200);
+    expect((d.data.columns as { key: string }[]).map((c) => c.key).slice(0, 3)).toEqual(["niu", "cliente", "telefono"]);
+    expect((d.data.rows as Record<string, unknown>[])[0]).toMatchObject({ niu: "555", cliente: "Ana Pérez", telefono: "7777-0000", correo: "ana@correo.com" });
+
+    const f = await call("GET", "/clientes/555");
+    expect(f.status, String(f.data.error)).toBe(200);
+    expect(f.data.contacto).toMatchObject({ nombre: "Ana Pérez", telefono: "7777-0000", correo: "ana@correo.com", municipio: "San Salvador" });
+    const c = (f.data.campanas as { campaign: string; ventas: { estatus: string; extra: Record<string, unknown> }[]; bases: unknown[]; llamadas: { agente: string }[] }[]).find((x) => x.campaign === "upin")!;
+    expect(c.ventas[0]).toMatchObject({ estatus: "APLICADO", extra: { Nombre: "Ana Pérez", Limite: 1500 } });
+    expect(c.bases).toHaveLength(1);
+    expect(c.llamadas[0]!.agente).toBe("Ana Rivera");
+    expect((await call("GET", "/clientes/12a")).status).toBe(400);
+    // Pegado con ceros a la izquierda o espacios: es el mismo cliente; dice con qué sábana está al día.
+    const pegado = await call("GET", "/clientes/" + encodeURIComponent(" 000 555 "));
+    expect(pegado.data.niu).toBe("555");
+    expect((pegado.data.campanas as { campaign: string; sabana: { month: string } | null }[]).find((x) => x.campaign === "upin")?.sabana?.month).toBe("2026-09");
+    expect(((await call("GET", "/clientes/999999")).data.campanas as unknown[]).length).toBe(0);
+  });
+});

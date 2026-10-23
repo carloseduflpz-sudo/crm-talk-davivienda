@@ -2,12 +2,13 @@
    una tipificación, un día o un indicador. Búsqueda por NIU o agente y descarga a Excel. */
 import { getCampaign, type CampaignCode } from "@crm/core";
 import { useQuery } from "@tanstack/react-query";
-import { Download, LoaderCircle, Search, X } from "lucide-react";
+import { ArrowLeft, Download, LoaderCircle, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { downloadExcel } from "../lib/export";
 import { monthLabel } from "../lib/xlsx";
 import { dayLabel, fmtInt } from "./charts";
+import { ClientCard } from "./ClientCard";
 
 export type DetailSource = "ventas" | "llamadas" | "crm" | "base";
 
@@ -44,6 +45,10 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
   const [error, setError] = useState("");
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Ficha del cliente elegido en la lista (Escape vuelve a la lista).
+  const [selected, setSelected] = useState<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selected;
 
   // La búsqueda espera a que se deje de escribir.
   useEffect(() => {
@@ -56,7 +61,10 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
     const before = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (selectedRef.current) setSelected(null);
+        else onClose();
+      }
       if (e.key === "Tab" && panelRef.current) {
         const f = panelRef.current.querySelectorAll<HTMLElement>("button, input, [tabindex]:not([tabindex='-1'])");
         const first = f[0],
@@ -110,6 +118,7 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
                 <>
                   <span className="font-medium text-ink tabular-nums">{fmtInt.format(d.total)}</span> {d.total === 1 ? one : many}
                   {search && ` que coinciden con "${search}"`}
+                  {d.total > 0 && !selected && <span className="text-ink-faint"> · clic en un cliente para ver su ficha</span>}
                 </>
               ) : (
                 " "
@@ -121,6 +130,19 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
           </button>
         </div>
 
+        {selected ? (
+          <div className="min-h-0 flex-1 overflow-auto">
+            <div className="sticky top-0 z-10 border-b border-hair bg-white/95 px-6 py-3 backdrop-blur dark:bg-slate-900/95">
+              <button type="button" onClick={() => setSelected(null)} className="inline-flex items-center gap-2 text-[13px] font-medium text-brand-600 hover:underline">
+                <ArrowLeft className="size-4" aria-hidden /> Volver a la lista
+              </button>
+            </div>
+            <div className="px-6 pt-6 pb-10">
+              <ClientCard niu={selected} campaign={campaign} />
+            </div>
+          </div>
+        ) : (
+          <>
         <div className="flex flex-wrap items-center gap-3 px-6 py-4">
           <label className="relative min-w-56 flex-1">
             <span className="sr-only">Buscar por NIU o agente</span>
@@ -168,7 +190,14 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
               </thead>
               <tbody className={detail.isFetching ? "opacity-60 transition-opacity" : "transition-opacity"}>
                 {d.rows.map((r, i) => (
-                  <tr key={i} className="border-b border-hair last:border-0 hover:bg-paper/60 dark:hover:bg-slate-800/40">
+                  <tr
+                    key={i}
+                    tabIndex={r.niu ? 0 : undefined}
+                    onClick={() => r.niu && setSelected(String(r.niu))}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && r.niu && (e.preventDefault(), setSelected(String(r.niu)))}
+                    title={r.niu ? "Ver la ficha del cliente" : undefined}
+                    className={`border-b border-hair outline-none last:border-0 hover:bg-paper/60 focus-visible:bg-paper dark:hover:bg-slate-800/40 ${r.niu ? "cursor-pointer" : ""}`}
+                  >
                     {d.columns.map((c, j) => (
                       <td key={c.key} className={`max-w-64 truncate px-4 py-2.5 whitespace-nowrap first:pl-6 last:pr-6 ${j === 0 ? "font-medium text-ink tabular-nums" : "text-ink/80"}`} title={String(r[c.key] ?? "")}>
                         {cell(c.key, r[c.key], campaign) || <span className="text-ink-faint">—</span>}
@@ -184,6 +213,8 @@ export function ClientDetail({ campaign, month, agent, spec, onClose }: { campai
           <p className="border-t border-hair px-6 py-3 text-[12.5px] text-ink-soft">
             Se muestran {fmtInt.format(d.rows.length)} de {fmtInt.format(d.total)}. Busca un NIU o descarga el Excel para verlos todos.
           </p>
+        )}
+          </>
         )}
       </div>
     </div>

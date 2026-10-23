@@ -220,6 +220,20 @@ describe("usuarios", () => {
     expect((await browser().call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" })).status).toBe(401);
   });
 
+  it("editar el perfil: nombre y usuario (sin repetir usuario); entra con el nuevo", async () => {
+    const admin = await setupAdmin();
+    const { data } = await admin.call("POST", "/usuarios", { username: "luis", displayName: "Luis", role: "lector", password: "Temporal2026" });
+    const id = (data.user as { id: number }).id;
+    await admin.call("POST", "/usuarios", { username: "ana", displayName: "Ana", role: "lector", password: "Temporal2026" });
+    expect((await admin.call("PATCH", `/usuarios/${id}`, { username: "ana" })).status).toBe(409);
+    expect((await admin.call("PATCH", `/usuarios/${id}`, { username: "x" })).status).toBe(400);
+    const r = await admin.call("PATCH", `/usuarios/${id}`, { displayName: "  Luis   Hernández ", username: "Luis.Hernandez" });
+    expect(r.status).toBe(200);
+    expect(r.data.user).toMatchObject({ displayName: "Luis Hernández", username: "luis.hernandez", role: "lector" });
+    expect((await browser().call("POST", "/auth/entrar", { username: "luis.hernandez", password: "Temporal2026" })).status).toBe(200);
+    expect((await browser().call("POST", "/auth/entrar", { username: "luis", password: "Temporal2026" })).status).toBe(401);
+  });
+
   it("no deja la app sin administrador", async () => {
     const admin = await setupAdmin();
     const me = (await admin.call("GET", "/me")).data as { id: number };
