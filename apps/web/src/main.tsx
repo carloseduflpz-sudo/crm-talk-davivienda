@@ -7,6 +7,7 @@ import { Layout } from "./components/Layout";
 import { EmptyState } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 import { Campaign } from "./pages/Campaign";
+import { BulkUpload } from "./pages/BulkUpload";
 import { ChangePassword } from "./pages/ChangePassword";
 import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
@@ -80,6 +81,7 @@ const router = createBrowserRouter([
       { path: "campanas/:code/:tab?", element: <Campaign /> },
       { path: "cliente", element: <Client /> },
       { path: "carga", element: <Upload /> },
+      { path: "carga/zip", element: <BulkUpload /> },
       {
         path: "reportes",
         element: (

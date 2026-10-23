@@ -10,3 +10,5 @@ export * from "./compactar";
 export * from "./metas";
 export * from "./agentes";
 export * from "./sabana";
+export * from "./zip";
+export * from "./bulk";
