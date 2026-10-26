@@ -837,11 +837,15 @@ function graficaContacto(c: Ctx, d: PresentacionCampania, chart: string, series:
 
 function graficaCumplimiento(c: Ctx, d: PresentacionCampania, chart: string, series: ReturnType<typeof readChart>): string {
   if (!d.esperado) throw new Error("Falta la meta del mes (o la sábana) para calcular el cumplimiento MTD.");
-  const r = d.resultado / d.esperado;
+  // Porcentaje entero: 43.6% se presenta como 44% (y el GAP, como su complemento: -56%).
+  const r = Math.round((d.resultado / d.esperado) * 100) / 100;
+  const gap = Math.round((r - 1) * 100) / 100;
   const old = series[0]!.values;
   cambio(c, "Cumplimiento MTD", "Cumplimiento", pctTxt(old[0]), pctTxt(r));
-  cambio(c, "Cumplimiento MTD", "GAP", pctTxt(old[1]), pctTxt(r - 1));
-  return fillChart(chart, [{ values: [r, r - 1] }]);
+  cambio(c, "Cumplimiento MTD", "GAP", pctTxt(old[1]), pctTxt(gap));
+  const out = fillChart(chart, [{ values: [r, gap] }]);
+  // La etiqueta toma el formato de los datos: sin decimales.
+  return out.replace(/(<c:val>[\s\S]*?<c:formatCode>)0\.0+%(<\/c:formatCode>)/, "$10%$2");
 }
 
 const pctTxt = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);

@@ -219,6 +219,11 @@ describe("presentación: llenado de las láminas", () => {
     expect(deck.parts["ppt/charts/chart1.xml"]!.includes("externalData")).toBe(false);
     expect(deck.parts["ppt/charts/_rels/chart1.xml.rels"]).toBe('<Relationships><Relationship Id="rId1" Type="x" Target="style1.xml"/></Relationships>');
     expect(readChart(deck.parts["ppt/charts/chart2.xml"]!)[0]!.values).toEqual([0.75, -0.25]);
+    // Cumplimiento redondeado al entero (43.6% → 44%) y la etiqueta sin decimales.
+    const deck2 = memoryDeck({ ...parts, "ppt/charts/chart2.xml": parts["ppt/charts/chart2.xml"]!.replace("<c:formatCode>General</c:formatCode>", "<c:formatCode>0.0%</c:formatCode>") }, rels);
+    await llenarPresentacion(deck2, { upin: { ...upin, resultado: 43.6, esperado: 100 } }, { mesPlantilla: "2026-10" });
+    expect(readChart(deck2.parts["ppt/charts/chart2.xml"]!)[0]!.values).toEqual([0.44, -0.56]);
+    expect(deck2.parts["ppt/charts/chart2.xml"]!.includes("<c:formatCode>0%</c:formatCode>")).toBe(true);
     // Corte el 14 → semana 3: las semanas 1 y 2 se respetan de la plantilla y la 3 es lo que falta para el total.
     const w = readChart(deck.parts["ppt/charts/chart3.xml"]!);
     expect(w[0]!.values).toEqual([4, 9, 7, null, null]); // upgrade activas: 20
