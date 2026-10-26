@@ -199,6 +199,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     month,
     unidad: a.cumplimiento.unidad,
     meta: a.cumplimiento.meta,
+    hc: a.cumplimiento.agentes,
     esperado: a.cumplimiento.esperado,
     diasHabiles: { transcurridos: a.cumplimiento.diaDelMes, total: a.cumplimiento.diasDelMes },
     resultado: a.cumplimiento.ventas,

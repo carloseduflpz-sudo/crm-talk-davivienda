@@ -78,6 +78,8 @@ export interface PresentacionCampania {
   month: string;
   unidad: "ventas" | "monto";
   meta: number | null;
+  /** Número de agentes (HC) que se puso con la meta. */
+  hc: number | null;
   /** Meta MTD: la meta repartida en los días hábiles del mes hasta el último día con ventas en la sábana. */
   esperado: number | null;
   /** Días hábiles transcurridos (hasta la fecha de corte de la sábana) y días hábiles del mes. */
@@ -240,7 +242,7 @@ export function campanaDeTitulo(title: string): CampaignCode | null {
 }
 
 /** Grupo (base) que menciona un texto: primeras o segundas cuentas, Bau o Piloto. */
-function grupoDeTexto(campaign: CampaignCode, s: string): string | null {
+export function grupoDeTexto(campaign: CampaignCode, s: string): string | null {
   const t = norm(s);
   if (campaign === "tdc") {
     if (/(^|\s)1\s*(er|ra|eras|ras)?(\s|$)|primer/.test(t)) return "tdc:base:primeras";
@@ -710,18 +712,44 @@ function graficaCampana(c: Ctx, d: PresentacionCampania, chart: string, grupo: s
 
 const SIN_TIPIFICAR = /^(sin tipificar|sin asignar|en llamada|)$/;
 
-function graficaContacto(c: Ctx, d: PresentacionCampania, chart: string, series: ReturnType<typeof readChart>, grupo: string | null): string {
-  const bases = basesDe(d, grupo);
-  if (!bases.length) throw new Error("Falta la base del mes.");
-  const tpl = series[0]!.categories;
+/** Clientes recorridos por la categoría de su última llamada. "Sin asignar a un agente" y "En llamada" van con "Sin Tipificar". */
+export function contactoDe(d: PresentacionCampania, grupo: string | null, etiquetas: string[] = []): Map<string, number> {
   const m = new Map<string, number>();
-  for (const b of bases) {
+  for (const b of basesDe(d, grupo)) {
     for (const x of b.contacto) {
       const k = norm(x.label);
-      const label = SIN_TIPIFICAR.test(k) || k.startsWith("sin asignar") ? (tpl.find((t) => norm(t) === "sin tipificar") ?? "Sin Tipificar") : etiqueta(x.label, tpl);
+      const label = SIN_TIPIFICAR.test(k) || k.startsWith("sin asignar") ? (etiquetas.find((t) => norm(t) === "sin tipificar") ?? "Sin Tipificar") : etiqueta(x.label, etiquetas);
       m.set(label, (m.get(label) ?? 0) + x.n);
     }
   }
+  return m;
+}
+
+/** Cifras de "Cantado vs Activo" de una campaña (o de una de sus bases), con las mismas reglas que la lámina. */
+export function resumenGrupo(d: PresentacionCampania, grupo: string | null) {
+  const bases = basesDe(d, grupo);
+  const vs = ventasDe(d, grupo).filter((v) => v.k !== 2);
+  const medida = (xs: PresVenta[]) => sum(xs.map((v) => (d.unidad === "monto" ? v.valor : v.ops)));
+  const mes = vs.filter((v) => v.origen === "mes");
+  const cosechaActivas = vs.filter((v) => v.origen === "cosecha" && v.k === 1);
+  const unicos = sum(bases.map((b) => b.unicos));
+  const recorridos = sum(bases.map((b) => b.recorridos));
+  return {
+    bases: bases.length,
+    unicos,
+    recorridos,
+    nuevo: unicos - recorridos,
+    cantadas: medida(mes) + medida(cosechaActivas),
+    activas: medida(mes.filter((v) => v.k === 1)) + medida(cosechaActivas),
+    activasMes: medida(mes.filter((v) => v.k === 1)),
+    cosecha: medida(cosechaActivas),
+  };
+}
+
+function graficaContacto(c: Ctx, d: PresentacionCampania, chart: string, series: ReturnType<typeof readChart>, grupo: string | null): string {
+  if (!basesDe(d, grupo).length) throw new Error("Falta la base del mes.");
+  const tpl = series[0]!.categories;
+  const m = contactoDe(d, grupo, tpl);
   const items = [...m.entries()].sort((a, b) => b[1] - a[1] || tpl.indexOf(a[0]) - tpl.indexOf(b[0]));
   const block = `Gráfica de contacto${grupo ? ` (${grupo.split(":").pop()})` : ""}`;
   for (const [l, v] of items) {

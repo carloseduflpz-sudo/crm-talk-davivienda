@@ -48,6 +48,7 @@ const upin: PresentacionCampania = {
   month: "2026-10",
   unidad: "ventas",
   meta: 100,
+  hc: 2,
   esperado: 80,
   diasHabiles: { transcurridos: 16, total: 22 },
   resultado: 60,

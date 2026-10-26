@@ -1,9 +1,26 @@
 /* Presentación semanal: la presentación de la semana anterior con las cifras de lo último que se cargó.
    Solo cambian los números: diseño, colores, imágenes y las láminas de CDC, Extra y Seguros quedan igual.
    Todo se arma aquí, en el navegador; el servidor solo da las cifras y guarda la plantilla. */
-import { CAMPAIGNS, Pptx, PRES_CAMPANAS, llenarPresentacion, nombreMes, semanaDe, type PresDatos, type PresResultado, type PresentacionCampania } from "@crm/core";
+import {
+  CAMPAIGNS,
+  Pptx,
+  PRES_CAMPANAS,
+  aplicarControl,
+  cuadrarControl,
+  getCampaign,
+  leerControl,
+  llenarPresentacion,
+  nombreMes,
+  semanaDe,
+  type ControlExcel,
+  type CuadreFila,
+  type Hoja,
+  type PresDatos,
+  type PresResultado,
+  type PresentacionCampania,
+} from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, CloudUpload, Download, LoaderCircle, Presentation as PresentationIcon, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, CloudUpload, Download, FileSpreadsheet, LoaderCircle, Presentation as PresentationIcon, TriangleAlert } from "lucide-react";
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { Card, PageHeader } from "../components/ui";
 import { api, type PlantillaInfo } from "../lib/api";
@@ -69,6 +86,9 @@ export function Presentation() {
   const datos = useQuery({ queryKey: ["presentacion", mes], queryFn: () => cargarDatos(mes), refetchOnWindowFocus: true });
 
   const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean } | null>(null);
+  // Excel de control (el de las gráficas): se cruza con lo que calcula la app y, si se pide, se usan su meta, HC y días.
+  const [control, setControl] = useState<{ nombre: string; data: ControlExcel } | null>(null);
+  const [usarExcel, setUsarExcel] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -87,7 +107,8 @@ export function Presentation() {
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
       setBusy("Poniendo las cifras…");
-      const res = await llenarPresentacion(deck, frescos, { mesPlantilla: p.mes });
+      const usados = control && usarExcel ? aplicarControl(frescos, control.data) : frescos;
+      const res = await llenarPresentacion(deck, usados, { mesPlantilla: p.mes });
       const bytes = await deck.save();
       const nombre = nombreSalida(p.nombre, mes, semanaActual(frescos, mes));
       download(bytes, nombre);
@@ -168,7 +189,212 @@ export function Presentation() {
       )}
 
       {result && <Resultado {...result} />}
+
+      <CuadreExcel datos={datos.data ?? null} control={control} onControl={setControl} usarExcel={usarExcel} onUsarExcel={setUsarExcel} />
     </>
+  );
+}
+
+/* ---------- cuadre con el Excel de control ---------- */
+
+type XLSXLib = {
+  read(data: ArrayBuffer, opts: Record<string, unknown>): { SheetNames: string[]; Sheets: Record<string, unknown> };
+  utils: { sheet_to_json(ws: unknown, opts: Record<string, unknown>): Hoja };
+};
+let sheetjs: Promise<XLSXLib> | null = null;
+/** El mismo lector de Excel que usa el Centro de carga, cargado solo cuando se necesita. */
+function cargarSheetJS(): Promise<XLSXLib> {
+  const w = window as unknown as { XLSX?: XLSXLib };
+  sheetjs ??= new Promise((resolve, reject) => {
+    if (w.XLSX) return resolve(w.XLSX);
+    const s = document.createElement("script");
+    s.src = "/vendor/xlsx-0.18.5.full.min.js";
+    s.onload = () => (w.XLSX ? resolve(w.XLSX) : reject(new Error("No se pudo abrir el lector de Excel.")));
+    s.onerror = () => {
+      sheetjs = null;
+      reject(new Error("No se pudo abrir el lector de Excel. Revisa tu conexión y vuelve a intentar."));
+    };
+    document.head.append(s);
+  });
+  return sheetjs;
+}
+
+async function leerExcelControl(file: File): Promise<ControlExcel> {
+  const XLSX = await cargarSheetJS();
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const hojas: Record<string, Hoja> = {};
+  for (const n of wb.SheetNames) hojas[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null });
+  const ctrl = leerControl(hojas);
+  if (!ctrl.campanas.length && !ctrl.hojas.length) throw new Error("No encontré la hoja TALK (con HC y Meta) ni hojas de campaña con Cantado vs Activo en este Excel.");
+  return ctrl;
+}
+
+function fmtCifra(v: number | null, f: CuadreFila["formato"]): string {
+  if (v === null) return "—";
+  if (f === "porcentaje") return `${v.toFixed(1)}%`;
+  const n = Math.round(v).toLocaleString("en-US");
+  return f === "dinero" ? `$${n}` : n;
+}
+
+function CuadreExcel({
+  datos,
+  control,
+  onControl,
+  usarExcel,
+  onUsarExcel,
+}: {
+  datos: PresDatos | null;
+  control: { nombre: string; data: ControlExcel } | null;
+  onControl: (c: { nombre: string; data: ControlExcel } | null) => void;
+  usarExcel: boolean;
+  onUsarExcel: (v: boolean) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [leyendo, setLeyendo] = useState(false);
+  const [error, setError] = useState("");
+  const filas = useMemo(() => (control && datos ? cuadrarControl(control.data, usarExcel ? aplicarControl(datos, control.data) : datos) : []), [control, datos, usarExcel]);
+  const porCampana = useMemo(() => {
+    const m = new Map<string, CuadreFila[]>();
+    for (const f of filas) m.set(f.campaign, [...(m.get(f.campaign) ?? []), f]);
+    return [...m.entries()];
+  }, [filas]);
+  const sinDatos = control ? [...new Set([...control.data.campanas.map((c) => c.campaign), ...control.data.hojas.map((h) => h.campaign)])].filter((c) => !datos?.[c]) : [];
+
+  const pick = async (f: File) => {
+    setError("");
+    setLeyendo(true);
+    try {
+      onControl({ nombre: f.name, data: await leerExcelControl(f) });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLeyendo(false);
+    }
+  };
+
+  const ok = filas.filter((f) => f.cuadra).length;
+  return (
+    <section className="mt-10" aria-labelledby="cuadre">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 id="cuadre" className="text-[17px] font-semibold text-ink">
+            Cuadre con tu Excel
+          </h2>
+          <p className="mt-1 max-w-2xl text-[13px] text-ink-soft">
+            Sube el Excel de las gráficas (el de la hoja TALK). Se compara cifra por cifra con lo que calcula la app y, donde no cuadra, te dice de dónde sale el número de la app.
+          </p>
+        </div>
+        <button
+          onClick={() => input.current?.click()}
+          disabled={leyendo}
+          className="inline-flex items-center gap-2 rounded-xl border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-brand-500/60 disabled:opacity-50 dark:bg-slate-900"
+        >
+          {leyendo ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <FileSpreadsheet className="size-4 text-emerald-600" aria-hidden />}
+          {control ? "Subir otro Excel" : "Subir Excel"}
+        </button>
+        <input
+          ref={input}
+          type="file"
+          accept=".xlsx,.xlsm,.xls,.xlsb"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void pick(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="mt-3 text-sm text-red-600">
+          {error}
+        </p>
+      )}
+
+      {control && (
+        <>
+          <Card className="mt-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="text-[13px]">
+                <p className="font-medium text-ink">{control.nombre}</p>
+                <p className="text-ink-soft">
+                  {filas.length ? `${ok} de ${filas.length} cifras cuadran.` : "Ninguna cifra para comparar con el mes elegido."}
+                  {control.data.diasMes !== null && ` Tu Excel: ${control.data.diasMTD ?? "?"} de ${control.data.diasMes} días hábiles.`}
+                </p>
+                {sinDatos.length > 0 && <p className="mt-1 text-ink-soft">Sin datos en la app este mes: {sinDatos.map((c) => getCampaign(c).shortName).join(", ")}.</p>}
+              </div>
+              <label className="flex max-w-sm items-start gap-2 text-[13px] text-ink">
+                <input type="checkbox" checked={usarExcel} onChange={(e) => onUsarExcel(e.target.checked)} className="mt-0.5 size-4 accent-brand-500" />
+                <span>
+                  Usar la meta, el HC y los días de este Excel en la presentación
+                  <span className="block text-ink-soft">La M, el cumplimiento y el gap salen con tus días transcurridos en lugar de los de la sábana.</span>
+                </span>
+              </label>
+            </div>
+          </Card>
+
+          <div className="mt-3 space-y-2">
+            {porCampana.map(([camp, fs]) => {
+              const malas = fs.filter((f) => !f.cuadra).length;
+              return (
+                <details key={`${camp}-${usarExcel}`} open={malas > 0} className="group rounded-2xl border border-hair bg-white dark:bg-slate-900">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[13px]">
+                    <span className="font-semibold text-ink">{getCampaign(camp as PresentacionCampania["campaign"]).shortName}</span>
+                    <span className="flex items-center gap-2 text-ink-soft">
+                      {malas ? (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {malas} de {fs.length} no cuadran
+                        </span>
+                      ) : (
+                        <span className="text-emerald-700 dark:text-emerald-400">Todo cuadra</span>
+                      )}
+                      <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
+                    </span>
+                  </summary>
+                  <div className="overflow-x-auto px-4 pb-3">
+                    <table className="w-full table-fixed text-[13px]">
+                      <colgroup>
+                        <col className="w-36" />
+                        <col />
+                        <col className="w-28" />
+                        <col className="w-28" />
+                        <col className="w-8" />
+                      </colgroup>
+                      <thead>
+                        <tr className="text-left text-ink-soft">
+                          <th className="py-1 pr-3 font-medium">Hoja</th>
+                          <th className="py-1 pr-3 font-medium">Dato</th>
+                          <th className="py-1 pr-3 text-right font-medium">Tu Excel</th>
+                          <th className="py-1 pr-3 text-right font-medium">La app</th>
+                          <th className="py-1 font-medium">
+                            <span className="sr-only">¿Cuadra?</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-hair">
+                        {fs.map((f, i) => (
+                          <tr key={i} className="align-top">
+                            <td className="truncate py-1.5 pr-3 text-ink-soft">{f.hoja.trim()}</td>
+                            <td className="py-1.5 pr-3 text-ink">
+                              {f.dato}
+                              {!f.cuadra && <span className="mt-0.5 block text-[12px] text-ink-soft">{f.como}</span>}
+                            </td>
+                            <td className="py-1.5 pr-3 text-right tabular-nums text-ink">{fmtCifra(f.excel, f.formato)}</td>
+                            <td className={`py-1.5 pr-3 text-right font-medium tabular-nums ${f.cuadra ? "text-ink" : "text-amber-700 dark:text-amber-400"}`}>{fmtCifra(f.app, f.formato)}</td>
+                            <td className="py-1.5">
+                              {f.cuadra ? <Check className="size-4 text-emerald-600" aria-label="Cuadra" /> : <TriangleAlert className="size-4 text-amber-600" aria-label="No cuadra" />}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
