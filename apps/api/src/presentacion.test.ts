@@ -101,6 +101,9 @@ describe("presentación: cifras de TDC octubre", () => {
     expect(pick("102")).toMatchObject({ origen: "mes", k: 0, grupo: "tdc:base:primeras" });
     expect(d.resultado).toBe(3);
     expect(d.meta).toBe(20);
+    // La sábana llega al 7 de octubre: 5 de los 22 días hábiles del mes → meta MTD = 20 × 5 / 22.
+    expect(d.diasHabiles).toEqual({ transcurridos: 5, total: 22 });
+    expect(d.esperado).toBeCloseTo((20 * 5) / 22, 6);
   });
 
   it("motivos: subtipologías de cada tipología (sin no contacto ni ventas)", () => {
@@ -110,9 +113,12 @@ describe("presentación: cifras de TDC octubre", () => {
     ]);
   });
 
-  it("trimestre: meta por agente y ventas que cuentan de cada agente", () => {
+  it("trimestre: meta MTD por agente y ventas que cuentan de cada agente", () => {
     expect(d.trimestre).toHaveLength(1);
-    expect(d.trimestre[0]).toMatchObject({ month: "2026-10", meta: 20, metaPorAgente: 10, resultado: 3 });
+    // Mes en curso: meta y meta por agente a MTD.
+    expect(d.trimestre[0]).toMatchObject({ month: "2026-10", mtd: true, resultado: 3 });
+    expect(d.trimestre[0]!.meta!).toBeCloseTo((20 * 5) / 22, 6);
+    expect(d.trimestre[0]!.metaPorAgente!).toBeCloseTo((10 * 5) / 22, 6);
     expect([...d.trimestre[0]!.porAgente].sort((a, b) => a.agent.localeCompare(b.agent))).toEqual([
       { agent: "Ana", ventas: 2 },
       { agent: "Luis", ventas: 1 },

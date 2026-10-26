@@ -180,7 +180,18 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     const x = m === month ? a : a.months.includes(m) ? await analyzeCampaign(env, campaign, m) : null;
     if (!x || x.month !== m) continue;
     const c = x.cumplimiento;
-    trimestre.push({ month: m, meta: c.meta, metaPorAgente: c.metaPorAgente, resultado: c.ventas, porAgente: c.porAgente.map((p) => ({ agent: p.agent, ventas: p.ventas })), agentes: x.agentes });
+    // El mes en curso se mide contra la meta MTD (a los días hábiles que lleva la sábana); los meses cerrados, contra la meta completa.
+    const enCurso = m === month;
+    const share = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
+    trimestre.push({
+      month: m,
+      meta: enCurso ? c.esperado : c.meta,
+      metaPorAgente: enCurso ? (c.metaPorAgente === null ? null : c.metaPorAgente * share) : c.metaPorAgente,
+      mtd: enCurso,
+      resultado: c.ventas,
+      porAgente: c.porAgente.map((p) => ({ agent: p.agent, ventas: p.ventas })),
+      agentes: x.agentes,
+    });
   }
 
   return {
@@ -189,6 +200,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     unidad: a.cumplimiento.unidad,
     meta: a.cumplimiento.meta,
     esperado: a.cumplimiento.esperado,
+    diasHabiles: { transcurridos: a.cumplimiento.diaDelMes, total: a.cumplimiento.diasDelMes },
     resultado: a.cumplimiento.ventas,
     fechaCorte: a.cumplimiento.fechaCorte,
     bases,

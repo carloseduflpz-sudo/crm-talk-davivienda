@@ -167,11 +167,15 @@ export function Presentation() {
 }
 
 function EstadoCampana({ d }: { d: PresentacionCampania }) {
-  const meta = d.meta === null ? "sin meta del mes" : `meta ${d.unidad === "monto" ? `$${Math.round(d.meta).toLocaleString("en-US")}` : d.meta.toLocaleString("en-US")}`;
+  const num = (v: number) => (d.unidad === "monto" ? `$${Math.round(v).toLocaleString("en-US")}` : Math.round(v).toLocaleString("en-US"));
+  const meta = d.meta === null ? "sin meta del mes" : `meta del mes ${num(d.meta)}`;
+  const mtd =
+    d.esperado === null ? null : `Meta MTD ${num(d.esperado)} (${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles) · cumplimiento ${Math.round((d.resultado / d.esperado) * 100)}%`;
   const faltan = [!d.bases.length && "base", !d.ventas.length && "sábana", !d.motivos.length && "tipificaciones"].filter(Boolean);
   return (
     <>
       {d.fechaCorte ? `Ventas al ${fmtDay(d.fechaCorte)}` : "Sin sábana"} · {meta}
+      {mtd && <span className="block text-[12px]">{mtd}</span>}
       {faltan.length > 0 && <span className="block text-[12px] text-amber-700 dark:text-amber-400">Falta: {faltan.join(", ")}</span>}
     </>
   );

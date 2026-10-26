@@ -62,8 +62,11 @@ export interface PresMotivo {
 
 export interface PresMesGap {
   month: string;
+  /** Meta del mes. En el mes en curso es la meta MTD: lo esperado a los días hábiles que lleva la sábana. */
   meta: number | null;
   metaPorAgente: number | null;
+  /** true si `meta` y `metaPorAgente` son MTD (mes en curso). */
+  mtd: boolean;
   resultado: number;
   porAgente: { agent: string; ventas: number }[];
   /** Agentes que trabajaron el mes (sábana, VICI o CRM), vendieran o no. */
@@ -75,8 +78,10 @@ export interface PresentacionCampania {
   month: string;
   unidad: "ventas" | "monto";
   meta: number | null;
-  /** Meta MTD (lo esperado a la fecha de corte). */
+  /** Meta MTD: la meta repartida en los días hábiles del mes hasta el último día con ventas en la sábana. */
   esperado: number | null;
+  /** Días hábiles transcurridos (hasta la fecha de corte de la sábana) y días hábiles del mes. */
+  diasHabiles: { transcurridos: number; total: number };
   /** Lo que cuenta para la meta (ventas activas del mes + cosecha). */
   resultado: number;
   fechaCorte: string | null;
@@ -806,10 +811,11 @@ async function smartArt(c: Ctx, d: PresentacionCampania, dataPart: string, slide
   const t = texts(data).map((x) => x.trim()).filter(Boolean);
   if (t.length !== 2 || !/^[MR]$/.test(t[0]!)) return;
   const old = t[1]!;
-  const value = t[0] === "M" ? d.meta : d.resultado;
-  if (value === null) throw new Error("Falta la meta del mes.");
+  // M es la meta MTD (a los días hábiles que lleva la sábana), igual que en el Excel: (meta ÷ días del mes) × días transcurridos.
+  const value = t[0] === "M" ? d.esperado : d.resultado;
+  if (value === null) throw new Error("Falta la meta del mes (o la sábana) para calcular la meta MTD.");
   const now = comoAntes(old, value, d.unidad === "monto" ? { comas: true } : {});
-  cambio(c, t[0] === "M" ? "Recuadro M (meta del mes)" : "Recuadro R (resultado)", t[0]!, old, now);
+  cambio(c, t[0] === "M" ? `Recuadro M (meta MTD, ${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles)` : "Recuadro R (resultado)", t[0]!, old, now);
   if (now === old) return;
   c.deck.write(dataPart, replaceExactText(data, old, now).xml);
   // El dibujo ya armado del SmartArt (lo que se ve) también trae el número.

@@ -7,6 +7,8 @@ const cell = (t: string) => `<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="900
 const table = (x: number, rows: string[][]) =>
   `<p:graphicFrame><p:xfrm><a:off x="${x}" y="0"/><a:ext cx="10" cy="${rows.length * 100}"/></p:xfrm><a:graphic><a:graphicData><a:tbl>${rows.map((r) => `<a:tr h="100">${r.map(cell).join("")}</a:tr>`).join("")}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
 const chartFrame = (x: number, rid: string) => `<p:graphicFrame><p:xfrm><a:off x="${x}" y="0"/><a:ext cx="10" cy="10"/></p:xfrm><a:graphic><a:graphicData><c:chart r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+const smartFrame = (rid: string) => `<p:graphicFrame><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm><a:graphic><a:graphicData><dgm:relIds r:dm="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+const smartData = (k: string, v: string, drawing: string) => `<dgm:dataModel><a:t>${k}</a:t><a:t>${v}</a:t><dsp:dataModelExt relId="${drawing}"/></dgm:dataModel>`;
 const title = (t: string) => `<p:sp><p:txBody><a:p><a:r><a:t>${t}</a:t></a:r></a:p></p:txBody></p:sp>`;
 const slide = (body: string, hidden = false) => `<p:sld${hidden ? ' show="0"' : ""}><p:cSld><p:spTree>${body}</p:spTree></p:cSld></p:sld>`;
 const strCache = (xs: string[]) => `<c:strRef><c:strCache><c:ptCount val="${xs.length}"/>${xs.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join("")}</c:strCache></c:strRef>`;
@@ -47,6 +49,7 @@ const upin: PresentacionCampania = {
   unidad: "ventas",
   meta: 100,
   esperado: 80,
+  diasHabiles: { transcurridos: 16, total: 22 },
   resultado: 60,
   fechaCorte: "2026-10-14",
   bases: [
@@ -82,7 +85,7 @@ const upin: PresentacionCampania = {
     { tipologia: "No le interesa", subtipologia: "Desconfianza", n: 60 },
     { tipologia: "No le interesa", subtipologia: "Otra cosa", n: 40 },
   ],
-  trimestre: [{ month: "2026-10", meta: 100, metaPorAgente: 50, resultado: 60, porAgente: [{ agent: "Ana López", ventas: 35 }, { agent: "Luis Pérez", ventas: 25 }], agentes: ["Ana López", "Luis Pérez", "Supervisor"] }],
+  trimestre: [{ month: "2026-10", meta: 100, metaPorAgente: 50, mtd: true, resultado: 60, porAgente: [{ agent: "Ana López", ventas: 35 }, { agent: "Luis Pérez", ventas: 25 }], agentes: ["Ana López", "Luis Pérez", "Supervisor"] }],
 };
 
 describe("presentación: semanas y formato", () => {
@@ -122,7 +125,9 @@ describe("presentación: llenado de las láminas", () => {
         ]) +
         chartFrame(100, "rId1") +
         chartFrame(200, "rId2") +
-        chartFrame(300, "rId3"),
+        chartFrame(300, "rId3") +
+        smartFrame("rId4") +
+        smartFrame("rId6"),
     ),
     "ppt/slides/slide2.xml": slide(
       title("Upgrade e incrementos") +
@@ -151,6 +156,10 @@ describe("presentación: llenado de las láminas", () => {
     ),
     "ppt/slides/slide4.xml": slide(title("Compra de cartera") + table(0, [["Cantado Vs Activo", ""], ["Registros Únicos", "5"]])),
     "ppt/slides/slide5.xml": slide(title("Upgrade Incremento") + table(0, [["Cantado Vs Activo", ""], ["Registros Únicos", "5"]]), true),
+    "ppt/diagrams/data1.xml": smartData("M", "253", "rId5"),
+    "ppt/diagrams/drawing1.xml": `<dsp:drawing><a:t>M</a:t><a:t>253</a:t></dsp:drawing>`,
+    "ppt/diagrams/data2.xml": smartData("R", "68", "rId7"),
+    "ppt/diagrams/drawing2.xml": `<dsp:drawing><a:t>R</a:t><a:t>68</a:t></dsp:drawing>`,
     "ppt/charts/chart1.xml": chart("Contacto", [{ name: "Cantidad", cats: ["No contacto", "Contacto efectivo", "Sin Tipificar"], vals: [1, 2, 3] }]),
     "ppt/charts/chart2.xml": chart("", [{ name: "", cats: ["Cumplimiento", "GAP"], vals: [0.5, -0.5] }]),
     "ppt/charts/chart3.xml": chart("", [
@@ -159,7 +168,7 @@ describe("presentación: llenado de las láminas", () => {
       { name: "Meta", cats: ["W 1", "W2", "W 3", "W 4", "W 5"], vals: [169, 169, 169, 169, 169] },
     ]),
   };
-  const rels = { "ppt/slides/slide1.xml": { rId1: "ppt/charts/chart1.xml", rId2: "ppt/charts/chart2.xml", rId3: "ppt/charts/chart3.xml" } };
+  const rels = { "ppt/slides/slide1.xml": { rId1: "ppt/charts/chart1.xml", rId2: "ppt/charts/chart2.xml", rId3: "ppt/charts/chart3.xml", rId4: "ppt/diagrams/data1.xml", rId5: "ppt/diagrams/drawing1.xml", rId6: "ppt/diagrams/data2.xml", rId7: "ppt/diagrams/drawing2.xml" } };
 
   it("Cantado vs Activo: base, cantadas, activas del mes, cosecha y estatus de mayor a menor", async () => {
     const deck = memoryDeck({ ...parts }, rels);
@@ -183,6 +192,15 @@ describe("presentación: llenado de las láminas", () => {
     expect(deck.parts["ppt/slides/slide4.xml"]).toBe(parts["ppt/slides/slide4.xml"]);
     expect(deck.parts["ppt/slides/slide5.xml"]).toBe(parts["ppt/slides/slide5.xml"]);
     expect(res.intactas.map((x) => x.lamina)).toEqual([4, 5]);
+  });
+
+  it("recuadro M = meta MTD (no la meta del mes) y R = resultado, en los datos y en el dibujo del SmartArt", async () => {
+    const deck = memoryDeck({ ...parts }, rels);
+    await llenarPresentacion(deck, { upin }, { mesPlantilla: "2026-10" });
+    expect(texts(deck.parts["ppt/diagrams/data1.xml"]!)).toEqual(["M", "80"]);
+    expect(texts(deck.parts["ppt/diagrams/drawing1.xml"]!)).toEqual(["M", "80"]);
+    expect(texts(deck.parts["ppt/diagrams/data2.xml"]!)).toEqual(["R", "60"]);
+    expect(texts(deck.parts["ppt/diagrams/drawing2.xml"]!)).toEqual(["R", "60"]);
   });
 
   it("gráficas: contacto (última llamada), cumplimiento MTD y semanas", async () => {
