@@ -351,4 +351,26 @@ describe("presentación: llenado de las láminas", () => {
     expect(pcbm!.cells[1]).toEqual(["Cliente", "3"]);
     expect(rech!.cells.slice(1)).toEqual([["Mora Actual", "1", "33%"], ["Alto Endeudamiento", "1", "33%"], ["Base Vencida", "1", "33%"]]);
   });
+
+  it("motivos cuyo total dice solo \"Total\": la tipología sale del título que está encima de la tabla", async () => {
+    const encima = (t: string, x: number, y: number) => `<p:sp><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:t>${t}</a:t></a:r></a:p></p:txBody></p:sp>`;
+    const tabla = (x: number, rows: string[][]) => table(x, rows).replace('y="0"', 'y="2000000"');
+    const deck = memoryDeck(
+      {
+        "ppt/slides/slide1.xml": slide(
+          title("Upgrade e incrementos") +
+            encima("No le interesa", 0, 1500000) +
+            tabla(0, [["Tipificación", "Cantidad", "%"], ["Algo", "1", "50%"], ["Total", "2", "100%"]]) +
+            encima("No aplica", 6000000, 1500000) +
+            tabla(6000000, [["Tipificación", "Cantidad", "%"], ["Otra cosa", "1", "50%"], ["Total", "2", "100%"]]),
+        ),
+      },
+      {},
+    );
+    const conAplica = { ...upin, motivos: [...upin.motivos, { tipologia: "No aplica", subtipologia: "No labora", n: 7 }] };
+    await llenarPresentacion(deck, { upin: conAplica }, { mesPlantilla: "2026-10" });
+    const [interes, aplica] = readTables(deck.parts["ppt/slides/slide1.xml"]!);
+    expect(interes!.cells.at(-1)).toEqual(["Total", "1000", "100%"]);
+    expect(aplica!.cells.slice(1)).toEqual([["No labora", "7", "100%"], ["Total", "7", "100%"]]);
+  });
 });

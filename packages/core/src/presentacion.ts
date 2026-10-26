@@ -413,7 +413,7 @@ async function laminaCampana(
       if (/^(cantado\s+vs\.?\s+activo|cosecha)/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells);
       else if (d.campaign === "cdc" && /^referido|otra base/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells, SIN_BASE);
       else if (/^tipo de desembolso/.test(head)) slide = tablaProceso(c, d, slide, t.index, t.cells);
-      else if (/^tipificacion\|cantidad\|%/.test(head)) slide = tablaMotivos(c, d, slide, t.index, t.cells);
+      else if (/^tipificacion\|cantidad\|%/.test(head)) slide = tablaMotivos(c, d, slide, t.index, t.cells, tituloEncima(slide, tableFrames.find((f) => f.tabla === t.index)));
       else if (/^concepto\|clientes\|%/.test(head)) slide = tablaBase(c, d, slide, t.index, t.cells, grupoLamina);
       else if (/^concepto\|base /.test(head)) omitir(c, h0 || "Bases trabajadas", "Se deja igual: compara la base del mes con el remanente del mes anterior, que la app aún no separa.");
       else if (/(^|\|)agente\|antiguedad\|primer trimestre/.test(head)) slide = tablaGapAgentes(c, d, slide, t.index, t.cells);
@@ -656,24 +656,51 @@ function tablaProceso(c: Ctx, d: PresentacionCampania, slide: string, index: num
 
 /* ---------- motivos de no venta ---------- */
 
-function tablaMotivos(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][]): string {
+/** Texto corto que está justo encima de una tabla (p. ej. "No le interesa" sobre la tabla de motivos). */
+function tituloEncima(slide: string, frame: Frame | undefined): string | null {
+  if (!frame) return null;
+  let best: { t: string; dist: number } | null = null;
+  for (const m of slide.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)) {
+    const off = /<a:off x="(-?\d+)" y="(-?\d+)"/.exec(m[0]);
+    const t = texts(m[0]).join("").trim();
+    if (!off || !t || t.length > 40) continue;
+    const dx = Math.abs(Number(off[1]) - frame.x);
+    const dy = frame.y - Number(off[2]);
+    if (dy <= 0 || dy > 1_500_000 || dx > 1_500_000) continue;
+    const dist = dx + dy;
+    if (!best || dist < best.dist) best = { t, dist };
+  }
+  return best?.t ?? null;
+}
+
+/** Tipologías de VICI que corresponden a un nombre ("No le interesa" = "No interesa producto"; "No aplica"). */
+function tipologiasDe(d: PresentacionCampania, nombre: string): PresMotivo[] {
+  const k = norm(nombre);
+  const exact = d.motivos.filter((m) => norm(m.tipologia) === k);
+  if (exact.length) return exact;
+  const parecida = d.motivos.filter((m) => norm(m.tipologia).includes(k) || k.includes(norm(m.tipologia)));
+  if (parecida.length) return parecida;
+  for (const familia of ["interes", "aplica"]) if (k.includes(familia)) return d.motivos.filter((m) => norm(m.tipologia).includes(familia));
+  return [];
+}
+
+function tablaMotivos(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][], titulo: string | null = null): string {
   const total = cells[cells.length - 1]!;
   const tip = total[0] ?? "";
   const body = cells.slice(1, -1);
-  let k = norm(tip);
-  // La fila final dice "Total" en vez de la tipología: es la tipología cuyas subtipologías más se parecen a las de la tabla.
-  if (k === "total") {
+  // La tipología la dice la fila del total o, si dice solo "Total", el título que está encima de la tabla.
+  const nombre = norm(tip) === "total" ? titulo : tip;
+  let list = nombre ? tipologiasDe(d, nombre) : [];
+  if (!list.length && norm(tip) === "total") {
+    // Sin título: la tipología cuyas subtipologías más se parecen a las de la tabla.
     const labels = new Set(body.map((r) => norm(r[0] ?? "")));
     const score = new Map<string, number>();
     for (const m of d.motivos) if (labels.has(norm(m.subtipologia))) score.set(norm(m.tipologia), (score.get(norm(m.tipologia)) ?? 0) + 1);
     const best = [...score.entries()].sort((a, b) => b[1] - a[1]);
-    if (!best.length || (best[1] && best[1][1] === best[0]![1])) throw new Error("No pude saber de qué tipología es esta tabla (su total dice solo \"Total\").");
-    k = best[0]![0];
+    if (best.length && !(best[1] && best[1][1] === best[0]![1])) list = d.motivos.filter((m) => norm(m.tipologia) === best[0]![0]);
   }
-  const all = d.motivos.filter((m) => norm(m.tipologia) === k);
-  const list = all.length ? all : d.motivos.filter((m) => norm(m.tipologia).includes(k) || k.includes(norm(m.tipologia)));
-  if (!list.length) throw new Error(`No hay llamadas con la tipología "${tip}" en las tipificaciones del mes.`);
-  const bloque = norm(tip) === "total" ? list[0]!.tipologia : tip;
+  if (!list.length) throw new Error(`No hay llamadas con la tipología "${nombre ?? tip}" en las tipificaciones del mes.`);
+  const bloque = nombre ?? list[0]!.tipologia;
   const tplLabels = body.map((r) => r[0] ?? "");
   const m = new Map<string, number>();
   for (const x of list) m.set(x.subtipologia, (m.get(x.subtipologia) ?? 0) + x.n);
