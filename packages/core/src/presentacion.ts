@@ -85,6 +85,8 @@ export interface PresentacionCampania {
   /** Lo que cuenta para la meta (ventas activas del mes + cosecha). */
   resultado: number;
   fechaCorte: string | null;
+  /** Ventas con fecha posterior al día en que se cargó la sábana: no se usaron para el corte. */
+  fechasPosteriores: { filas: number; hasta: string } | null;
   bases: PresBase[];
   ventas: PresVenta[];
   motivos: PresMotivo[];

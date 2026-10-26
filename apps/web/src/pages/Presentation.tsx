@@ -25,6 +25,23 @@ export function nombreSalida(plantilla: string, mes: string, semana: number | nu
   return `${out}.pptx`;
 }
 
+/** Cifras de las 6 campañas del mes. Si una campaña no tiene datos de ese mes, el servidor da su último mes: eso no se usa (no se mezclan meses). */
+async function cargarDatos(mes: string): Promise<PresDatos> {
+  const all = await Promise.all(CAMPAIGNS.map((c) => api.presentacionDatos(c.code, mes).catch(() => null)));
+  const out: PresDatos = {};
+  CAMPAIGNS.forEach((c, i) => {
+    const d = all[i];
+    if (d && d.month === mes) out[c.code] = d;
+  });
+  return out;
+}
+
+/** Semana del mes de la sábana más reciente (para el nombre del archivo). */
+function semanaActual(datos: PresDatos, mes: string): number | null {
+  const corte = Object.values(datos).map((d) => d.fechaCorte).filter((x): x is string => Boolean(x && x.startsWith(mes))).sort().pop();
+  return corte ? semanaDe(mes, corte) : null;
+}
+
 function lastMonths(n: number): string[] {
   const now = new Date();
   return Array.from({ length: n }, (_, i) => currentMonth(new Date(now.getFullYear(), now.getMonth() - i, 15)));
@@ -48,42 +65,31 @@ export function Presentation() {
   const plantilla = useQuery({ queryKey: ["plantilla"], queryFn: api.plantilla });
   const [mes, setMes] = useState(currentMonth());
 
-  const datos = useQuery({
-    queryKey: ["presentacion", mes],
-    queryFn: async () => {
-      const all = await Promise.all(CAMPAIGNS.map((c) => api.presentacionDatos(c.code, mes).catch(() => null)));
-      // Si una campaña no tiene datos de ese mes, el servidor da su último mes: eso no se usa (no se mezclan meses).
-      const out: PresDatos = {};
-      CAMPAIGNS.forEach((c, i) => {
-        const d = all[i];
-        if (d && d.month === mes) out[c.code] = d;
-      });
-      return out;
-    },
-  });
+  // Al volver a esta pestaña (p. ej. después de cargar una sábana) se piden de nuevo.
+  const datos = useQuery({ queryKey: ["presentacion", mes], queryFn: () => cargarDatos(mes), refetchOnWindowFocus: true });
 
   const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
-  const corte = useMemo(() => {
-    const fechas = Object.values(datos.data ?? {}).map((d) => d.fechaCorte).filter((x): x is string => Boolean(x && x.startsWith(mes)));
-    return fechas.sort().pop() ?? null;
-  }, [datos.data, mes]);
-  const semana = corte ? semanaDe(mes, corte) : null;
+  const semana = useMemo(() => semanaActual(datos.data ?? {}, mes), [datos.data, mes]);
 
   const generar = async () => {
     const p = plantilla.data;
-    if (!p || !datos.data) return;
+    if (!p) return;
     setError("");
     setResult(null);
     try {
+      // Las cifras se piden de nuevo al dar clic: si se acaba de cargar una sábana, ya sale con ella.
+      setBusy("Leyendo lo último que se cargó…");
+      const frescos = await cargarDatos(mes);
+      void qc.invalidateQueries({ queryKey: ["presentacion", mes] });
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
       setBusy("Poniendo las cifras…");
-      const res = await llenarPresentacion(deck, datos.data, { mesPlantilla: p.mes });
+      const res = await llenarPresentacion(deck, frescos, { mesPlantilla: p.mes });
       const bytes = await deck.save();
-      const nombre = nombreSalida(p.nombre, mes, semana);
+      const nombre = nombreSalida(p.nombre, mes, semanaActual(frescos, mes));
       download(bytes, nombre);
       let guardada = false;
       if (canSave) {
@@ -170,13 +176,19 @@ function EstadoCampana({ d }: { d: PresentacionCampania }) {
   const num = (v: number) => (d.unidad === "monto" ? `$${Math.round(v).toLocaleString("en-US")}` : Math.round(v).toLocaleString("en-US"));
   const meta = d.meta === null ? "sin meta del mes" : `meta del mes ${num(d.meta)}`;
   const mtd =
-    d.esperado === null ? null : `Meta MTD ${num(d.esperado)} (${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles) · cumplimiento ${Math.round((d.resultado / d.esperado) * 100)}%`;
+    d.esperado === null || !d.esperado ? null : `Meta MTD ${num(d.esperado)} (${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles) · cumplimiento ${Math.round((d.resultado / d.esperado) * 100)}%`;
   const faltan = [!d.bases.length && "base", !d.ventas.length && "sábana", !d.motivos.length && "tipificaciones"].filter(Boolean);
   return (
     <>
       {d.fechaCorte ? `Ventas al ${fmtDay(d.fechaCorte)}` : "Sin sábana"} · {meta}
       {mtd && <span className="block text-[12px]">{mtd}</span>}
       {faltan.length > 0 && <span className="block text-[12px] text-amber-700 dark:text-amber-400">Falta: {faltan.join(", ")}</span>}
+      {d.fechasPosteriores && (
+        <span className="block text-[12px] text-amber-700 dark:text-amber-400">
+          La sábana trae {d.fechasPosteriores.filas} {d.fechasPosteriores.filas === 1 ? "venta" : "ventas"} con fecha posterior al día en que se cargó (hasta el{" "}
+          {fmtDay(d.fechasPosteriores.hasta)}): no se toman para el corte
+        </span>
+      )}
     </>
   );
 }

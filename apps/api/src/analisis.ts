@@ -65,6 +65,8 @@ function parseDays(v: string | null | undefined): number[] {
   return d.length ? [...new Set(d)].sort() : [...DEFAULT_WORK_DAYS];
 }
 const n = (v: unknown) => Number(v ?? 0);
+/** Día (AAAA-MM-DD, hora de El Salvador, UTC−6) en que se cargó un archivo. */
+const diaCarga = (ms: number) => new Date(ms - 6 * 3600_000).toISOString().slice(0, 10);
 const placeholders = (k: number) => Array.from({ length: k }, () => "?").join(", ");
 
 /** Ventas y monto acumulados por día del mes (solo fechas de ese mes). */
@@ -133,6 +135,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       avance: null,
       faltan: null,
       fechaCorte: null,
+      fechasPosteriores: null,
       diaDelMes: 0,
       diasDelMes: 0,
       diasRestantes: 0,
@@ -571,7 +574,14 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
                FROM s GROUP BY 1 ORDER BY ventas DESC, total DESC`,
           )
           .bind(...cteBinds),
-        db.prepare(`SELECT MAX(sale_date) AS corte FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`).bind(sabana.id, ...fb, `${month}%`),
+        // El corte es el último día con ventas, pero nunca después del día en que se cargó la sábana:
+        // una fecha mal escrita (p. ej. el 30 cuando la sábana es del 22) haría ver la meta MTD como la del mes completo.
+        db
+          .prepare(
+            `SELECT MAX(CASE WHEN sale_date <= ? THEN sale_date END) AS corte, SUM(sale_date > ?) AS posteriores, MAX(sale_date) AS maxima
+               FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`,
+          )
+          .bind(diaCarga(sabana.created_at), diaCarga(sabana.created_at), sabana.id, ...fb, `${month}%`),
         db
           .prepare(
             `WITH ${prevCte}, ${rowsCte}
@@ -596,7 +606,9 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       c.operaciones = agentes.reduce((sum, r) => sum + n(r.operaciones), 0);
       c.operacionesTotales = agentes.reduce((sum, r) => sum + n(r.operaciones_total), 0);
       c.aprobadas = agentes.reduce((sum, r) => sum + n(r.aprobadas), 0);
-      c.fechaCorte = (porDia!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
+      const corte = porDia!.results[0] as { corte: string | null; posteriores: number | null; maxima: string | null } | undefined;
+      c.fechaCorte = corte?.corte ?? null;
+      c.fechasPosteriores = n(corte?.posteriores) > 0 ? { filas: n(corte?.posteriores), hasta: corte!.maxima! } : null;
       c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
       c.diasRestantes = c.diasDelMes - c.diaDelMes;
       c.ritmoDiario = c.diaDelMes ? c.ventas / c.diaDelMes : 0;

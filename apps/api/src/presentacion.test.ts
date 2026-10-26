@@ -125,6 +125,16 @@ describe("presentación: cifras de TDC octubre", () => {
     ]);
   });
 
+  it("una venta con fecha posterior al día en que se cargó la sábana no mueve el corte (ni la meta MTD)", async () => {
+    // Sábana cargada hoy con fechas de un mes que todavía no llega: son fechas mal escritas.
+    await load("seguros:sabana", "2099-03", [
+      { niu: "1", saleDate: "2099-03-02", executive: "Ana", statusRaw: "EMITIDA" },
+      { niu: "2", saleDate: "2099-03-05", executive: "Ana", statusRaw: "EMITIDA" },
+    ]);
+    const c = ((await call("GET", "/analisis/seguros?mes=2099-03")).data.analysis as { cumplimiento: Record<string, unknown> }).cumplimiento;
+    expect(c).toMatchObject({ fechaCorte: null, diaDelMes: 0, fechasPosteriores: { filas: 2, hasta: "2099-03-05" } });
+  });
+
   it("guarda la plantilla y la devuelve con su mes", async () => {
     expect((await call("GET", "/presentacion/plantilla")).data.plantilla).toBeNull();
     const pptx = new Uint8Array(200);

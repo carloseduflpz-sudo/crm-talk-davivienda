@@ -162,6 +162,8 @@ export interface CampaignAnalysis {
     faltan: number | null;
     /** Último día con ventas en la sábana: hasta ahí se mide el avance. */
     fechaCorte: string | null;
+    /** Ventas del mes con fecha posterior al día en que se cargó la sábana (fechas mal escritas): no mueven el corte. */
+    fechasPosteriores: { filas: number; hasta: string } | null;
     /** Días hábiles transcurridos hasta la fecha de corte (incluida). */
     diaDelMes: number;
     /** Días hábiles del mes. */

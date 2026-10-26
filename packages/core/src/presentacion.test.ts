@@ -52,6 +52,7 @@ const upin: PresentacionCampania = {
   diasHabiles: { transcurridos: 16, total: 22 },
   resultado: 60,
   fechaCorte: "2026-10-14",
+  fechasPosteriores: null,
   bases: [
     {
       dataset: "upin:base",

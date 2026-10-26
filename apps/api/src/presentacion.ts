@@ -203,6 +203,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     diasHabiles: { transcurridos: a.cumplimiento.diaDelMes, total: a.cumplimiento.diasDelMes },
     resultado: a.cumplimiento.ventas,
     fechaCorte: a.cumplimiento.fechaCorte,
+    fechasPosteriores: a.cumplimiento.fechasPosteriores,
     bases,
     ventas,
     motivos,
