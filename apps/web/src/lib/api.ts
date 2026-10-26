@@ -227,6 +227,22 @@ export const api = {
     });
     if (!res.ok) throw await errorOf(res);
   },
+  control: () => get<{ control: { nombre: string; por: string; fecha: number; bytes: number } | null }>("/presentacion/control").then((r) => r.control),
+  controlArchivo: async (): Promise<ArrayBuffer> => {
+    const res = await fetch("/api/presentacion/control/archivo", { credentials: "same-origin" });
+    if (!res.ok) throw await errorOf(res);
+    return res.arrayBuffer();
+  },
+  guardarControl: async (file: File): Promise<void> => {
+    const res = await fetch("/api/presentacion/control", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/octet-stream", "x-crm-archivo": "1", "x-nombre": encodeURIComponent(file.name) },
+      body: file,
+    });
+    if (!res.ok) throw await errorOf(res);
+  },
+  quitarControl: () => post("/presentacion/control/quitar"),
   client: (niu: string, campaign?: string | null) => get<ClientFile>(`/clientes/${encodeURIComponent(niu)}${campaign ? `?campana=${campaign}` : ""}`),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {

@@ -91,9 +91,13 @@ describe("Excel de control", () => {
     expect(f.some((x) => x.campaign === "upin")).toBe(false);
   });
 
-  it("puede usar la meta, el HC y los días del Excel", () => {
+  it("la presentación toma del Excel la M, la R y el contacto; lo demás sigue siendo de la app", () => {
     const d = aplicarControl({ tdc }, ctrl).tdc!;
-    expect(d).toMatchObject({ meta: 253, hc: 7, esperado: 172.5, diasHabiles: { transcurridos: 15, total: 22 } });
+    expect(d).toMatchObject({ meta: 253, hc: 7, esperado: 172.5, resultado: 69, diasHabiles: { transcurridos: 15, total: 22 } });
+    expect(d.contactoExcel).toEqual({ "*": [{ label: "No contacto", n: 6 }, { label: "Sin Tipificar", n: 4 }] });
+    expect(d.bases).toBe(tdc.bases);
+    expect(d.ventas).toBe(tdc.ventas);
+    expect(d.trimestre[0]).toMatchObject({ meta: 172.5, resultado: 69 });
     expect(d.trimestre[0]!.metaPorAgente!).toBeCloseTo(172.5 / 7, 6);
     expect(cuadrarControl(ctrl, { tdc: d }).find((x) => x.dato === "Meta MTD")!.cuadra).toBe(true);
   });

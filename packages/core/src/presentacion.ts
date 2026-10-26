@@ -94,6 +94,8 @@ export interface PresentacionCampania {
   motivos: PresMotivo[];
   /** Meses del trimestre hasta el mes elegido (para las láminas de gap). */
   trimestre: PresMesGap[];
+  /** Gráficas de contacto tomadas del Excel de las gráficas, por base ("*" = toda la campaña). */
+  contactoExcel?: Record<string, PresConteo[]>;
 }
 
 export type PresDatos = Partial<Record<CampaignCode, PresentacionCampania>>;
@@ -747,11 +749,15 @@ export function resumenGrupo(d: PresentacionCampania, grupo: string | null) {
 }
 
 function graficaContacto(c: Ctx, d: PresentacionCampania, chart: string, series: ReturnType<typeof readChart>, grupo: string | null): string {
-  if (!basesDe(d, grupo).length) throw new Error("Falta la base del mes.");
   const tpl = series[0]!.categories;
-  const m = contactoDe(d, grupo, tpl);
+  // Si se subió el Excel de las gráficas, el contacto sale de su hoja (la de esa base, o la de toda la campaña).
+  const principales = basesPrincipales(d);
+  const claves = grupo ? [grupo] : ["*", ...(principales.length === 1 ? [principales[0]!.dataset] : [])];
+  const excel = claves.map((k) => d.contactoExcel?.[k]).find(Boolean);
+  if (!excel && !basesDe(d, grupo).length) throw new Error("Falta la base del mes.");
+  const m = excel ? new Map(excel.map((x) => [etiqueta(x.label, tpl), x.n] as const)) : contactoDe(d, grupo, tpl);
   const items = [...m.entries()].sort((a, b) => b[1] - a[1] || tpl.indexOf(a[0]) - tpl.indexOf(b[0]));
-  const block = `Gráfica de contacto${grupo ? ` (${grupo.split(":").pop()})` : ""}`;
+  const block = `Gráfica de contacto${grupo ? ` (${grupo.split(":").pop()})` : ""}${excel ? " · de tu Excel" : ""}`;
   for (const [l, v] of items) {
     const i = tpl.findIndex((t) => norm(t) === norm(l));
     cambio(c, block, l, i >= 0 ? String(series[0]!.values[i] ?? "") : "—", String(v));

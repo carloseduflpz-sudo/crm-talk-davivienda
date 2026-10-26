@@ -152,6 +152,8 @@ export interface CuadreFila {
   cuadra: boolean;
   /** De dónde sale el número de la app (se muestra cuando no cuadra). */
   como: string;
+  /** De dónde lo toma la presentación: del Excel (M, R, contacto, meta, HC, días) o lo calcula la app. */
+  enPresentacion: "excel" | "app";
 }
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -167,7 +169,8 @@ export function cuadrarControl(ctrl: ControlExcel, datos: PresDatos): CuadreFila
   const out: CuadreFila[] = [];
   const add = (d: PresentacionCampania, hoja: string, dato: string, excel: number | null | undefined, app: number | null, formato: Formato, como: string) => {
     if (excel === undefined || excel === null) return;
-    out.push({ campaign: d.campaign, hoja, dato, excel, app, formato, cuadra: iguales(excel, app, formato), como });
+    const enPresentacion = hoja === "TALK" || dato === "Resultado" || dato === "Cumplimiento MTD" || dato.startsWith("Contacto:") ? "excel" : "app";
+    out.push({ campaign: d.campaign, hoja, dato, excel, app, formato, cuadra: iguales(excel, app, formato), como, enPresentacion });
   };
   const dinero = (d: PresentacionCampania): Formato => (d.unidad === "monto" ? "dinero" : "entero");
 
@@ -231,26 +234,43 @@ export function cuadrarControl(ctrl: ControlExcel, datos: PresDatos): CuadreFila
   return out;
 }
 
-/** Usa la meta, el HC y los días del Excel en lugar de los de la app (para que la presentación salga con esos). */
+/** Hoja principal de una campaña en el Excel: la de toda la campaña o, si no hay, la de su base principal (p. ej. DOMI-Bau). */
+function hojaPrincipal(ctrl: ControlExcel, code: CampaignCode): ControlHoja | undefined {
+  const hs = ctrl.hojas.filter((h) => h.campaign === code);
+  return hs.find((h) => h.grupo === null) ?? hs.find((h) => h.valores.resultado !== undefined);
+}
+
+/**
+ * Lo que la presentación toma del Excel de las gráficas: la M (meta MTD), la R (resultado) y las gráficas
+ * de contacto. Con la M y la R salen también el cumplimiento y la fila del trimestre del gap; el HC del Excel
+ * reparte la M entre los agentes. Todo lo demás sigue saliendo de la sábana, las bases y las tipificaciones.
+ */
 export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos {
   const out: PresDatos = {};
   for (const [code, d] of Object.entries(datos) as [CampaignCode, PresentacionCampania][]) {
     const c = ctrl.campanas.find((x) => x.campaign === code);
-    if (!c || c.meta === null) {
+    const h = hojaPrincipal(ctrl, code);
+    if (!c && !h) {
       out[code] = d;
       continue;
     }
     const total = ctrl.diasMes ?? d.diasHabiles.total;
     const trans = ctrl.diasMTD ?? d.diasHabiles.transcurridos;
-    const hc = c.hc ?? d.hc;
-    const esperado = c.metaMTD ?? (total ? (c.meta / total) * trans : null);
+    const meta = c?.meta ?? d.meta;
+    const hc = c?.hc ?? d.hc;
+    const m = h?.valores.metaMTD ?? c?.metaMTD ?? (meta !== null && total ? (meta / total) * trans : null);
+    const r = h?.valores.resultado ?? d.resultado;
+    const contactoExcel: Record<string, { label: string; n: number }[]> = {};
+    for (const x of ctrl.hojas) if (x.campaign === code && x.contacto.length) contactoExcel[x.grupo ?? "*"] = x.contacto;
     out[code] = {
       ...d,
-      meta: c.meta,
+      meta,
       hc,
       diasHabiles: { total, transcurridos: trans },
-      esperado,
-      trimestre: d.trimestre.map((m) => (m.month === d.month ? { ...m, meta: esperado, metaPorAgente: esperado !== null && hc ? esperado / hc : m.metaPorAgente } : m)),
+      esperado: m,
+      resultado: r,
+      contactoExcel: Object.keys(contactoExcel).length ? contactoExcel : d.contactoExcel,
+      trimestre: d.trimestre.map((t) => (t.month === d.month ? { ...t, meta: m, resultado: r, metaPorAgente: m !== null && hc ? m / hc : t.metaPorAgente } : t)),
     };
   }
   return out;

@@ -47,6 +47,7 @@ beforeAll(async () => {
       head: async (k: string) => (store.has(k) ? { size: store.get(k)!.body.byteLength, customMetadata: store.get(k)!.meta } : null),
       get: async (k: string) => (store.has(k) ? { body: store.get(k)!.body } : null),
       put: async (k: string, body: ArrayBuffer, o: { customMetadata: Record<string, string> }) => void store.set(k, { body, meta: o.customMetadata }),
+      delete: async (k: string) => void store.delete(k),
     } as unknown as R2Bucket,
     APP_ENV: "production",
     SETUP_TOKEN: "clave-de-configuracion-123",
@@ -166,5 +167,16 @@ describe("presentación: cifras de TDC octubre", () => {
     const file = await call("GET", "/presentacion/plantilla/archivo");
     expect((file.data.bytes as Uint8Array).length).toBe(200);
     expect((await call("PUT", "/presentacion/plantilla", new Uint8Array(200), { "x-crm-archivo": "1" })).status).toBe(400);
+  });
+
+  it("guarda el Excel de las gráficas, lo devuelve y se puede quitar", async () => {
+    expect((await call("GET", "/presentacion/control")).data.control).toBeNull();
+    const xlsx = new Uint8Array(300);
+    xlsx.set([0x50, 0x4b, 3, 4]);
+    expect((await call("PUT", "/presentacion/control", xlsx, { "x-crm-archivo": "1", "x-nombre": encodeURIComponent("contacto davivienda.xlsx") })).status).toBe(200);
+    expect((await call("GET", "/presentacion/control")).data.control).toMatchObject({ nombre: "contacto davivienda.xlsx", por: "carlos", bytes: 300 });
+    expect((await call("PUT", "/presentacion/control", new Uint8Array(300), { "x-crm-archivo": "1" })).status).toBe(400);
+    expect((await call("POST", "/presentacion/control/quitar", {})).status).toBe(200);
+    expect((await call("GET", "/presentacion/control")).data.control).toBeNull();
   });
 });

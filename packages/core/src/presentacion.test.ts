@@ -225,6 +225,13 @@ describe("presentación: llenado de las láminas", () => {
     expect(w[2]!.values).toEqual([20, 20, 20, 20, 20]); // meta / 5
   });
 
+  it("con el Excel de las gráficas, el contacto sale de su hoja", async () => {
+    const deck = memoryDeck({ ...parts }, rels);
+    const conExcel = { ...upin, contactoExcel: { "*": [{ label: "Sin Tipificar", n: 3 }, { label: "No contacto", n: 9 }] } };
+    await llenarPresentacion(deck, { upin: conExcel }, { mesPlantilla: "2026-10" });
+    expect(readChart(deck.parts["ppt/charts/chart1.xml"]!)[0]).toMatchObject({ categories: ["No contacto", "Sin Tipificar"], values: [9, 3] });
+  });
+
   it("semanas por fecha de venta cuando la plantilla es de otro mes", async () => {
     const deck = memoryDeck({ ...parts }, rels);
     await llenarPresentacion(deck, { upin }, { mesPlantilla: "2026-09" });

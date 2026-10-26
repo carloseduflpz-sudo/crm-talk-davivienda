@@ -7,6 +7,8 @@ import type { Env } from "./env";
 import { HttpError, json, type Router } from "./http";
 
 const PLANTILLA = "presentacion/plantilla.pptx";
+/** Excel de las gráficas: de él salen la M, la R y el contacto de la presentación. */
+const CONTROL = "presentacion/control.xlsx";
 const MAX_PPTX = 60 * 1024 * 1024;
 const MES = /^20\d{2}-(0[1-9]|1[0-2])$/;
 
@@ -271,4 +273,51 @@ export function registerPresentacion(r: Router): void {
     },
     { raw: true },
   );
+
+  /** El Excel de las gráficas guardado (o null). */
+  r.on("GET", "/presentacion/control", "datos:ver", async ({ env }) => {
+    const obj = await env.FILES.head(CONTROL);
+    if (!obj) return json({ ok: true, control: null });
+    const m = obj.customMetadata ?? {};
+    return json({ ok: true, control: { nombre: m.nombre ?? "control.xlsx", por: m.por ?? "", fecha: Number(m.fecha ?? 0), bytes: obj.size } });
+  });
+
+  r.on("GET", "/presentacion/control/archivo", "datos:ver", async ({ env }) => {
+    const obj = await env.FILES.get(CONTROL);
+    if (!obj) throw new HttpError(404, "No hay un Excel de las gráficas guardado.");
+    return new Response(obj.body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+  });
+
+  r.on(
+    "PUT",
+    "/presentacion/control",
+    "reportes:generar",
+    async ({ env, req, user }) => {
+      let nombre = req.headers.get("x-nombre") ?? "control.xlsx";
+      try {
+        nombre = decodeURIComponent(nombre);
+      } catch {
+        /* ya venía sin codificar */
+      }
+      nombre = nombre.replace(/[\\/\r\n]/g, "_").slice(0, 150) || "control.xlsx";
+      if (Number(req.headers.get("content-length") ?? 0) > MAX_PPTX) throw new HttpError(413, "El Excel es demasiado grande (máximo 60 MB).");
+      const body = await req.arrayBuffer();
+      const h = new Uint8Array(body.slice(0, 4));
+      // .xlsx/.xlsm/.xlsb son ZIP (PK); el .xls viejo es un documento OLE (D0 CF 11 E0).
+      const zip = h[0] === 0x50 && h[1] === 0x4b;
+      const ole = h[0] === 0xd0 && h[1] === 0xcf && h[2] === 0x11 && h[3] === 0xe0;
+      if (body.byteLength < 100 || (!zip && !ole)) throw new HttpError(400, "El archivo no es un Excel.");
+      const meta = { nombre, por: user.username, fecha: String(Date.now()) };
+      await env.FILES.put(CONTROL, body, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: meta });
+      await audit(env, user.username, "presentacion_excel", nombre);
+      return json({ ok: true });
+    },
+    { raw: true },
+  );
+
+  r.on("POST", "/presentacion/control/quitar", "reportes:generar", async ({ env, user }) => {
+    await env.FILES.delete(CONTROL);
+    await audit(env, user.username, "presentacion_excel_quitado", CONTROL);
+    return json({ ok: true });
+  });
 }
