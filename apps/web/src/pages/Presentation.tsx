@@ -1,10 +1,9 @@
 /* Presentación semanal: la presentación de la semana anterior con las cifras de lo último que se cargó.
-   Solo cambian los números: diseño, colores, imágenes y las láminas de CDC, Extra y Seguros quedan igual.
+   Solo cambian los números: diseño, colores e imágenes quedan igual.
    Todo se arma aquí, en el navegador; el servidor solo da las cifras y guarda la plantilla. */
 import {
   CAMPAIGNS,
   Pptx,
-  PRES_CAMPANAS,
   aplicarControl,
   cuadrarControl,
   getCampaign,
@@ -156,13 +155,11 @@ export function Presentation() {
           <ul className="mt-4 divide-y divide-hair text-[13px]">
             {CAMPAIGNS.map((c) => {
               const d = usados?.[c.code];
-              const propia = PRES_CAMPANAS.includes(c.code);
               return (
                 <li key={c.code} className="flex items-baseline justify-between gap-3 py-2">
                   <span className="font-medium text-ink">{c.shortName}</span>
                   <span className="text-right text-ink-soft">
                     {datos.isPending ? "…" : d ? <EstadoCampana d={d} deExcel={Boolean(control.data && (control.data.data.campanas.some((x) => x.campaign === c.code) || control.data.data.hojas.some((x) => x.campaign === c.code)))} /> : <span className="text-amber-700 dark:text-amber-400">Sin datos de {nombreMes(mes).toLowerCase()}: sus cifras quedan como estaban</span>}
-                    {!propia && d && <span className="block text-[12px]">Solo en las láminas generales; sus láminas propias no se tocan</span>}
                   </span>
                 </li>
               );
@@ -328,7 +325,7 @@ function CuadreExcel({
                   {control.data.diasMes !== null && ` · ${control.data.diasMTD ?? "?"} de ${control.data.diasMes} días hábiles`}
                 </p>
                 <p className="mt-2 text-ink">
-                  De este Excel salen la <strong>M</strong>, la <strong>R</strong> (con ellas el cumplimiento y el gap del mes) y las <strong>gráficas de contacto</strong>. Todo lo demás lo calcula la app con las sábanas, las bases y las tipificaciones.
+                  De este Excel salen la <strong>M</strong>, la <strong>R</strong> (con ellas el cumplimiento y el gap del mes), las <strong>gráficas de contacto</strong> y los <strong>registros recorridos</strong> (y con ellos el "Nuevo"). Todo lo demás lo calcula la app con las sábanas, las bases y las tipificaciones.
                 </p>
                 {calculadas.length > 0 && (
                   <p className="mt-1 text-ink-soft">
@@ -339,7 +336,7 @@ function CuadreExcel({
               </>
             ) : (
               <p className="mt-2 text-ink-soft">
-                Sube el Excel de las gráficas (el que tiene la hoja TALK). De él salen la M, la R y las gráficas de contacto; lo demás lo calcula la app. Sin él, todo sale de lo que cargas.
+                Sube el Excel de las gráficas (el que tiene la hoja TALK). De él salen la M, la R, las gráficas de contacto y los registros recorridos; lo demás lo calcula la app. Sin él, todo sale de lo que cargas.
               </p>
             )}
             {errorCarga && <p className="mt-2 text-red-600">{errorCarga}</p>}

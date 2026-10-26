@@ -195,10 +195,11 @@ describe("presentación: llenado de las láminas", () => {
       ["Pendiente", "0"],
     ]);
     expect(res.cambios.some((c) => c.dato === "Etiqueta" && c.antes === "Activo Septiembre" && c.ahora === "Activo Octubre")).toBe(true);
-    // CDC no se toca y la lámina oculta tampoco.
+    // CDC sin datos del mes: se deja igual y se avisa. La lámina oculta tampoco se toca.
     expect(deck.parts["ppt/slides/slide4.xml"]).toBe(parts["ppt/slides/slide4.xml"]);
     expect(deck.parts["ppt/slides/slide5.xml"]).toBe(parts["ppt/slides/slide5.xml"]);
-    expect(res.intactas.map((x) => x.lamina)).toEqual([4, 5]);
+    expect(res.intactas.map((x) => x.lamina)).toEqual([5]);
+    expect(res.sinCambio.find((x) => x.lamina === 4)?.motivo).toContain("No hay datos");
   });
 
   it("recuadro M = meta MTD (no la meta del mes) y R = resultado, en los datos y en el dibujo del SmartArt", async () => {
@@ -266,5 +267,45 @@ describe("presentación: llenado de las láminas", () => {
       ["Total", "400", "310", "78%", "-90"],
     ]);
     expect(texts(deck.parts["ppt/slides/slide3.xml"]!).includes("PEDRO SALIDO")).toBe(false);
+  });
+
+  it("CDC y Extra se llenan en dólares (Activas <mes>, cosecha y estatus por monto)", async () => {
+    const deck = memoryDeck(
+      {
+        "ppt/slides/slide1.xml": slide(
+          title("Compra de Cartera") +
+            table(0, [
+              ["Cantado Vs Activo", ""],
+              ["Ventas cantadas", "$202,872.96"],
+              ["Ventas activas", "$188,744.96"],
+              ["Activas Septiembre", "$183,189.96"],
+              ["Cosecha", "$5,555.00"],
+              ["No aplica", "$4,878.00"],
+              ["Desistido", "$400.00"],
+            ]),
+        ),
+      },
+      {},
+    );
+    const cdc: PresentacionCampania = {
+      ...upin,
+      campaign: "cdc",
+      unidad: "monto",
+      ventas: [
+        v({ estatus: "APLICADO", ops: 2, valor: 1000.5 }),
+        v({ estatus: "NO APLICA", k: 0, ops: 1, valor: 300 }),
+        v({ estatus: "APLICADO", origen: "cosecha", semana: null, ops: 1, valor: 200 }),
+        v({ estatus: "NO APLICA", k: 0, origen: "cosecha", semana: null, ops: 1, valor: 999 }),
+      ],
+    };
+    await llenarPresentacion(deck, { cdc }, { mesPlantilla: "2026-10" });
+    expect(readTables(deck.parts["ppt/slides/slide1.xml"]!)[0]!.cells.slice(1)).toEqual([
+      ["Ventas cantadas", "$1,500.50"],
+      ["Ventas activas", "$1,200.50"],
+      ["Activas Octubre", "$1,000.50"],
+      ["Cosecha", "$200.00"],
+      ["No aplica", "$300.00"],
+      ["Desistido", "$0.00"],
+    ]);
   });
 });

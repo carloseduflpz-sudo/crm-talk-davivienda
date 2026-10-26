@@ -132,8 +132,8 @@ export interface PresOpciones {
   campanas?: CampaignCode[];
 }
 
-/** Campañas con láminas propias que se actualizan (CDC, Extra y Seguros se dejan como están). */
-export const PRES_CAMPANAS: CampaignCode[] = ["upin", "tdc", "domi"];
+/** Campañas cuyas láminas propias se actualizan (todas). */
+export const PRES_CAMPANAS: CampaignCode[] = ["tdc", "extrafin", "cdc", "upin", "seguros", "domi"];
 
 /* ---------- utilidades ---------- */
 
@@ -177,7 +177,8 @@ export function comoAntes(old: string, value: number, opts: { porcentaje?: boole
   const o = old.trim();
   const money = o.startsWith("$") || o.startsWith("-$");
   const pct = opts.porcentaje ?? o.endsWith("%");
-  const dec = /\.(\d+)/.exec(o.replace(/[%$,]/g, ""))?.[1]?.length ?? (money ? 2 : 0);
+  // Dinero sin centavos en la plantilla ("$0", "$92,374"): sin centavos si la cifra es entera.
+  const dec = /\.(\d+)/.exec(o.replace(/[%$,]/g, ""))?.[1]?.length ?? (money && !Number.isInteger(Math.round(value * 100) / 100) ? 2 : 0);
   const commas = opts.comas ?? (money || /\d,\d{3}/.test(o));
   const fmt = (v: number) => {
     const fixed = Math.abs(v).toFixed(dec);
@@ -238,7 +239,7 @@ export function campanaDeTitulo(title: string): CampaignCode | null {
   if (/domicili|(^|\s)domi(\s|$)/.test(t)) return "domi";
   if (/compra de cartera|(^|\s)cdc(\s|$)/.test(t)) return "cdc";
   if (/seguro/.test(t)) return "seguros";
-  if (/extrafinanc|(^|\s)extra(\s|$)/.test(t)) return "extrafin";
+  if (/extrafinanc|(^|\s)(extra|ef)(\s|$)/.test(t)) return "extrafin";
   if (/tarjeta|(^|\s)(tdc|tc)(\s|$)/.test(t)) return "tdc";
   return null;
 }
@@ -254,32 +255,45 @@ export function grupoDeTexto(campaign: CampaignCode, s: string): string | null {
     if (/piloto/.test(t)) return "domi:base:piloto";
     if (/(^|\s)bau(\s|$)/.test(t)) return "domi:base:domi";
   }
+  if (campaign === "cdc") {
+    if (/bienvenida/.test(t)) return "cdc:base:bienvenida";
+    if (/(^|\s)bau(\s|$)/.test(t)) return "cdc:base:cdc";
+  }
   return null;
 }
 
 /** Bases que cuentan como "la base" de la campaña en las tablas generales. */
 function basesPrincipales(d: PresentacionCampania): PresBase[] {
-  if (d.campaign === "domi") {
-    const bau = d.bases.filter((b) => b.dataset === "domi:base:domi");
+  // DOMI y CDC: "la base" es la Bau (la piloto y la de bienvenida van en sus propias tablas).
+  const principal = { domi: "domi:base:domi", cdc: "cdc:base:cdc" }[d.campaign as string];
+  if (principal) {
+    const bau = d.bases.filter((b) => b.dataset === principal);
     if (bau.length) return bau;
   }
   return d.bases;
 }
+
+/** Ventas sin base del mes (referidos u otra base). */
+const SIN_BASE = "__sin_base__";
 
 function basesDe(d: PresentacionCampania, grupo: string | null): PresBase[] {
   return grupo ? d.bases.filter((b) => b.dataset === grupo) : basesPrincipales(d);
 }
 
 function ventasDe(d: PresentacionCampania, grupo: string | null): PresVenta[] {
+  if (grupo === SIN_BASE) return d.ventas.filter((v) => v.grupo === null);
   return grupo ? d.ventas.filter((v) => v.grupo === grupo) : d.ventas;
 }
+
+/** Lo que se suma de cada venta: el número de ventas, o el monto en CDC y Extra. */
+const medidaDe = (d: PresentacionCampania) => (v: PresVenta) => (d.unidad === "monto" ? v.valor : v.ops);
 
 const unicosNiu = (vs: PresVenta[]) => new Set(vs.flatMap((v) => v.nius)).size;
 
 /** Estatus agrupados (de mayor a menor) de un conjunto de ventas. */
-function porEstatus(vs: PresVenta[]): PresConteo[] {
+function porEstatus(vs: PresVenta[], medida: (v: PresVenta) => number = (v) => v.ops): PresConteo[] {
   const m = new Map<string, number>();
-  for (const v of vs) m.set(v.estatus, (m.get(v.estatus) ?? 0) + v.ops);
+  for (const v of vs) m.set(v.estatus, (m.get(v.estatus) ?? 0) + medida(v));
   return [...m.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
 }
 
@@ -378,9 +392,12 @@ async function laminaCampana(
     const block = h0 || "Tabla";
     try {
       if (/^(cantado\s+vs\.?\s+activo|cosecha)/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells);
+      else if (d.campaign === "cdc" && /^referido|otra base/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells, SIN_BASE);
+      else if (/^tipo de desembolso/.test(head)) slide = tablaProceso(c, d, slide, t.index, t.cells);
       else if (/^tipificacion\|cantidad\|%/.test(head)) slide = tablaMotivos(c, d, slide, t.index, t.cells);
       else if (/^concepto\|clientes\|%/.test(head)) slide = tablaBase(c, d, slide, t.index, t.cells, grupoLamina);
-      else if (/^agente\|antiguedad\|primer trimestre/.test(head)) slide = tablaGapAgentes(c, d, slide, t.index, t.cells);
+      else if (/^concepto\|base /.test(head)) omitir(c, h0 || "Bases trabajadas", "Se deja igual: compara la base del mes con el remanente del mes anterior, que la app aún no separa.");
+      else if (/(^|\|)agente\|antiguedad\|primer trimestre/.test(head)) slide = tablaGapAgentes(c, d, slide, t.index, t.cells);
       else if (/^gap de campana/.test(head)) slide = tablaGapCampana(c, d, slide, t.index, t.cells);
     } catch (e) {
       omitir(c, block, (e as Error).message);
@@ -410,20 +427,23 @@ async function laminaCampana(
 
 /* ---------- Cantado vs Activo (y cosecha) ---------- */
 
-const FIJAS = ["registros unicos", "registros recorridos", "nuevo", "nuevos", "ventas cantadas", "ventas activas", "cosecha"];
-const esActivoMes = (l: string) => /^activo\s+\p{L}+$/u.test(norm(l));
+const FIJAS = ["registros unicos", "registros recorridos", "nuevo", "nuevos", "ventas cantadas", "ventas cantada", "ventas activas", "cosecha"];
+const MES_RE = "(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)";
+/** "Activo Octubre", "Activas Octubre", "Ventas Octubre": lo activo de las ventas del mes. */
+const esActivoMes = (l: string) => new RegExp(`^(activo|activos|activa|activas|ventas)\\s+${MES_RE}$`).test(norm(l));
 
-function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][]): string {
+function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][], grupoFijo?: string): string {
   const h0 = cells[0]![0]!.trim().replace(/\s+/g, " ");
   const esCosecha = /cosecha/i.test(h0);
-  const grupo = grupoDeTexto(d.campaign, h0.replace(/cantado\s+vs\.?\s+activo|cosecha/gi, ""));
-  if (/referido/i.test(h0)) throw new Error("Referidos: la herramienta no recibe ese archivo.");
-  const bases = basesDe(d, grupo);
+  const grupo = grupoFijo ?? grupoDeTexto(d.campaign, h0.replace(/cantado\s+vs\.?\s+activo|cosecha/gi, ""));
+  if (!grupoFijo && /referido/i.test(h0)) throw new Error("Referidos: la herramienta no recibe ese archivo.");
+  const med = medidaDe(d);
+  const bases = grupo === SIN_BASE ? [] : basesDe(d, grupo);
   const vs = ventasDe(d, grupo).filter((v) => v.k !== 2);
   const mes = vs.filter((v) => v.origen === "mes");
   const cos = vs.filter((v) => v.origen === "cosecha");
-  const activasMes = sum(mes.filter((v) => v.k === 1).map((v) => v.ops));
-  const cosechaActivas = sum(cos.filter((v) => v.k === 1).map((v) => v.ops));
+  const activasMes = sum(mes.filter((v) => v.k === 1).map(med));
+  const cosechaActivas = sum(cos.filter((v) => v.k === 1).map(med));
 
   const body = cells.slice(1);
   const isFixed = (l: string) => FIJAS.includes(norm(l)) || esActivoMes(l);
@@ -438,8 +458,9 @@ function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: num
   if (!bases.length && fixed.some((r) => /registros/.test(norm(r[0] ?? "")))) throw new Error("Falta la base del mes de esta campaña.");
   // Si la tabla no separa las activas (p. ej. "Cantado Vs Activo 1er Cuenta"), los estatus que cuentan van en la lista.
   const separaActivas = fixed.some((r) => norm(r[0] ?? "") === "ventas activas" || esActivoMes(r[0] ?? ""));
-  const statusSrc = esCosecha ? cos : separaActivas ? mes.filter((v) => v.k !== 1) : mes;
-  const cantadas = esCosecha ? sum(cos.map((v) => v.ops)) : sum(mes.map((v) => v.ops)) + (separaActivas ? cosechaActivas : 0);
+  // Cosecha con fila de activas (CDC, Seguros): la lista trae solo lo que no se activó.
+  const statusSrc = esCosecha ? (separaActivas ? cos.filter((v) => v.k !== 1) : cos) : separaActivas ? mes.filter((v) => v.k !== 1) : mes;
+  const cantadas = esCosecha ? sum(cos.map(med)) : sum(mes.map(med)) + (separaActivas ? cosechaActivas : 0);
 
   const fixedRow = (r: string[]): string[] => {
     const l = r[0] ?? "";
@@ -450,8 +471,8 @@ function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: num
     if (k === "registros unicos") v = unicos;
     else if (k === "registros recorridos") v = recorridos;
     else if (k === "nuevo" || k === "nuevos") v = unicos - recorridos;
-    else if (k === "ventas cantadas") v = cantadas;
-    else if (k === "ventas activas") v = activasMes + cosechaActivas;
+    else if (k === "ventas cantadas" || k === "ventas cantada") v = cantadas;
+    else if (k === "ventas activas") v = esCosecha ? cosechaActivas : activasMes + cosechaActivas;
     else if (k === "cosecha") v = cosechaActivas;
     else if (esActivoMes(l)) {
       v = activasMes;
@@ -465,7 +486,7 @@ function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: num
   };
 
   const tplLabels = dynTpl.map((r) => r[0] ?? "");
-  const conteos = porEstatus(statusSrc).map((x) => ({ label: etiqueta(x.label, tplLabels), n: x.n }));
+  const conteos = porEstatus(statusSrc, med).map((x) => ({ label: etiqueta(x.label, tplLabels), n: x.n }));
   const comas = cells.some((r) => /\d,\d{3}/.test(r[1] ?? ""));
   const dynRow = (x: { label: string; n: number }, tplValue: string): string[] => {
     const old = dynTpl.find((r) => norm(r[0] ?? "") === norm(x.label))?.[1] ?? "";
@@ -499,16 +520,54 @@ function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: num
   return fillTable(slide, index, { headerRows: 1, rows });
 }
 
+/* ---------- activas por proceso (p. ej. "Tipo de Desembolso": Online / Cheque) ---------- */
+
+function tablaProceso(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][]): string {
+  const med = medidaDe(d);
+  const act = d.ventas.filter((v) => v.k === 1);
+  const procs = [...new Set(act.map((v) => v.proceso))];
+  const body = cells.slice(1);
+  // Cada fila va con el proceso de la sábana que dice su nombre; la que no se nombra se queda con el proceso que sobra.
+  const usados = new Set<string>();
+  const asignado = body.map((r) => {
+    const k = norm(r[0] ?? "");
+    const p = procs.find((x) => norm(x) && (norm(x).startsWith(k) || k.startsWith(norm(x))));
+    if (p) usados.add(p);
+    return p;
+  });
+  const sobran = procs.filter((p) => !usados.has(p));
+  const sinNombre = asignado.filter((p) => !p).length;
+  if (sinNombre > 1 || (sinNombre === 1 && sobran.length !== 1)) throw new Error(`No pude saber a qué proceso de la sábana va cada fila (procesos: ${procs.join(", ") || "ninguno"}).`);
+  const h0 = cells[0]![0] ?? "Tabla";
+  const rows = body.map((r, i) => {
+    const p = asignado[i] ?? sobran[0]!;
+    const now = comoAntes(r[1] || "0", sum(act.filter((v) => v.proceso === p).map(med)));
+    cambio(c, h0, r[0] ?? "", r[1] ?? "", now);
+    return [r[0] ?? "", now];
+  });
+  return fillTable(slide, index, { headerRows: 1, rows });
+}
+
 /* ---------- motivos de no venta ---------- */
 
 function tablaMotivos(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][]): string {
   const total = cells[cells.length - 1]!;
   const tip = total[0] ?? "";
-  const k = norm(tip);
+  const body = cells.slice(1, -1);
+  let k = norm(tip);
+  // La fila final dice "Total" en vez de la tipología: es la tipología cuyas subtipologías más se parecen a las de la tabla.
+  if (k === "total") {
+    const labels = new Set(body.map((r) => norm(r[0] ?? "")));
+    const score = new Map<string, number>();
+    for (const m of d.motivos) if (labels.has(norm(m.subtipologia))) score.set(norm(m.tipologia), (score.get(norm(m.tipologia)) ?? 0) + 1);
+    const best = [...score.entries()].sort((a, b) => b[1] - a[1]);
+    if (!best.length || (best[1] && best[1][1] === best[0]![1])) throw new Error("No pude saber de qué tipología es esta tabla (su total dice solo \"Total\").");
+    k = best[0]![0];
+  }
   const all = d.motivos.filter((m) => norm(m.tipologia) === k);
   const list = all.length ? all : d.motivos.filter((m) => norm(m.tipologia).includes(k) || k.includes(norm(m.tipologia)));
   if (!list.length) throw new Error(`No hay llamadas con la tipología "${tip}" en las tipificaciones del mes.`);
-  const body = cells.slice(1, -1);
+  const bloque = norm(tip) === "total" ? list[0]!.tipologia : tip;
   const tplLabels = body.map((r) => r[0] ?? "");
   const m = new Map<string, number>();
   for (const x of list) m.set(x.subtipologia, (m.get(x.subtipologia) ?? 0) + x.n);
@@ -516,17 +575,17 @@ function tablaMotivos(c: Ctx, d: PresentacionCampania, slide: string, index: num
   const tot = sum(items.map((x) => x.n));
   const slots = body.length;
   if (slots && items.length > slots) items = [...items.slice(0, slots - 1), { label: tplLabels.find((l) => /^otro/i.test(l)) ?? "Otros motivos", n: sum(items.slice(slots - 1).map((x) => x.n)) }];
-  const comas = cells.some((r) => /\d,\d{3}/.test(r[1] ?? "")) || tot >= 1000;
+  const comas = cells.some((r) => /\d,\d{3}/.test(r[1] ?? ""));
   const rows = items.map((x, i) => {
     const tpl = body[i] ?? body[body.length - 1] ?? ["", "0", "0.0%"];
     const v = comoAntes(tpl[1] || "0", x.n, { comas });
     const p = comoAntes(tpl[2] || "0.0%", ratio(x.n, tot) * 100, { porcentaje: true });
     const old = body.find((r) => norm(r[0] ?? "") === norm(x.label));
-    cambio(c, tip, x.label, old ? `${old[1]} (${old[2]})` : "—", `${v} (${p})`);
+    cambio(c, bloque, x.label, old ? `${old[1]} (${old[2]})` : "—", `${v} (${p})`);
     return [x.label, v, p];
   });
   const totV = comoAntes(total[1] || "0", tot, { comas });
-  cambio(c, tip, "Total", total[1] ?? "", totV);
+  cambio(c, bloque, "Total", total[1] ?? "", totV);
   return fillTable(slide, index, { headerRows: 1, rows, total: [tip, totV, total[2] || "100.0%"] });
 }
 
@@ -643,32 +702,42 @@ function tablaGapAgentes(c: Ctx, d: PresentacionCampania, slide: string, index: 
   const meses = d.trimestre.filter((m) => m.metaPorAgente !== null);
   if (!meses.length) throw new Error("Falta la meta y el número de agentes (HC) del mes para calcular el gap por agente.");
   const body = cells.slice(1);
+  // Columnas por nombre (EF y Seguros traen además una columna "Status" al inicio).
+  const agCol = Math.max(0, head.indexOf("agente"));
+  const antCol = head.indexOf("antiguedad");
+  const stCol = head.indexOf("status");
+  const nombre = (r: string[]) => r[agCol] ?? "";
+  // Formato de cada columna de cifras como el de la plantilla ($ con o sin centavos en CDC y Extra).
+  const estilo = (j: number) => body.map((r) => r[j] ?? "").find((v) => /\d\.\d/.test(v)) ?? body.map((r) => r[j] ?? "").find((v) => /\d/.test(v)) ?? "0";
+  const valor = (v: string) => Number(v.replace(/[,$\s]/g, "")) || 0;
   // Agentes: los que vendieron en el trimestre y los de la plantilla que siguen trabajando (aparecen en el mes aunque no vendieran).
   const gap = new Map<string, number>();
   for (const m of meses) {
     for (const a of m.porAgente) if (!gap.has(a.agent)) gap.set(a.agent, 0);
-    for (const a of m.agentes) if (!gap.has(a) && body.some((r) => mismoAgente(r[0] ?? "", a))) gap.set(a, 0);
+    for (const a of m.agentes) if (!gap.has(a) && body.some((r) => mismoAgente(nombre(r), a))) gap.set(a, 0);
   }
   for (const m of meses) {
     const ventas = new Map(m.porAgente.map((a) => [a.agent, a.ventas]));
     for (const name of gap.keys()) gap.set(name, gap.get(name)! + (ventas.get(name) ?? 0) - m.metaPorAgente!);
   }
   const block = "Gap por agente";
+  const numCol = (j: number) => j !== agCol && j !== antCol && j !== stCol && j !== totalCol;
   const rows = [...gap.entries()].map(([agent, g]) => {
-    const tpl = body.find((r) => mismoAgente(r[0] ?? "", agent));
+    const tpl = body.find((r) => mismoAgente(nombre(r), agent));
     const vals = head.map((_, j) => {
-      if (j === 0) return (tpl?.[0] ?? agent).toUpperCase();
-      if (j === 1) return tpl?.[1] ?? "< 3";
-      if (j === col) return String(Math.round(g));
+      if (j === agCol) return (tpl ? nombre(tpl) : agent).toUpperCase();
+      if (j === antCol) return tpl?.[j] ?? "< 3";
+      if (j === stCol) return tpl?.[j] ?? "Activo";
+      if (j === col) return comoAntes(estilo(j), g);
       if (j === totalCol) return "";
-      return tpl?.[j] ?? "0";
+      return tpl?.[j] ?? comoAntes(estilo(j), 0);
     });
-    const total = vals.reduce((s, v, j) => (j >= 2 && j !== totalCol ? s + (Number(v.replace(/,/g, "")) || 0) : s), 0);
-    if (totalCol >= 0) vals[totalCol] = String(total);
-    cambio(c, block, vals[0]!, tpl ? `${tpl[col]} (total ${tpl[totalCol]})` : "nuevo", `${vals[col]} (total ${vals[totalCol]})`);
+    const total = vals.reduce((s, v, j) => (numCol(j) ? s + valor(v) : s), 0);
+    if (totalCol >= 0) vals[totalCol] = comoAntes(estilo(totalCol), total);
+    cambio(c, block, nombre(vals), tpl ? `${tpl[col]} (total ${tpl[totalCol]})` : "nuevo", `${vals[col]} (total ${vals[totalCol]})`);
     return { vals, total };
   });
-  for (const r of body) if (![...gap.keys()].some((a) => mismoAgente(r[0] ?? "", a))) cambio(c, block, r[0] ?? "", r[totalCol] ?? "", "ya no aparece en el mes");
+  for (const r of body) if (![...gap.keys()].some((a) => mismoAgente(nombre(r), a))) cambio(c, block, nombre(r), r[totalCol] ?? "", "ya no aparece en el mes");
   rows.sort((a, b) => b.total - a.total);
   return fillTable(slide, index, { headerRows: 1, rows: rows.map((r) => r.vals) });
 }
@@ -702,7 +771,8 @@ function tablaGapCampana(c: Ctx, d: PresentacionCampania, slide: string, index: 
 
 function graficaCampana(c: Ctx, d: PresentacionCampania, chart: string, grupo: string | null): string {
   const series = readChart(chart);
-  if (!series.length) return chart;
+  // Gráficas vacías en la plantilla (sin categorías) se dejan como están.
+  if (!series.length || !series[0]!.categories.length) return chart;
   const title = norm(chartTitle(chart));
   const cats = series[0]!.categories.map(norm);
   if (title.startsWith("contacto")) return graficaContacto(c, d, chart, series, grupo);
@@ -787,8 +857,9 @@ function porSemana(
 ): (number | null)[] {
   const out: (number | null)[] = [];
   for (let w = 1; w <= nWeeks; w++) {
-    if (w < actual) out.push(plantilla ? (plantilla[w - 1] ?? 0) : bySale(w));
-    else if (w === actual) out.push(Math.max(0, total - sum(out.map((x) => x ?? 0))));
+    // Semana cerrada: la de la plantilla; si la plantilla no la trae, por fecha de venta.
+    if (w < actual) out.push(plantilla && plantilla[w - 1] !== null && plantilla[w - 1] !== undefined ? plantilla[w - 1]! : bySale(w));
+    else if (w === actual) out.push(Math.round(Math.max(0, total - sum(out.map((x) => x ?? 0))) * 100) / 100);
     else out.push(null);
   }
   return out;
@@ -818,11 +889,11 @@ function graficaSemanas(c: Ctx, d: PresentacionCampania, chart: string, series: 
   series.forEach((s, i) => {
     const k = norm(s.name);
     let values: (number | null)[] | null = null;
-    if (k === "meta") values = cats.map(() => (d.meta === null ? null : Math.round(d.meta / 5)));
+    if (k === "meta") values = cats.map(() => (d.meta === null ? null : d.unidad === "monto" ? d.meta / 5 : Math.round(d.meta / 5)));
     else if (k === "promedio") pending.push(i);
     else if (k === "clientes") values = clientes = calc(() => true, true, s.values);
     else if (k === "colectores") values = colectores = calc(() => true, false, s.values);
-    else if (k === "activas" || k === "ventas" || k === "resultado") values = calc(() => true, false, s.values);
+    else if (k === "activas" || k === "ventas" || k === "resultado" || /activas/.test(k)) values = calc(() => true, false, s.values);
     else {
       const procs = [...new Set(d.ventas.map((v) => v.proceso))];
       const p = procs.find((x) => norm(x).startsWith(k) || k.startsWith(norm(x)));

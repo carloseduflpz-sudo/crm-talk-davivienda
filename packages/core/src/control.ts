@@ -169,7 +169,8 @@ export function cuadrarControl(ctrl: ControlExcel, datos: PresDatos): CuadreFila
   const out: CuadreFila[] = [];
   const add = (d: PresentacionCampania, hoja: string, dato: string, excel: number | null | undefined, app: number | null, formato: Formato, como: string) => {
     if (excel === undefined || excel === null) return;
-    const enPresentacion = hoja === "TALK" || dato === "Resultado" || dato === "Cumplimiento MTD" || dato.startsWith("Contacto:") ? "excel" : "app";
+    const enPresentacion =
+      hoja === "TALK" || ["Resultado", "Cumplimiento MTD", "Registros recorridos", "Nuevo"].includes(dato) || dato.startsWith("Contacto:") ? "excel" : "app";
     out.push({ campaign: d.campaign, hoja, dato, excel, app, formato, cuadra: iguales(excel, app, formato), como, enPresentacion });
   };
   const dinero = (d: PresentacionCampania): Formato => (d.unidad === "monto" ? "dinero" : "entero");
@@ -234,6 +235,9 @@ export function cuadrarControl(ctrl: ControlExcel, datos: PresDatos): CuadreFila
   return out;
 }
 
+/** Base que cuenta como "la base" de la campaña cuando tiene varias (las demás van en tablas aparte). */
+const BASE_PRINCIPAL: Partial<Record<CampaignCode, string>> = { domi: "domi:base:domi", cdc: "cdc:base:cdc" };
+
 /** Hoja principal de una campaña en el Excel: la de toda la campaña o, si no hay, la de su base principal (p. ej. DOMI-Bau). */
 function hojaPrincipal(ctrl: ControlExcel, code: CampaignCode): ControlHoja | undefined {
   const hs = ctrl.hojas.filter((h) => h.campaign === code);
@@ -262,8 +266,18 @@ export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos 
     const r = h?.valores.resultado ?? d.resultado;
     const contactoExcel: Record<string, { label: string; n: number }[]> = {};
     for (const x of ctrl.hojas) if (x.campaign === code && x.contacto.length) contactoExcel[x.grupo ?? "*"] = x.contacto;
+    // Registros recorridos de cada base, también del Excel (así "Nuevo" y la gráfica de contacto cuadran entre sí).
+    const recorridos = new Map<string, number>();
+    const hojas = ctrl.hojas.filter((x) => x.campaign === code && x.valores.recorridos !== undefined);
+    for (const x of hojas) if (x.grupo && d.bases.some((b) => b.dataset === x.grupo)) recorridos.set(x.grupo, x.valores.recorridos!);
+    const general = hojas.find((x) => !x.grupo);
+    if (general) {
+      const principal = d.bases.length === 1 ? d.bases[0]!.dataset : BASE_PRINCIPAL[code];
+      if (principal && d.bases.some((b) => b.dataset === principal) && !recorridos.has(principal)) recorridos.set(principal, general.valores.recorridos!);
+    }
     out[code] = {
       ...d,
+      bases: d.bases.map((b) => (recorridos.has(b.dataset) ? { ...b, recorridos: recorridos.get(b.dataset)! } : b)),
       meta,
       hc,
       diasHabiles: { total, transcurridos: trans },

@@ -95,7 +95,11 @@ describe("Excel de control", () => {
     const d = aplicarControl({ tdc }, ctrl).tdc!;
     expect(d).toMatchObject({ meta: 253, hc: 7, esperado: 172.5, resultado: 69, diasHabiles: { transcurridos: 15, total: 22 } });
     expect(d.contactoExcel).toEqual({ "*": [{ label: "No contacto", n: 6 }, { label: "Sin Tipificar", n: 4 }] });
-    expect(d.bases).toBe(tdc.bases);
+    // Recorridos de cada base: de la hoja de esa base (1CTS); la hoja general no se reparte entre dos bases.
+    expect(d.bases.map((b) => [b.dataset, b.recorridos])).toEqual([
+      ["tdc:base:primeras", 7],
+      ["tdc:base:segundas", 3],
+    ]);
     expect(d.ventas).toBe(tdc.ventas);
     expect(d.trimestre[0]).toMatchObject({ meta: 172.5, resultado: 69 });
     expect(d.trimestre[0]!.metaPorAgente!).toBeCloseTo(172.5 / 7, 6);
