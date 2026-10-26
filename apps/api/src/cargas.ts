@@ -20,6 +20,7 @@ import {
   type UploadKind,
 } from "@crm/core";
 import { recordAgentNames } from "./agentes";
+import { unirLlamadasPorTelefono } from "./telefonos";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
@@ -158,6 +159,7 @@ async function cleanRows(env: Env, u: UploadRow, rows: unknown[]): Promise<Recor
           category,
           tipologia,
           callClass: classify(tipologia, category),
+          phone: typeof r.phone === "string" && /^\d{8}$/.test(r.phone) ? r.phone : null,
           extra: extra(r.extra),
         };
       });
@@ -191,8 +193,8 @@ function insertStatement(env: Env, u: UploadRow, rows: Record<string, unknown>[]
       ).bind(u.id, u.campaign, u.month, payload);
     case "tipif":
       return env.DB.prepare(
-        `INSERT INTO calls (upload_id, campaign, month, niu, agent, called_at, category, tipologia, call_class, extra)
-         SELECT ?1, ?2, ?3, ${j("niu")}, ${j("agent")}, ${j("calledAt")}, ${j("category")}, ${j("tipologia")}, ${j("callClass")}, ${j("extra")}
+        `INSERT INTO calls (upload_id, campaign, month, niu, agent, called_at, category, tipologia, call_class, phone, extra)
+         SELECT ?1, ?2, ?3, ${j("niu")}, ${j("agent")}, ${j("calledAt")}, ${j("category")}, ${j("tipologia")}, ${j("callClass")}, ${j("phone")}, ${j("extra")}
            FROM json_each(?4)`,
       ).bind(u.id, u.campaign, u.month, payload);
     case "ventas":
@@ -354,10 +356,13 @@ export function registerCargas(r: Router): void {
       // Cómo vienen escritos los agentes: la herramienta los homologa sola al analizar.
       ...[recordAgentNames(env, u)].filter((x): x is D1PreparedStatement => x !== null),
     ]);
+    // Llamadas que el marcador dejó sin NIU: se unen a su cliente por el teléfono marcado.
+    const unidasPorTelefono = u.kind === "tipif" || u.kind === "base" ? await unirLlamadasPorTelefono(env, u.campaign, u.month) : 0;
     await audit(env, user.username, u.is_addition ? "base_adicional_confirmada" : "carga_confirmada", `${u.dataset}:${u.month}:v${u.version}`, {
       filas: u.rows_valid,
       reemplaza: prev?.version ?? null,
       nombre: u.label,
+      ...(unidasPorTelefono ? { llamadasUnidasPorTelefono: unidasPorTelefono } : {}),
     });
     return json({ ok: true, upload: publicUpload(await getUpload(env, u.id)) });
   });

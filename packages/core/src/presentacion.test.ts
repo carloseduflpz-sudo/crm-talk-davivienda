@@ -161,7 +161,12 @@ describe("presentación: llenado de las láminas", () => {
     "ppt/diagrams/drawing1.xml": `<dsp:drawing><a:t>M</a:t><a:t>253</a:t></dsp:drawing>`,
     "ppt/diagrams/data2.xml": smartData("R", "68", "rId7"),
     "ppt/diagrams/drawing2.xml": `<dsp:drawing><a:t>R</a:t><a:t>68</a:t></dsp:drawing>`,
-    "ppt/charts/chart1.xml": chart("Contacto", [{ name: "Cantidad", cats: ["No contacto", "Contacto efectivo", "Sin Tipificar"], vals: [1, 2, 3] }]),
+    "ppt/charts/chart1.xml": chart("Contacto", [{ name: "Cantidad", cats: ["No contacto", "Contacto efectivo", "Sin Tipificar"], vals: [1, 2, 3] }]).replace(
+      "</c:chartSpace>",
+      '<c:externalData r:id="rId9"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>',
+    ),
+    "ppt/charts/_rels/chart1.xml.rels":
+      '<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="file:///C:\\DAVIVIENDA.xlsx" TargetMode="External"/><Relationship Id="rId1" Type="x" Target="style1.xml"/></Relationships>',
     "ppt/charts/chart2.xml": chart("", [{ name: "", cats: ["Cumplimiento", "GAP"], vals: [0.5, -0.5] }]),
     "ppt/charts/chart3.xml": chart("", [
       { name: "Upgrade", cats: ["W 1", "W2", "W 3", "W 4", "W 5"], vals: [4, 9, null, null, null] },
@@ -208,6 +213,9 @@ describe("presentación: llenado de las láminas", () => {
     const deck = memoryDeck({ ...parts }, rels);
     await llenarPresentacion(deck, { upin }, { mesPlantilla: "2026-10" });
     expect(readChart(deck.parts["ppt/charts/chart1.xml"]!)[0]).toMatchObject({ categories: ["No contacto", "Contacto efectivo", "Sin Tipificar"], values: [500, 250, 50] });
+    // Desligada del Excel externo: "Actualizar vínculos" ya no puede traer otros números.
+    expect(deck.parts["ppt/charts/chart1.xml"]!.includes("externalData")).toBe(false);
+    expect(deck.parts["ppt/charts/_rels/chart1.xml.rels"]).toBe('<Relationships><Relationship Id="rId1" Type="x" Target="style1.xml"/></Relationships>');
     expect(readChart(deck.parts["ppt/charts/chart2.xml"]!)[0]!.values).toEqual([0.75, -0.25]);
     // Corte el 14 → semana 3: las semanas 1 y 2 se respetan de la plantilla y la 3 es lo que falta para el total.
     const w = readChart(deck.parts["ppt/charts/chart3.xml"]!);

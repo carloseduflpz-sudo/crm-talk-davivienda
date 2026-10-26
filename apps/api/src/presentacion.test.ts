@@ -135,6 +135,27 @@ describe("presentación: cifras de TDC octubre", () => {
     expect(c).toMatchObject({ fechaCorte: null, diaDelMes: 0, fechasPosteriores: { filas: 2, hasta: "2099-03-05" } });
   });
 
+  it("las llamadas que VICI dejó sin NIU se unen a su cliente por el teléfono", async () => {
+    await load("upin:base", "2026-10", [
+      { niu: "700", extra: { "TEL Notificaciones": "7406-5924" } },
+      { niu: "701", extra: { Celular: 71112222 } },
+      { niu: "702" },
+    ]);
+    const vici = (niu: string, phone: string, category: string) => ({ niu, agent: niu ? "Ana" : null, calledAt: "2026-10-05T09:00:00", category, tipologia: category, phone });
+    await load("upin:tipif", "2026-10", [
+      vici("701", "71112222", "No contacto"),
+      vici("", "71112222", "Sin asignar a un agente"), // mismo teléfono que otra llamada con NIU → 701
+      vici("", "74065924", "Sin tipificar"), // teléfono de la base → 700
+      vici("", "79999999", "No contacto"), // de nadie: se queda sin NIU
+    ]);
+    const u = (await call("GET", "/presentacion/datos/upin?mes=2026-10")).data.datos as PresentacionCampania;
+    expect(u.bases[0]).toMatchObject({ unicos: 3, recorridos: 2, llamadas: 3 });
+    expect([...u.bases[0]!.contacto].sort((a, b) => a.label.localeCompare(b.label))).toEqual([
+      { label: "Sin asignar a un agente", n: 1 },
+      { label: "Sin tipificar", n: 1 },
+    ]);
+  });
+
   it("guarda la plantilla y la devuelve con su mes", async () => {
     expect((await call("GET", "/presentacion/plantilla")).data.plantilla).toBeNull();
     const pptx = new Uint8Array(200);

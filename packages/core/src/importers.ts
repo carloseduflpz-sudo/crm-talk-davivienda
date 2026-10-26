@@ -179,6 +179,8 @@ const VICI: Profile = {
     Subtipologia: ["subtipologia"],
     Agente: [["full_name", "user_name"]],
     Fecha: ["call_date", "isoDateTime"],
+    // El marcador deja muchas llamadas sin NIU: con el teléfono se unen a su cliente (ver telefonoSV).
+    Telefono: [["phone_number", "telefono", "phone"]],
   },
   transform(rec) {
     // El marcador automático no es un agente: esas llamadas quedan "Sin asignar".
@@ -874,6 +876,8 @@ export interface CallRow {
   calledAt: string | null;
   category: string | null;
   tipologia: string | null;
+  /** Teléfono marcado (8 dígitos): sirve para saber de qué cliente es una llamada que vino sin NIU. */
+  phone?: string | null;
   extra: Extra;
 }
 export interface CrmRow {
@@ -915,6 +919,14 @@ const BASE_MAP: Record<string, { niu?: string; profile?: string; offer?: string 
   "domi:base:domi": { profile: "Perfil", offer: "Colectores que paga" },
   "domi:base:piloto": { offer: "Estado" },
 };
+
+/** Teléfono de El Salvador: los últimos 8 dígitos ("(503) 7406-5924", 50374065924 y 74065924 son el mismo). */
+export function telefonoSV(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  const raw = typeof v === "number" ? String(Math.trunc(v)) : String(v);
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 12 ? digits.slice(-8) : null;
+}
 
 const text = (v: unknown): string | null => (v === null || v === undefined || v === "" ? null : String(v));
 const intOrNull = (v: unknown): number | null => {
@@ -960,7 +972,8 @@ export function normalizeRow(datasetId: string, kind: UploadKind, campaign: Camp
         calledAt: text(rec.Fecha),
         category: text(rec.Categoria),
         tipologia: text(rec.Tipologia),
-        extra: extraOf(rec, ["NIU", "Agente", "Fecha", "Categoria", "Tipologia"]),
+        phone: telefonoSV(rec.Telefono),
+        extra: extraOf(rec, ["NIU", "Agente", "Fecha", "Categoria", "Tipologia", "Telefono"]),
       };
     case "ventas":
       return {

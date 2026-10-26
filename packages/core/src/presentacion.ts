@@ -393,7 +393,7 @@ async function laminaCampana(
         // La gráfica de contacto va con la tabla "Cantado vs Activo" que tiene más cerca.
         const near = cantado.length ? [...cantado].sort((a, b) => Math.abs(a.x - f.x) - Math.abs(b.x - f.x))[0]!.grupo : grupoLamina;
         const out = graficaCampana(c, d, chart, near);
-        if (out !== chart) c.deck.write(target, out);
+        if (out !== chart) await escribirGrafica(c.deck, target, out);
       } else if (f.kind === "smartart") {
         await smartArt(c, d, target, rels);
       }
@@ -804,6 +804,19 @@ function graficaSemanas(c: Ctx, d: PresentacionCampania, chart: string, series: 
     cats.forEach((cat, j) => cambio(c, block, `${s.name.trim()} ${cat}`, s.values[j] ? s.values[j]!.toFixed(2) : "—", values[j] === null ? "—" : values[j]!.toFixed(2)));
   }
   return fillChart(chart, fills);
+}
+
+/** Guarda una gráfica ya llenada y la desliga del Excel externo: si al abrir la presentación alguien da
+    "Actualizar vínculos", PowerPoint traería los números de ese Excel (de otra fecha) encima de los de la app. */
+async function escribirGrafica(deck: PresDeck, part: string, xml: string): Promise<void> {
+  const rid = /<c:externalData\b[^>]*\br:id="([^"]+)"/.exec(xml)?.[1];
+  deck.write(part, xml.replace(/<c:externalData\b[^>]*\/>|<c:externalData\b[\s\S]*?<\/c:externalData>/g, ""));
+  if (!rid) return;
+  const i = part.lastIndexOf("/");
+  const relsPart = `${part.slice(0, i)}/_rels/${part.slice(i + 1)}.rels`;
+  if (!deck.has(relsPart)) return;
+  const rels = await deck.read(relsPart);
+  deck.write(relsPart, rels.replace(new RegExp(`<Relationship\\b[^>]*\\bId="${rid}"[^>]*/>`), ""));
 }
 
 /* ---------- recuadros M (meta) y R (resultado) ---------- */

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { XLSX, workbookFor } from "../test/libros";
 import { ALL_DATASETS, type CampaignCode, type UploadKind } from "./campaigns";
-import { PROFILES, WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook } from "./importers";
+import { PROFILES, WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook, telefonoSV } from "./importers";
 
 describe("lectores de Excel: los 27 tipos de archivo", () => {
   for (const ds of ALL_DATASETS) {
@@ -73,5 +73,15 @@ describe("reglas de lectura", () => {
     if ("error" in res) throw new Error(res.error);
     const row = normalizeRow("tdc:sabana", "sabana", "tdc", res.rows[0]!) as { saleDate: string };
     expect(row.saleDate).toBe("2026-06-05");
+  });
+});
+
+describe("teléfono de las llamadas", () => {
+  it("deja los últimos 8 dígitos, venga como venga", () => {
+    expect(telefonoSV("(503) 7406-5924")).toBe("74065924");
+    expect(telefonoSV(50374065924)).toBe("74065924");
+    expect(telefonoSV(74065924)).toBe("74065924");
+    expect(telefonoSV("123")).toBeNull();
+    expect(telefonoSV(null)).toBeNull();
   });
 });

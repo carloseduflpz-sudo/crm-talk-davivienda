@@ -247,10 +247,13 @@ export const calls = sqliteTable(
     tipologia: text("tipologia"),
     /** "venta" | "negativo" | "no_efectivo" | "no_contacto" | "sin_tipificar" */
     callClass: text("call_class").notNull(),
+    /** Teléfono marcado (8 dígitos): une al cliente las llamadas que VICI dejó sin NIU. */
+    phone: text("phone"),
     extra: text("extra", { mode: "json" }),
   },
   (t) => [
     index("calls_campaign_month_idx").on(t.campaign, t.month),
+    index("calls_upload_phone_idx").on(t.uploadId, t.phone),
     index("calls_niu_idx").on(t.niu),
     index("calls_agent_idx").on(t.campaign, t.month, t.agentId),
     index("calls_upload_idx").on(t.uploadId),
@@ -316,3 +319,22 @@ export const auditLog = sqliteTable(
   },
   (t) => [index("audit_ts_idx").on(t.ts)],
 );
+
+/** Teléfonos de cada base (últimos 8 dígitos): para unir a su cliente las llamadas que vienen sin NIU. */
+export const basePhones = sqliteTable(
+  "base_phones",
+  {
+    uploadId: text("upload_id")
+      .notNull()
+      .references(() => uploads.id, { onDelete: "cascade" }),
+    niu: text("niu").notNull(),
+    phone: text("phone").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.uploadId, t.phone, t.niu] }), index("base_phones_phone_idx").on(t.phone)],
+);
+
+export const basePhonesListas = sqliteTable("base_phones_listas", {
+  uploadId: text("upload_id")
+    .primaryKey()
+    .references(() => uploads.id, { onDelete: "cascade" }),
+});
