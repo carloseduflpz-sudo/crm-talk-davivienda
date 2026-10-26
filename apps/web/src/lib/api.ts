@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, Role, SabanaSummary } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, PresentacionCampania, Role, SabanaSummary } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -133,6 +133,26 @@ async function putFile(id: string, file: File): Promise<void> {
   }
 }
 
+export interface PlantillaInfo {
+  nombre: string;
+  /** Mes (AAAA-MM) de las cifras que trae la presentación. */
+  mes: string | null;
+  origen: "subida" | "generada";
+  por: string;
+  fecha: number;
+  bytes: number;
+}
+
+async function errorOf(res: Response): Promise<ApiError> {
+  let msg = `Error ${res.status}`;
+  try {
+    msg = ((await res.json()) as { error?: string }).error ?? msg;
+  } catch {
+    // sin JSON
+  }
+  return new ApiError(msg, res.status);
+}
+
 export const api = {
   health: () => get<Health>("/health"),
   me: () => get<Me>("/me"),
@@ -184,6 +204,29 @@ export const api = {
   history: (campaign: string, agent?: string | null) =>
     get<{ meses: MonthSummary[] }>(`/analisis/${campaign}/historico${agent ? `?agente=${encodeURIComponent(agent)}` : ""}`).then((r) => r.meses),
   /** Todo lo que hay de un cliente: contacto, ventas, bases, llamadas y CRM (de una campaña o de todas). */
+  presentacionDatos: (campaign: string, mes: string) =>
+    get<{ datos: PresentacionCampania | null }>(`/presentacion/datos/${campaign}?mes=${mes}`).then((r) => r.datos),
+  plantilla: () => get<{ plantilla: PlantillaInfo | null }>("/presentacion/plantilla").then((r) => r.plantilla),
+  plantillaArchivo: async (): Promise<Uint8Array> => {
+    const res = await fetch("/api/presentacion/plantilla/archivo", { credentials: "same-origin" });
+    if (!res.ok) throw await errorOf(res);
+    return new Uint8Array(await res.arrayBuffer());
+  },
+  guardarPlantilla: async (body: Blob, info: { mes: string | null; nombre: string; origen: "subida" | "generada" }): Promise<void> => {
+    const res = await fetch("/api/presentacion/plantilla", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "x-crm-archivo": "1",
+        "x-mes": info.mes ?? "",
+        "x-nombre": encodeURIComponent(info.nombre),
+        "x-origen": info.origen,
+      },
+      body,
+    });
+    if (!res.ok) throw await errorOf(res);
+  },
   client: (niu: string, campaign?: string | null) => get<ClientFile>(`/clientes/${encodeURIComponent(niu)}${campaign ? `?campana=${campaign}` : ""}`),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {

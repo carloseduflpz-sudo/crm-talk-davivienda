@@ -12,3 +12,5 @@ export * from "./agentes";
 export * from "./sabana";
 export * from "./zip";
 export * from "./bulk";
+export * from "./pptx";
+export * from "./presentacion";

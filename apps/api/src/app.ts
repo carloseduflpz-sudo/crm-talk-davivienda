@@ -4,6 +4,7 @@ import { audit } from "./audit";
 import { registerAnalisis } from "./analisis";
 import { registerCargas } from "./cargas";
 import { registerClientes } from "./clientes";
+import { registerPresentacion } from "./presentacion";
 import { registerDetalle } from "./detalle";
 import {
   LOCK_MINUTES,
@@ -328,6 +329,7 @@ export function createApp(): Router {
   registerAnalisis(r);
   registerDetalle(r);
   registerClientes(r);
+  registerPresentacion(r);
 
   return r;
 }

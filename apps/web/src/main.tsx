@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { FileText, Search, ShieldAlert, Sparkles } from "lucide-react";
+import { Search, ShieldAlert, Sparkles } from "lucide-react";
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
@@ -13,6 +13,7 @@ import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { Placeholder } from "./pages/Placeholder";
+import { Presentation } from "./pages/Presentation";
 import { Settings } from "./pages/Settings";
 import { Upload } from "./pages/Upload";
 import { Users } from "./pages/Users";
@@ -82,14 +83,8 @@ const router = createBrowserRouter([
       { path: "cliente", element: <Client /> },
       { path: "carga", element: <Upload /> },
       { path: "carga/zip", element: <BulkUpload /> },
-      {
-        path: "reportes",
-        element: (
-          <Placeholder title="Reportes" subtitle="Presentación semanal y exportaciones." icon={FileText} phase="Fase 4">
-            Tu presentación semanal generada sobre tu propia plantilla, con hoja de conciliación de cada cifra.
-          </Placeholder>
-        ),
-      },
+      { path: "presentacion", element: <Presentation /> },
+      { path: "reportes", element: <Presentation /> },
       {
         path: "preguntar",
         element: (
