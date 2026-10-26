@@ -773,7 +773,35 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   const stale = Boolean(a.month === currentMonth() && c.fechaCorte && (Date.parse(todayIso) - Date.parse(c.fechaCorte)) / 86_400_000 >= 3);
   const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
   const mtdTone = c.avanceMTD === null ? undefined : c.avanceMTD >= 100 ? ("good" as const) : c.avanceMTD >= 90 ? ("warn" as const) : ("bad" as const);
-  type Row = (typeof c.porAgente)[number];
+  type Row = (typeof c.porAgente)[number] & { ingresadas: number | null };
+  // Lo que llevan ingresado los agentes: las ventas que capturaron en el CRM (si se cargó el archivo del CRM del mes).
+  const crm = a.crm;
+  const ingresadasDe = new Map((crm?.porAgente ?? []).map((x) => [x.label, x.value]));
+  const parteMes = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
+  const filas: Row[] = [
+    ...c.porAgente.map((r) => ({ ...r, ingresadas: crm ? (ingresadasDe.get(r.agent) ?? 0) : null })),
+    // Quien ingresó ventas pero todavía no tiene ninguna en la sábana del banco también aparece (con 0 que cuentan).
+    ...(crm?.porAgente ?? [])
+      .filter((x) => !c.porAgente.some((r) => r.agent === x.label) && (!a.agente || x.label === a.agente))
+      .map((x) => {
+        const metaMTD = c.metaPorAgente === null ? null : c.metaPorAgente * parteMes;
+        return {
+          agent: x.label,
+          ventas: 0,
+          total: 0,
+          operaciones: 0,
+          aprobadas: 0,
+          meta: c.metaPorAgente,
+          gap: c.metaPorAgente,
+          avance: c.metaPorAgente ? 0 : null,
+          metaMTD,
+          gapMTD: metaMTD,
+          avanceMTD: metaMTD ? 0 : null,
+          ingresadas: x.value,
+        };
+      }),
+  ];
+  const enSabana = c.operacionesTotales;
   // Lo que cuenta, separado por mes de venta: el mes actual y la cosecha de meses anteriores.
   const origenParts = [
     { key: a.month, label: `Vendido en ${mes.split(" ")[0]}`, value: Math.max(0, c.ventas - c.cosecha.valor), color: "var(--viz-1)" },
@@ -803,6 +831,14 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
                 {money && <> ({fmtInt.format(c.operaciones)} operaciones)</>}
               </>
             ),
+          },
+          {
+            label: a.agente ? "Ingresadas" : "Ingresadas por los agentes",
+            ...(crm ? { num: crm.total, format: intOf } : { value: "—" }),
+            foot: crm
+              ? `En el CRM. ${fmtInt.format(enSabana)} en la sábana, ${fmtInt.format(c.operaciones)} cuentan${crm.total ? ` (${fmtPct(share(c.operaciones, crm.total), 0)})` : ""}`
+              : `Falta el archivo de ventas del CRM. En la sábana: ${fmtInt.format(enSabana)}`,
+            onOpen: crm ? () => open({ fuente: "crm", title: "Ventas ingresadas en el CRM" }) : undefined,
           },
           {
             label: "Avance del mes",
@@ -888,13 +924,15 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         }
       >
         <DataTable
-          rows={c.porAgente}
+          rows={filas}
           initialSort="ventas"
           onRowClick={(r) => setAgent(a.agente === r.agent ? null : r.agent)}
           rowHint="Filtrar la campaña por este agente"
           isActive={(r) => r.agent === a.agente}
           cols={[
             { key: "agent", label: "Agente", render: (r) => r.agent, sort: (r) => r.agent },
+            ...(crm ? [{ key: "ingresadas", label: "Ingresadas", align: "right" as const, render: (r: Row) => fmtInt.format(r.ingresadas ?? 0), sort: (r: Row) => r.ingresadas ?? 0 }] : []),
+            { key: "total", label: money ? "Monto en sábana" : "En sábana", align: "right", render: (r) => valInt(r.total), sort: (r) => r.total },
             { key: "ventas", label: money ? "Monto que cuenta" : "Cuentan", align: "right", render: (r) => valInt(r.ventas), sort: (r) => r.ventas },
             ...(money ? [{ key: "operaciones", label: "Operaciones", align: "right" as const, render: (r: Row) => fmtInt.format(r.operaciones), sort: (r: Row) => r.operaciones }] : []),
             { key: "metaMTD", label: "Meta MTD", align: "right", render: (r) => val(r.metaMTD), sort: (r) => r.metaMTD ?? 0 },
