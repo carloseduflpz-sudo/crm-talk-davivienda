@@ -102,6 +102,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
 
   /* ---------- sábana: cada venta con su estatus, si cuenta y a qué base pertenece ---------- */
   const ventas: PresVenta[] = [];
+  const documentos: NonNullable<PresentacionCampania["documentos"]> = [];
   if (sabana) {
     const counted = a.cumplimiento.config.estatus;
     const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
@@ -115,11 +116,16 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     const prevBinds = counted.length ? [campaign, month, ...counted] : [];
     const measure = a.cumplimiento.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
     const cuenta = campaign === "tdc" ? `json_extract(extra, '$."PRI - SEG / CUENTA"')` : "NULL";
+    // TDC: documentación pedida al cliente (lámina "Seguimiento de documentos").
+    const docCols =
+      campaign === "tdc"
+        ? `, json_extract(extra, '$.DOCUMENTACION') AS doc, json_extract(extra, '$."PENDIENTE POR REQUISITO"') AS pend, reason AS motivo`
+        : ", NULL AS doc, NULL AS pend, NULL AS motivo";
     const [rows, miembros] = await db.batch([
       db
         .prepare(
           `WITH ${prevCte}
-           SELECT niu, sale_date, ${label} AS estatus, COALESCE(process, '') AS proceso, ${measure} AS m, ${cuenta} AS cuenta,
+           SELECT niu, sale_date, ${label} AS estatus, COALESCE(process, '') AS proceso, ${measure} AS m, ${cuenta} AS cuenta${docCols},
                   CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
              FROM bank_sales WHERE upload_id = ?`,
         )
@@ -145,7 +151,11 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
       return pick[0]!.dataset;
     };
     const groups = new Map<string, PresVenta>();
-    for (const r of rows!.results as { niu: string; sale_date: string | null; estatus: string; proceso: string; m: number; cuenta: unknown; k: number }[]) {
+    for (const r of rows!.results as { niu: string; sale_date: string | null; estatus: string; proceso: string; m: number; cuenta: unknown; k: number; doc: unknown; pend: unknown; motivo: string | null }[]) {
+      if (campaign === "tdc" && n(r.k) !== 2) {
+        const txt = (v: unknown) => (v === null || v === undefined || String(v).trim() === "" ? null : String(v).trim());
+        documentos.push({ estatus: r.estatus, doc: txt(r.doc), pendiente: txt(r.pend), motivo: txt(r.motivo) });
+      }
       const sm = r.sale_date?.slice(0, 7) ?? month;
       const origen = sm < month ? "cosecha" : "mes";
       const grupo = grupoDe(r.niu, sm, r.cuenta);
@@ -209,6 +219,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     fechasPosteriores: a.cumplimiento.fechasPosteriores,
     bases,
     ventas,
+    ...(campaign === "tdc" ? { documentos } : {}),
     motivos,
     trimestre,
   };

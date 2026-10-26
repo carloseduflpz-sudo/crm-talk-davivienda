@@ -54,6 +54,16 @@ export interface PresVenta {
   valor: number;
 }
 
+export interface PresDocumento {
+  estatus: string;
+  /** Columna DOCUMENTACION de la sábana. */
+  doc: string | null;
+  /** Columna PENDIENTE POR REQUISITO. */
+  pendiente: string | null;
+  /** RECHAZO HOMOLOGADO. */
+  motivo: string | null;
+}
+
 export interface PresMotivo {
   tipologia: string;
   subtipologia: string;
@@ -94,6 +104,8 @@ export interface PresentacionCampania {
   motivos: PresMotivo[];
   /** Meses del trimestre hasta el mes elegido (para las láminas de gap). */
   trimestre: PresMesGap[];
+  /** TDC: cada venta de la sábana (del mes y cosecha) con lo que dice de documentos y su motivo de rechazo. */
+  documentos?: PresDocumento[];
   /** Gráficas de contacto tomadas del Excel de las gráficas, por base ("*" = toda la campaña). */
   contactoExcel?: Record<string, PresConteo[]>;
 }
@@ -346,6 +358,13 @@ export async function llenarPresentacion(deck: PresDeck, datos: PresDatos, opts:
       }
     }
 
+    // "Seguimiento de documentos" (TDC): documentos pedidos, recuperados y rechazos.
+    if (/seguimiento de documentos/.test(norm(titulo)) && enabled.has("tdc")) {
+      const t = datos.tdc;
+      if (!t?.documentos?.length) omitir(c, "Toda la lámina", "No hay sábana de TDC del mes.");
+      else slide = laminaDocumentos(c, t.documentos, slide, tables);
+    }
+
     const campaign = campanaDeTitulo(titulo);
     const d = campaign ? datos[campaign] : undefined;
     if (campaign && enabled.has(campaign)) {
@@ -518,6 +537,93 @@ function tablaCantado(c: Ctx, d: PresentacionCampania, slide: string, index: num
     for (const r of dynTpl) if (!dyn.some((x) => norm(x.label) === norm(r[0] ?? ""))) cambio(c, h0, r[0] ?? "", r[1] ?? "", "—");
   }
   return fillTable(slide, index, { headerRows: 1, rows });
+}
+
+/* ---------- seguimiento de documentos (TDC) ---------- */
+
+const NO_DOC = /^(no|n\/a|na|ninguno|ninguna|-|0|sin documentos?|no requiere.*|no aplica)$/;
+const tieneTexto = (v: string | null) => {
+  const t = norm(v ?? "");
+  return Boolean(t) && !NO_DOC.test(t);
+};
+
+/** Llena la lámina con todas las ventas de la sábana de TDC (las del mes y la cosecha). */
+function laminaDocumentos(c: Ctx, docs: PresDocumento[], slide: string, tables: ReturnType<typeof readTables>): string {
+  // Requiere documento: lo dice la columna DOCUMENTACION (o, si viene vacía en toda la sábana, PENDIENTE POR REQUISITO).
+  const usarDoc = docs.some((x) => tieneTexto(x.doc));
+  const textoDoc = (x: PresDocumento) => (usarDoc ? x.doc : x.pendiente);
+  const requieren = docs.filter((x) => tieneTexto(textoDoc(x)));
+  // Recuperado: requería documento y ya no está pendiente por requisito.
+  const recuperados = requieren.filter((x) => !norm(x.estatus).startsWith("pendiente por requisito"));
+  const rechazadas = docs.filter((x) => norm(x.estatus).startsWith("rechaz"));
+  const total = docs.length;
+  const block = "Seguimiento de documentos";
+  const pct = (old: string, a: number, b: number) => comoAntes(old || "0%", ratio(a, b) * 100, { porcentaje: true });
+
+  for (const t of tables) {
+    const head = norm(t.cells[0]?.join("|") ?? "");
+    const cells = t.cells;
+    try {
+      if (/^cliente pendiente de documento\|clientes recuperados/.test(head) && cells[1]) {
+        const r = cells[1];
+        const out = [comoAntes(r[0] || "0", requieren.length), comoAntes(r[1] || "0", recuperados.length), pct(r[2] ?? "", recuperados.length, requieren.length)];
+        cambio(c, block, "Pendientes de documento · recuperados", r.join(" · "), out.join(" · "));
+        slide = fillTable(slide, t.index, { headerRows: 1, rows: [out, ...cells.slice(2)] });
+      } else if (/^total de clientes\|no requiere/.test(head) && cells[1]) {
+        const r = cells[1];
+        const no = total - requieren.length;
+        const fila1 = [comoAntes(r[0] || "0", total), comoAntes(r[1] || "0", no), comoAntes(r[2] || "0", requieren.length)];
+        const p = cells[2] ?? ["%", "0%", "0%"];
+        const fila2 = [p[0] ?? "%", pct(p[1] ?? "", no, total), pct(p[2] ?? "", requieren.length, total)];
+        cambio(c, block, "Total · no requiere · requiere", r.join(" · "), fila1.join(" · "));
+        slide = fillTable(slide, t.index, { headerRows: 1, rows: cells[2] ? [fila1, fila2] : [fila1] });
+      } else if (/^doc\. solicitado\|total/.test(head)) {
+        // Cada documento de la plantilla: clientes cuya documentación lo menciona (uno puede pedir varios).
+        const rows = cells.slice(1).map((r) => {
+          const l = norm(r[0] ?? "");
+          const raiz = l.split(" ")[0]!.replace(/s$/, "");
+          const n = requieren.filter((x) => {
+            const txt = norm(`${x.doc ?? ""} ${x.pendiente ?? ""}`);
+            return txt.includes(l) || (raiz.length >= 3 && txt.includes(raiz));
+          }).length;
+          const now = comoAntes(r[1] || "0", n);
+          cambio(c, block, r[0] ?? "", r[1] ?? "", now);
+          return [r[0] ?? "", now];
+        });
+        slide = fillTable(slide, t.index, { headerRows: 1, rows });
+      } else if (/^rechazado pcbm/.test(head)) {
+        const rows = cells.slice(1).map((r) => {
+          const now = comoAntes(r[1] || "0", rechazadas.length);
+          cambio(c, block, `Rechazado PCBM · ${r[0] ?? ""}`, r[1] ?? "", now);
+          return [r[0] ?? "", now];
+        });
+        slide = fillTable(slide, t.index, { headerRows: 1, rows });
+      } else if (/^motivo de rechazo\|total\|%/.test(head)) {
+        const body = cells.slice(1);
+        const tplLabels = body.map((r) => r[0] ?? "");
+        const m = new Map<string, number>();
+        for (const x of rechazadas) {
+          const l = etiqueta(x.motivo ?? "Sin motivo", tplLabels);
+          m.set(l, (m.get(l) ?? 0) + 1);
+        }
+        const pos = (l: string) => (tplLabels.includes(l) ? tplLabels.indexOf(l) : 999);
+        let items = [...m.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n || pos(a.label) - pos(b.label));
+        const slots = body.length;
+        if (slots && items.length > slots) items = [...items.slice(0, slots - 1), { label: tplLabels.find((l) => /^otro/i.test(l)) ?? "Otros", n: sum(items.slice(slots - 1).map((x) => x.n)) }];
+        const rows = items.map((x, i) => {
+          const tpl = body[i] ?? body[body.length - 1] ?? ["", "0", "0%"];
+          const out = [x.label, comoAntes(tpl[1] || "0", x.n), pct(tpl[2] ?? "", x.n, rechazadas.length)];
+          const old = body.find((r) => norm(r[0] ?? "") === norm(x.label));
+          cambio(c, "Motivo de rechazo", x.label, old ? `${old[1]} (${old[2]})` : "—", `${out[1]} (${out[2]})`);
+          return out;
+        });
+        if (rows.length) slide = fillTable(slide, t.index, { headerRows: 1, rows });
+      }
+    } catch (e) {
+      omitir(c, cells[0]?.[0] ?? "Tabla", (e as Error).message);
+    }
+  }
+  return slide;
 }
 
 /* ---------- activas por proceso (p. ej. "Tipo de Desembolso": Online / Cheque) ---------- */

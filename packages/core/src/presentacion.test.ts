@@ -313,4 +313,42 @@ describe("presentación: llenado de las láminas", () => {
       ["Desistido", "$0.00"],
     ]);
   });
+
+  it("Seguimiento de documentos (TDC): requieren, recuperados, documentos pedidos y rechazos", async () => {
+    const deck = memoryDeck(
+      {
+        "ppt/slides/slide1.xml": slide(
+          title("Seguimiento de documentos") +
+            table(0, [["Motivo de Rechazo", "Total", "%"], ["Mora Actual", "9", "39%"], ["Alto Endeudamiento", "7", "31%"], ["Otros", "4", "17%"]]) +
+            table(0, [["Cliente pendiente de documento", "Clientes recuperados", "Porcentaje"], ["151", "96", "64%"]]) +
+            table(0, [["Total de clientes", "No requiere Doc.", "Requiere Doc."], ["207", "56", "151"], ["%", "27%", "73%"]]) +
+            table(0, [["Doc. Solicitado", "Total"], ["BOLETAS DE PAGO", "120"], ["RECIBO", "63"], ["DUI", "29"]]) +
+            table(0, [["Rechazado PCBM", ""], ["Cliente", "23"]]),
+        ),
+      },
+      {},
+    );
+    const doc = (estatus: string, d: string | null, motivo: string | null = null) => ({ estatus, doc: d, pendiente: null, motivo });
+    const tdc: PresentacionCampania = {
+      ...upin,
+      campaign: "tdc",
+      documentos: [
+        doc("ENTREGADA", "BOLETAS DE PAGO, RECIBO"),
+        doc("PENDIENTE POR REQUISITO", "BOLETA DE PAGO"),
+        doc("PENDIENTE POR REQUISITO/VENCIDOS", "DUI"),
+        doc("RECHAZADA", "RECIBO", "Alto Endeudamiento"),
+        doc("RECHAZADA", null, "Mora Actual"),
+        doc("RECHAZADA", "NO REQUIERE", "Base Vencida"),
+        doc("ENTREGADA", null),
+        doc("ENTREGADA", "No"),
+      ],
+    };
+    await llenarPresentacion(deck, { tdc }, { mesPlantilla: "2026-10" });
+    const [rech, pend, tot, docs, pcbm] = readTables(deck.parts["ppt/slides/slide1.xml"]!);
+    expect(pend!.cells[1]).toEqual(["4", "2", "50%"]); // requieren 4 (2 siguen pendientes): recuperados 2
+    expect(tot!.cells.slice(1)).toEqual([["8", "4", "4"], ["%", "50%", "50%"]]);
+    expect(docs!.cells.slice(1)).toEqual([["BOLETAS DE PAGO", "2"], ["RECIBO", "2"], ["DUI", "1"]]);
+    expect(pcbm!.cells[1]).toEqual(["Cliente", "3"]);
+    expect(rech!.cells.slice(1)).toEqual([["Mora Actual", "1", "33%"], ["Alto Endeudamiento", "1", "33%"], ["Base Vencida", "1", "33%"]]);
+  });
 });

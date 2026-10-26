@@ -35,7 +35,7 @@ async function load(dataset: string, month: string, rows: unknown[]) {
   expect((await call("POST", `/cargas/${c.data.id}/confirmar`, {})).status).toBe(200);
 }
 
-const sale = (niu: string, saleDate: string, statusRaw: string, extra: Record<string, string> = {}) => ({ niu, saleDate, executive: niu === "101" ? "Luis" : "Ana", statusRaw, extra });
+const sale = (niu: string, saleDate: string, statusRaw: string, extra: Record<string, string> = {}) => ({ niu, saleDate, executive: niu === "101" ? "Luis" : "Ana", statusRaw, reason: statusRaw === "RECHAZADA" ? "Base Vencida" : null, extra });
 const call_ = (niu: string, calledAt: string, category: string, tipologia: string, sub = tipologia) => ({ niu, agent: "Ana", calledAt, category, tipologia, extra: { Subtipologia: sub } });
 
 let d: PresentacionCampania;
@@ -63,7 +63,7 @@ beforeAll(async () => {
     sale("502", "2026-09-28", "RECHAZADA"), // cosecha que no cuenta
     sale("100", "2026-10-02", "ENTREGADA", { "PRI - SEG / CUENTA": "SEGUNDA CUENTA" }), // la sábana dice que es de segundas
     sale("101", "2026-10-06", "ENTREGADA"),
-    sale("102", "2026-10-07", "PENDIENTE POR REQUISITO"),
+    sale("102", "2026-10-07", "PENDIENTE POR REQUISITO", { DOCUMENTACION: "BOLETAS DE PAGO" }),
   ]);
   await load("tdc:base:primeras", "2026-10", Array.from({ length: 10 }, (_, i) => ({ niu: String(100 + i) })));
   await load("tdc:base:segundas", "2026-10", Array.from({ length: 5 }, (_, i) => ({ niu: String(200 + i) })));
@@ -101,6 +101,10 @@ describe("presentación: cifras de TDC octubre", () => {
     expect(pick("101")).toMatchObject({ origen: "mes", k: 1, grupo: "tdc:base:primeras", semana: 2 });
     expect(pick("102")).toMatchObject({ origen: "mes", k: 0, grupo: "tdc:base:primeras" });
     expect(d.resultado).toBe(3);
+    // Documentos (TDC): todas las ventas menos las que ya contaron antes, con DOCUMENTACION y motivo de rechazo.
+    expect(d.documentos).toHaveLength(5);
+    expect(d.documentos!.find((x) => x.doc)).toEqual({ estatus: "PENDIENTE POR REQUISITO", doc: "BOLETAS DE PAGO", pendiente: null, motivo: null });
+    expect(d.documentos!.find((x) => x.estatus === "RECHAZADA")!.motivo).toBe("Base Vencida");
     expect(d.meta).toBe(20);
     // La sábana llega al 7 de octubre: 5 de los 22 días hábiles del mes → meta MTD = 20 × 5 / 22.
     expect(d.diasHabiles).toEqual({ transcurridos: 5, total: 22 });
