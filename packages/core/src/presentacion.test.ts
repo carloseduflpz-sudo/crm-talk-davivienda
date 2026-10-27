@@ -223,6 +223,10 @@ describe("presentación: llenado de las láminas", () => {
     await llenarPresentacion(deck2, { upin: { ...upin, resultado: 43.6, esperado: 100 } }, { mesPlantilla: "2026-10" });
     expect(readChart(deck2.parts["ppt/charts/chart2.xml"]!)[0]!.values).toEqual([0.44, -0.56]);
     expect(deck2.parts["ppt/charts/chart2.xml"]!.includes("<c:formatCode>0%</c:formatCode>")).toBe(true);
+    // R ÷ M que cae justo en .5 (56.5%) sube a 57%, aunque la división dé 56.49999…
+    const deck3 = memoryDeck({ ...parts }, rels);
+    await llenarPresentacion(deck3, { upin: { ...upin, resultado: 113, esperado: 200 } }, { mesPlantilla: "2026-10" });
+    expect(readChart(deck3.parts["ppt/charts/chart2.xml"]!)[0]!.values).toEqual([0.57, -0.43]);
     // Corte el 14 → semana 3: las semanas 1 y 2 se respetan de la plantilla y la 3 es lo que falta para el total.
     const w = readChart(deck.parts["ppt/charts/chart3.xml"]!);
     expect(w[0]!.values).toEqual([4, 9, 7, null, null]); // upgrade activas: 20

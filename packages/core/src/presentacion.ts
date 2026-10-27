@@ -1071,7 +1071,8 @@ function graficaContacto(c: Ctx, d: PresentacionCampania, chart: string, series:
 function graficaCumplimiento(c: Ctx, d: PresentacionCampania, chart: string, series: ReturnType<typeof readChart>): string {
   if (!d.esperado) throw new Error("Falta la meta del mes (o la sábana) para calcular el cumplimiento MTD.");
   // Porcentaje entero: 43.6% se presenta como 44% (y el GAP, como su complemento: -56%).
-  const r = Math.round((d.resultado / d.esperado) * 100) / 100;
+  // R ÷ M, la misma M y la misma R de los recuadros. Redondeo al entero sin errores de decimales (65.5% → 66%, no 65%).
+  const r = Math.round(Number(((d.resultado / d.esperado) * 100).toFixed(6))) / 100;
   const gap = Math.round((r - 1) * 100) / 100;
   const old = series[0]!.values;
   cambio(c, "Cumplimiento MTD", "Cumplimiento", pctTxt(old[0]), pctTxt(r));
