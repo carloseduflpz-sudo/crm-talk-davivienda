@@ -51,7 +51,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     const b = `b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${ph(ids.length)}))`;
     const c = `c AS (SELECT c.niu, c.category, c.call_class, ROW_NUMBER() OVER (PARTITION BY c.niu ORDER BY c.called_at DESC, c.id DESC) AS rn,
                         COUNT(*) OVER (PARTITION BY c.niu) AS k
-                   FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?)`;
+                   FROM calls c WHERE c.upload_id = ? AND c.niu IN (SELECT niu FROM b))`;
     const [tot, cont, venta, prev] = await db.batch([
       db
         .prepare(
@@ -125,7 +125,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
         SELECT niu, sale_date, ${label} AS estatus, COALESCE(process, '') AS proceso, ${measure} AS m, ${cuenta} AS cuenta${docCols},
                CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen,
                COALESCE(substr(sale_date, 1, 7), ?) AS sm,
-               CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
+               CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
           FROM bank_sales WHERE upload_id = ?),
       g AS (
         SELECT s.*, ${semanaSql} AS semana,

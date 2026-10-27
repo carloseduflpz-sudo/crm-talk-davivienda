@@ -553,7 +553,9 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
       /* Cosecha: la sábana del mes trae también ventas de meses anteriores. Cuenta para la meta de este mes
          lo que el banco entregó, aplicó o activó y que NO contó ya en la sábana de un mes anterior
-         (misma venta = mismo NIU y misma fecha de venta). k: 0 no cuenta, 1 cuenta, 2 ya contó antes. */
+         (misma venta = mismo NIU y misma fecha de venta). k: 0 no cuenta, 1 cuenta, 2 ya contó antes.
+         Se busca con IN (subconsulta) y no con EXISTS: así SQLite arma un índice temporal y no recorre todas las
+         ventas de los meses anteriores por cada venta (con sábanas consolidadas de varios meses tardaba demasiado). */
       const prevLabel = "COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)')";
       const prevCte = counted.length
         ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
@@ -562,7 +564,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
         : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
       const prevBinds = counted.length ? [campaign, month, ...counted] : [];
       const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
-             CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
+             CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
            FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
       const cteBinds = [...prevBinds, ...counted, sabana.id, ...fb];
       const [porAgente, porDia, origen] = await db.batch([

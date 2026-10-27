@@ -141,16 +141,16 @@ export class Router {
       console.error("API error", err);
       const detail = err instanceof Error ? err.message : String(err);
       // Límites de Cloudflare D1 (filas escritas por día, tamaño, tiempo): se explica qué pasó en vez de un error genérico.
-      if (/D1|SQLITE/i.test(detail) && /exceed|limit|quota|too (many|big|large)|reset because/i.test(detail)) {
-        return json(
-          {
-            ok: false,
-            code: "limite_cloudflare",
-            error: "Cloudflare rechazó la operación por un límite de la base de datos (en el plan gratuito: 100 000 filas escritas por día). Revisa el plan de Workers en Cloudflare.",
-            detail: detail.slice(0, 300),
-          },
-          503,
-        );
+      if (/D1|SQLITE/i.test(detail) && /exceed|limit|quota|too (many|big|large)|reset because|timed? ?out/i.test(detail)) {
+        // Cada límite con su explicación: no todo es "filas escritas" (una consulta lenta también lo dispara).
+        const escritura = /row.*writ|writ.*row|daily|quota/i.test(detail);
+        const tiempo = /timeout|timed? ?out|duration|reset because|cpu/i.test(detail);
+        const error = escritura
+          ? "Cloudflare rechazó la operación por el límite de filas escritas por día de la base de datos. Revisa el plan de Workers en Cloudflare."
+          : tiempo
+            ? "La consulta tardó más de lo que permite la base de datos de Cloudflare. Vuelve a intentar; si se repite, avísale al desarrollador con este detalle: " + detail.slice(0, 160)
+            : "Cloudflare rechazó la operación por un límite de la base de datos: " + detail.slice(0, 160);
+        return json({ ok: false, code: "limite_cloudflare", error, detail: detail.slice(0, 300) }, 503);
       }
       return json({ ok: false, error: "Error interno. Ya quedó registrado; intenta de nuevo.", detail: detail.slice(0, 300) }, 500);
     }
