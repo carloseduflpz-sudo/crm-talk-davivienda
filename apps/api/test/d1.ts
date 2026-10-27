@@ -47,12 +47,21 @@ class Statement {
   }
 }
 
+/* D1 rechaza consultas con muchas partes unidas por UNION ("too many terms in compound SELECT"), aunque SQLite
+   local las acepte. Aquí se rechazan desde 4 partes para que las pruebas lo detecten antes que Cloudflare. */
+const MAX_PARTES = 3;
+function comoD1(sql: string): string {
+  const partes = (sql.match(/\bUNION\b/gi) ?? []).length + 1;
+  if (partes > MAX_PARTES) throw new Error(`D1_ERROR: too many terms in compound SELECT: SQLITE_ERROR (${partes} partes)`);
+  return sql;
+}
+
 export function memoryD1(): D1Database {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   for (const f of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) db.exec(readFileSync(MIGRATIONS + f, "utf8"));
   const d1 = {
-    prepare: (sql: string) => new Statement(db, sql),
+    prepare: (sql: string) => new Statement(db, comoD1(sql)),
     async batch(stmts: Statement[]) {
       db.exec("BEGIN");
       try {

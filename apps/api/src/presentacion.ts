@@ -117,9 +117,16 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
         const b = `b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${ph(prevIds.length)}) AND niu NOT IN (SELECT niu FROM base_records WHERE upload_id IN (${ph(ids.length)})))`;
         return estadisticas(dataset, b, [...prevIds, ...ids], Promise.resolve(null));
       }),
-  );
+  ).catch((err: unknown) => {
+    console.error("Remanente", campaign, err);
+    return [] as PresBase[];
+  });
   /* Conversión por segmento: clientes, contactados y con venta por cada valor de las columnas de la base. */
-  const segmentosP = segmentosDeBase(env, datasetsPrincipales(campaign, datasets), idsDe, prevIdsDe, tipif?.id ?? null, sabana?.id ?? null, month, eff);
+  // Si algo de los segmentos falla, el resto de la presentación sale igual (esa gráfica se deja como estaba y se avisa).
+  const segmentosP = segmentosDeBase(env, datasetsPrincipales(campaign, datasets), idsDe, prevIdsDe, tipif?.id ?? null, sabana?.id ?? null, month, eff).catch((err: unknown) => {
+    console.error("Conversión por segmento", campaign, err);
+    return [];
+  });
 
   /* ---------- sábana: cada venta con su estatus, si cuenta y a qué base pertenece ---------- */
   const ventas: PresVenta[] = [];

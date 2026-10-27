@@ -41,35 +41,35 @@ export async function segmentosDeBase(
     .filter((k) => typeof k === "string" && !k.includes('"') && esColumnaDeSegmento(k))
     .slice(0, MAX_COLUMNAS);
 
-  // Perfil y oferta se guardan aparte: llevan el nombre de su columna en cada base.
-  const nombre = (campo: "profile" | "offer") => {
+  /* Perfil y oferta se guardan aparte: se agregan a las columnas con el nombre que tienen en cada base.
+     Una sola consulta sin UNION: D1 no acepta consultas con muchas partes ("too many terms in compound SELECT"). */
+  const nombreDe = (campo: "profile" | "offer") => {
     const casos = datasets.map((ds) => [ds, columnasBase(ds)[campo]] as const).filter((x): x is readonly [string, string] => Boolean(x[1]));
-    return casos.length ? `CASE dataset ${casos.map(([ds, col]) => `WHEN ${lit(ds)} THEN ${lit(col)}`).join(" ")} END` : null;
+    return { casos, sql: `'$."' || CASE x.dataset ${casos.map(([ds, col]) => `WHEN ${lit(ds)} THEN ${lit(col)}`).join(" ")} ELSE '__${campo}' END || '"'` };
   };
-  const ramas: string[] = [];
-  for (const campo of ["profile", "offer"] as const) {
-    const k = nombre(campo);
-    if (k) ramas.push(`SELECT ${k} AS k, ${redondeo(campo)} AS val, rem, COUNT(*) AS n, SUM(c) AS c, SUM(v) AS v FROM p GROUP BY 1, 2, 3`);
-  }
-  for (const col of columnas) {
-    const expr = `json_extract(extra, ${lit(`$."${col}"`)})`;
-    ramas.push(`SELECT ${lit(col)} AS k, ${redondeo(expr)} AS val, rem, COUNT(*) AS n, SUM(c) AS c, SUM(v) AS v FROM p GROUP BY 2, 3`);
-  }
-  if (!ramas.length) return [];
+  const perfil = nombreDe("profile");
+  const oferta = nombreDe("offer");
+  const todas = [...new Set([...perfil.casos.map((c) => c[1]), ...oferta.casos.map((c) => c[1]), ...columnas])];
+  if (!todas.length) return [];
+  const lista = JSON.stringify(todas.map((k) => [k, `$."${k}"`]));
+  const actuales = ids.map(lit).join(", ");
+  const todos = [...ids, ...prevIds].map(lit).join(", ");
 
-  const remanente = prevIds.length
-    ? `UNION ALL SELECT MIN(id), 1, niu FROM base_records WHERE upload_id IN (${ph(prevIds.length)}) AND niu NOT IN (SELECT niu FROM bm) GROUP BY niu`
-    : "";
-  const sql = `WITH bm AS (SELECT niu, MIN(id) AS r FROM base_records WHERE upload_id IN (${ph(ids.length)}) GROUP BY niu),
-      pr AS (SELECT r, 0 AS rem, niu FROM bm ${remanente}),
+  // Remanente: clientes del mes anterior que no vienen en la base de este mes (rem = 1).
+  const sql = `WITH pr AS (SELECT niu, COALESCE(MIN(CASE WHEN upload_id IN (${actuales}) THEN id END), MIN(id)) AS r,
+                          MIN(CASE WHEN upload_id IN (${actuales}) THEN 0 ELSE 1 END) AS rem
+                     FROM base_records WHERE upload_id IN (${todos}) GROUP BY niu),
       ct AS (SELECT DISTINCT c.niu FROM calls c WHERE c.upload_id = ? AND ${eff}),
       sv AS (SELECT DISTINCT niu FROM bank_sales WHERE upload_id = ? AND sale_date LIKE ?),
-      p AS MATERIALIZED (SELECT pr.rem, x.dataset, x.profile, x.offer, x.extra, pr.niu IN (SELECT niu FROM ct) AS c, pr.niu IN (SELECT niu FROM sv) AS v
-                           FROM pr JOIN base_records x ON x.id = pr.r)
-    ${ramas.join("\n    UNION ALL ")}`;
+      p AS MATERIALIZED (SELECT pr.rem, json_set(COALESCE(x.extra, '{}'), ${perfil.sql}, x.profile, ${oferta.sql}, x.offer) AS extra,
+                                pr.niu IN (SELECT niu FROM ct) AS c, pr.niu IN (SELECT niu FROM sv) AS v
+                           FROM pr JOIN base_records x ON x.id = pr.r),
+      cols AS (SELECT json_extract(value, '$[0]') AS k, json_extract(value, '$[1]') AS path FROM json_each(?)),
+      e AS (SELECT cols.k AS k, json_extract(p.extra, cols.path) AS raw, p.rem AS rem, p.c AS c, p.v AS v FROM p, cols)
+    SELECT k, ${redondeo("raw")} AS val, rem, COUNT(*) AS n, SUM(c) AS c, SUM(v) AS v FROM e GROUP BY 1, 2, 3`;
   const { results } = await db
     .prepare(sql)
-    .bind(...ids, ...prevIds, tipifId, sabanaId, `${month}%`)
+    .bind(tipifId, sabanaId, `${month}%`, lista)
     .all<{ k: string | null; val: string | number | null; rem: number; n: number; c: number; v: number }>();
 
   // Columnas con demasiados valores distintos (nombres, códigos…) no sirven de segmento.
