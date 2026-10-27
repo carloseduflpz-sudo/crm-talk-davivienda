@@ -11,6 +11,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Se avisa después de cada cambio guardado, para volver a pedir las cifras (ver main.tsx). */
+let alEscribir: (() => void) | null = null;
+export const avisarEscrituras = (f: () => void) => void (alEscribir = f);
+/** Entrar/salir y los lotes de filas de una carga sin confirmar no cambian ninguna cifra. */
+const cambiaCifras = (method: string, path: string) => method !== "GET" && !path.startsWith("/auth/") && !/\/filas$/.test(path);
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
@@ -33,6 +39,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       data,
     );
   }
+  if (cambiaCifras(method, path)) alEscribir?.();
   return data as T;
 }
 

@@ -2,6 +2,7 @@
 import { can, type Permission } from "@crm/core";
 import { userFromRequest } from "./auth";
 import type { Env, User } from "./env";
+import { marcarCambio } from "./resultados";
 
 export class HttpError extends Error {
   constructor(
@@ -135,7 +136,14 @@ export class Router {
         }
         ctx.user = user;
       }
-      return await route.handler(ctx);
+      // Toda escritura (salvo entrar/salir y los lotes de filas de una carga aún sin confirmar) cambia la revisión:
+      // así ningún resultado guardado de antes se vuelve a mostrar (ver resultados.ts).
+      const escribe = req.method !== "GET" && req.method !== "HEAD" && !/^\/auth\/|\/filas$/.test(path);
+      try {
+        return await route.handler(ctx);
+      } finally {
+        if (escribe) await marcarCambio(env);
+      }
     } catch (err) {
       if (err instanceof HttpError) return json({ ok: false, error: err.message, ...err.extra }, err.status);
       console.error("API error", err);

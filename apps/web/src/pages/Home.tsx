@@ -1,9 +1,10 @@
 import { CAMPAIGNS } from "@crm/core";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { Link } from "react-router";
 import { Badge, Card, PageHeader, StatusDot } from "../components/ui";
 import { api } from "../lib/api";
+import { precargarCampana } from "../lib/consultas";
 import { monthLabel } from "../lib/xlsx";
 
 export function Home() {
@@ -11,6 +12,7 @@ export function Home() {
   const h = health.data;
   const uploads = useQuery({ queryKey: ["uploads", "todas"], queryFn: () => api.uploads() });
   const fmt = new Intl.NumberFormat("es-SV");
+  const qc = useQueryClient();
 
   return (
     <>
@@ -33,7 +35,7 @@ export function Home() {
           const loaded = new Set(inLast.map((u) => u.dataset));
           const rows = inLast.reduce((n, u) => n + u.rowsValid, 0);
           return (
-          <Link key={c.code} to={`/campanas/${c.code}`} className="group">
+          <Link key={c.code} to={`/campanas/${c.code}`} className="group" onMouseEnter={() => void precargarCampana(qc, c.code)}>
             <Card className="h-full transition-shadow group-hover:shadow-md">
               <div className="flex items-start justify-between gap-3">
                 <div>

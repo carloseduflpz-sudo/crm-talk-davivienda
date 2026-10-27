@@ -36,6 +36,7 @@ import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
+import { consultaAnalisis, mesAnterior } from "../lib/consultas";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
@@ -1196,19 +1197,17 @@ export function Campaign() {
   const agent = params.get("agente") || null;
   const valid = isCampaignCode(code);
   const analysis = useQuery({
-    queryKey: ["analysis", code, requested, agent],
-    queryFn: () => api.analysis(code, requested, agent),
+    ...consultaAnalisis(code, requested, agent),
     enabled: valid,
-    // Al cambiar de mes o de agente se queda lo anterior en pantalla hasta que llega lo nuevo.
-    placeholderData: keepPreviousData,
+    // Al cambiar de mes o de agente se queda lo anterior en pantalla hasta que llega lo nuevo
+    // (pero nunca las cifras de otra campaña).
+    placeholderData: (anterior, consulta) => (consulta?.queryKey[1] === code ? keepPreviousData(anterior) : undefined),
   });
   const a = analysis.data;
-  const prevMonth = a?.month ? a.months[a.months.indexOf(a.month) + 1] : undefined;
+  const prevMonth = mesAnterior(a);
   const prev = useQuery({
-    queryKey: ["analysis", code, prevMonth ?? null, agent],
-    queryFn: () => api.analysis(code, prevMonth, agent),
+    ...consultaAnalisis(code, prevMonth ?? null, agent),
     enabled: valid && Boolean(prevMonth),
-    staleTime: 60_000,
   });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
   const [detail, setDetail] = useState<DetailSpec | null>(null);

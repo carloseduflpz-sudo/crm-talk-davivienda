@@ -13,6 +13,8 @@ export interface Env {
    * Cuando ya existe un usuario, deja de servir.
    */
   SETUP_TOKEN?: string;
+  /** Datos de la publicación actual del Worker (ver wrangler.jsonc). */
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
 }
 
 export interface User {

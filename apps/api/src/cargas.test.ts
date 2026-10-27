@@ -199,7 +199,8 @@ describe("centro de carga", () => {
     expect((await call("PUT", `/cargas/${id}/archivo`, bytes, { "content-type": "application/octet-stream" })).status).toBe(400); // falta la cabecera
     expect((await call("PUT", `/cargas/${id}/archivo`, new TextEncoder().encode("otro"), { "x-crm-archivo": "1" })).status).toBe(400);
     expect((await call("PUT", `/cargas/${id}/archivo`, bytes, { "x-crm-archivo": "1" })).status).toBe(200);
-    expect([...files.keys()]).toEqual(["cargas/tdc/tdc_sabana/2026-09/v1-Sabana TDC.xlsx"]);
+    // (cache/… son los resultados guardados y su revisión: ver resultados.ts)
+    expect([...files.keys()].filter((k) => !k.startsWith("cache/"))).toEqual(["cargas/tdc/tdc_sabana/2026-09/v1-Sabana TDC.xlsx"]);
   });
 
   it("sin sesión no se puede cargar ni ver", async () => {

@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { Layout } from "./components/Layout";
 import { EmptyState } from "./components/ui";
-import { ApiError, api } from "./lib/api";
+import { ApiError, api, avisarEscrituras } from "./lib/api";
 import { Campaign } from "./pages/Campaign";
 import { BulkUpload } from "./pages/BulkUpload";
 import { ChangePassword } from "./pages/ChangePassword";
@@ -28,6 +28,11 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+/* Después de cualquier cambio guardado (carga, meta, nombres de agentes…) se vuelven a pedir las cifras:
+   lo que ya estaba en memoria nunca se queda viejo aunque se reutilice unos minutos. */
+const CIFRAS = new Set(["analysis", "historico", "presentacion", "cliente"]);
+avisarEscrituras(() => void queryClient.invalidateQueries({ predicate: (q) => CIFRAS.has(String(q.queryKey[0])) }));
 
 /* Si la sesión vence mientras la app está abierta, vuelve a la pantalla de entrada. */
 queryClient.getQueryCache().subscribe((e) => {

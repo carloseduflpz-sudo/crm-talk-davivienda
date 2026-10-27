@@ -24,6 +24,7 @@ import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
+import { parteClave, Resultados } from "./resultados";
 
 interface CurrentUpload {
   id: string;
@@ -83,18 +84,37 @@ function acumulado(month: string, porDia: { date: string; ventas: number; monto:
   return { ventas: v, monto: m.map((x) => Math.round(x * 100) / 100) };
 }
 
-export async function analyzeCampaign(env: Env, campaign: string, requestedMonth: string | null, agente: string | null = null): Promise<CampaignAnalysis> {
+/** Análisis de la campaña; si ya se calculó con los mismos archivos y la misma configuración, sale de lo guardado. */
+export function analyzeCampaign(
+  env: Env,
+  campaign: string,
+  requestedMonth: string | null,
+  agente: string | null = null,
+  resultados: Resultados = new Resultados(env),
+): Promise<CampaignAnalysis> {
+  return resultados.obtener(`analisis/${campaign}/${requestedMonth ?? "ultimo"}/${parteClave(agente)}.json`, () =>
+    calcularAnalisis(env, campaign, requestedMonth, agente),
+  );
+}
+
+async function calcularAnalisis(env: Env, campaign: string, requestedMonth: string | null, agente: string | null): Promise<CampaignAnalysis> {
   const db = env.DB;
-  // Nombre homologado del agente (la herramienta une sola las formas distintas de escribir a la misma persona).
-  const naming = await loadAgentNaming(env, campaign);
+  /* Velocidad: cada consulta es un viaje del Worker a la base. Lo que no depende de nada se pide junto
+     (nombres de agentes, archivos vigentes, regla de contacto y metas) y después cada sección va en paralelo. */
+  const [naming, { results: current }, ruleRow, { results: goalRows }] = await Promise.all([
+    // Nombre homologado del agente (la herramienta une sola las formas distintas de escribir a la misma persona).
+    loadAgentNaming(env, campaign),
+    db
+      .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by, is_addition, label FROM uploads WHERE campaign = ? AND is_current = 1")
+      .bind(campaign)
+      .all<CurrentUpload>(),
+    db.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>(),
+    db.prepare("SELECT month, sales_goal, agents, counted_statuses, work_days, holidays FROM goals WHERE campaign = ?").bind(campaign).all<GoalRow & { month: string }>(),
+  ]);
   const agentLabel = naming.sql;
   // Filtro opcional por agente: se agrega a cada consulta de ventas, llamadas y CRM.
   const fa = (col: string) => (agente ? ` AND ${agentLabel(col)} = ?` : "");
   const fb: string[] = agente ? [agente] : [];
-  const { results: current } = await db
-    .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by, is_addition, label FROM uploads WHERE campaign = ? AND is_current = 1")
-    .bind(campaign)
-    .all<CurrentUpload>();
   const months = [...new Set(current.map((u) => u.month))].sort().reverse();
   const month = requestedMonth && months.includes(requestedMonth) ? requestedMonth : (months[0] ?? null);
   const ofMonth = current.filter((u) => u.month === month);
@@ -103,10 +123,7 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
   const crm = ofMonth.find((u) => u.kind === "ventas");
   const bases = ofMonth.filter((u) => u.kind === "base");
 
-  const rule =
-    (await db.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>())?.contact_rule === "sin_no_efectivo"
-      ? "sin_no_efectivo"
-      : "con_no_efectivo";
+  const rule = ruleRow?.contact_rule === "sin_no_efectivo" ? "sin_no_efectivo" : "con_no_efectivo";
   const efectivoSql = rule === "con_no_efectivo" ? "call_class IN ('venta','negativo','no_efectivo')" : "call_class IN ('venta','negativo')";
 
   const out: CampaignAnalysis = {
@@ -154,501 +171,518 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
   };
 
   /* ---------- fechas: hasta qué día llegan los datos y filas de otros meses ---------- */
-  if (month) {
-    type Dated = ["sabana" | "tipif" | "ventas", CurrentUpload | undefined, string, string];
-    const dated = (
-      [
-        ["sabana", sabana, "bank_sales", "sale_date"],
-        ["tipif", tipif, "calls", "called_at"],
-        ["ventas", crm, "crm_sales", "entered_at"],
-      ] as Dated[]
-    ).filter((x): x is ["sabana" | "tipif" | "ventas", CurrentUpload, string, string] => Boolean(x[1]));
-    if (dated.length) {
-      const res = await db.batch(
-        dated.map(([, u, table, col]) =>
-          db
-            .prepare(
-              `SELECT MAX(CASE WHEN substr(${col}, 1, 7) = ?1 THEN substr(${col}, 1, 10) END) AS hasta,
-                      SUM(CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN 1 ELSE 0 END) AS fuera,
-                      GROUP_CONCAT(DISTINCT CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN substr(${col}, 1, 7) END) AS meses
-                 FROM ${table} WHERE upload_id = ?2`,
-            )
-            .bind(month, u.id),
-        ),
-      );
-      let hasta: string | null = null;
-      res.forEach((r, i) => {
-        const row = r.results[0] as { hasta: string | null; fuera: number | null; meses: string | null } | undefined;
-        if (row?.hasta && (!hasta || row.hasta > hasta)) hasta = row.hasta;
-        // La sábana trae ventas de meses anteriores a propósito (cosecha): no es un error.
-        if (n(row?.fuera) > 0 && dated[i]![0] !== "sabana") out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
-      });
-      out.fechas.hasta = hasta;
+  const fechasP = (async () => {
+    if (month) {
+      type Dated = ["sabana" | "tipif" | "ventas", CurrentUpload | undefined, string, string];
+      const dated = (
+        [
+          ["sabana", sabana, "bank_sales", "sale_date"],
+          ["tipif", tipif, "calls", "called_at"],
+          ["ventas", crm, "crm_sales", "entered_at"],
+        ] as Dated[]
+      ).filter((x): x is ["sabana" | "tipif" | "ventas", CurrentUpload, string, string] => Boolean(x[1]));
+      if (dated.length) {
+        const res = await db.batch(
+          dated.map(([, u, table, col]) =>
+            db
+              .prepare(
+                `SELECT MAX(CASE WHEN substr(${col}, 1, 7) = ?1 THEN substr(${col}, 1, 10) END) AS hasta,
+                        SUM(CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN 1 ELSE 0 END) AS fuera,
+                        GROUP_CONCAT(DISTINCT CASE WHEN ${col} GLOB '20[0-9][0-9]-[0-9][0-9]*' AND substr(${col}, 1, 7) <> ?1 THEN substr(${col}, 1, 7) END) AS meses
+                   FROM ${table} WHERE upload_id = ?2`,
+              )
+              .bind(month, u.id),
+          ),
+        );
+        let hasta: string | null = null;
+        res.forEach((r, i) => {
+          const row = r.results[0] as { hasta: string | null; fuera: number | null; meses: string | null } | undefined;
+          if (row?.hasta && (!hasta || row.hasta > hasta)) hasta = row.hasta;
+          // La sábana trae ventas de meses anteriores a propósito (cosecha): no es un error.
+          if (n(row?.fuera) > 0 && dated[i]![0] !== "sabana") out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
+        });
+        out.fechas.hasta = hasta;
+      }
     }
-  }
+
+  })();
 
   /* ---------- ventas (sábana del banco) ---------- */
-  if (sabana) {
-    const id = sabana.id;
-    const [totals, estatus, ejecutivos, motivos, dias, procesos, mensual] = await db.batch([
-      db.prepare(`SELECT status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY status_class`).bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS ventas,
-                  SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
-                  COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
-             FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT sale_date AS d, COUNT(*) AS ventas, SUM(status_class = 'aprobado') AS aprobadas, COALESCE(SUM(amount), 0) AS monto,
-                  COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
-        )
-        .bind(id, ...fb),
-      db.prepare(`SELECT process AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} AND process IS NOT NULL GROUP BY process ORDER BY n DESC`).bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT u.month AS month, COUNT(*) AS ventas, SUM(b.status_class = 'aprobado') AS aprobadas,
-                  SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso,
-                  COALESCE(SUM(b.amount), 0) AS monto, COALESCE(SUM(CASE WHEN b.status_class = 'aprobado' THEN b.amount END), 0) AS monto_aprobado
-             FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
-            WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}
-            GROUP BY u.month ORDER BY u.month`,
-        )
-        .bind(campaign, ...fb),
-    ]);
-    const byClass = Object.fromEntries((totals!.results as { c: string; n: number }[]).map((r) => [r.c, n(r.n)]));
-    const montoByClass = Object.fromEntries((totals!.results as { c: string; m: number }[]).map((r) => [r.c, n(r.m)]));
-    const aprobadas = byClass.aprobado ?? 0;
-    const rechazadas = byClass.rechazado ?? 0;
-    const enProceso = byClass.en_proceso ?? 0;
-    const total = aprobadas + rechazadas + enProceso;
-    out.ventas = {
-      total,
-      aprobadas,
-      rechazadas,
-      enProceso,
-      aprobacion: pct(aprobadas, aprobadas + rechazadas),
-      monto: {
-        total: Object.values(montoByClass).reduce((x, y) => x + y, 0),
-        aprobado: montoByClass.aprobado ?? 0,
-        rechazado: montoByClass.rechazado ?? 0,
-        enProceso: montoByClass.en_proceso ?? 0,
-      },
-      porEstatus: (estatus!.results as { label: string; c: string; n: number; m: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n), monto: n(r.m) })),
-      porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
-        agent: r.agent,
-        ventas: n(r.ventas),
-        aprobadas: n(r.aprobadas),
-        rechazadas: n(r.rechazadas),
-        aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
-        monto: n(r.monto),
-        montoAprobado: n(r.monto_aprobado),
-      })),
-      rechazoPorMotivo: (motivos!.results as { label: string; n: number; m: number }[]).map((r) => ({ label: r.label, value: n(r.n), monto: n(r.m) })),
-      porDia: (dias!.results as { d: string; ventas: number; aprobadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
-        date: r.d,
-        ventas: n(r.ventas),
-        aprobadas: n(r.aprobadas),
-        monto: n(r.monto),
-        montoAprobado: n(r.monto_aprobado),
-      })),
-      porProceso: (procesos!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) })),
-      mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; en_proceso: number; monto: number; monto_aprobado: number }[]).map((r) => ({
-        month: r.month,
-        ventas: n(r.ventas),
-        aprobadas: n(r.aprobadas),
-        rechazadas: n(r.rechazadas),
-        enProceso: n(r.en_proceso),
-        aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
-        monto: n(r.monto),
-        montoAprobado: n(r.monto_aprobado),
-      })),
-      cosecha: { total: 0, monto: 0, porMes: [] },
-    };
-    // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
-    if (month) {
-      const { results: prevRows } = await db
-        .prepare(
-          `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
-            WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
-        )
-        .bind(id, ...fb, month)
-        .all<{ m: string; n: number; monto: number }>();
-      out.ventas.cosecha = {
-        total: prevRows.reduce((t, r) => t + n(r.n), 0),
-        monto: prevRows.reduce((t, r) => t + n(r.monto), 0),
-        porMes: prevRows.map((r) => ({ month: r.m, ventas: n(r.n), monto: n(r.monto) })),
+  const ventasP = (async () => {
+    if (sabana) {
+      const id = sabana.id;
+      const [totals, estatus, ejecutivos, motivos, dias, procesos, mensual] = await db.batch([
+        db.prepare(`SELECT status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY status_class`).bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS ventas,
+                    SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
+                    COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
+               FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT sale_date AS d, COUNT(*) AS ventas, SUM(status_class = 'aprobado') AS aprobadas, COALESCE(SUM(amount), 0) AS monto,
+                    COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
+          )
+          .bind(id, ...fb),
+        db.prepare(`SELECT process AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} AND process IS NOT NULL GROUP BY process ORDER BY n DESC`).bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT u.month AS month, COUNT(*) AS ventas, SUM(b.status_class = 'aprobado') AS aprobadas,
+                    SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso,
+                    COALESCE(SUM(b.amount), 0) AS monto, COALESCE(SUM(CASE WHEN b.status_class = 'aprobado' THEN b.amount END), 0) AS monto_aprobado
+               FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
+              WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}
+              GROUP BY u.month ORDER BY u.month`,
+          )
+          .bind(campaign, ...fb),
+      ]);
+      const byClass = Object.fromEntries((totals!.results as { c: string; n: number }[]).map((r) => [r.c, n(r.n)]));
+      const montoByClass = Object.fromEntries((totals!.results as { c: string; m: number }[]).map((r) => [r.c, n(r.m)]));
+      const aprobadas = byClass.aprobado ?? 0;
+      const rechazadas = byClass.rechazado ?? 0;
+      const enProceso = byClass.en_proceso ?? 0;
+      const total = aprobadas + rechazadas + enProceso;
+      out.ventas = {
+        total,
+        aprobadas,
+        rechazadas,
+        enProceso,
+        aprobacion: pct(aprobadas, aprobadas + rechazadas),
+        monto: {
+          total: Object.values(montoByClass).reduce((x, y) => x + y, 0),
+          aprobado: montoByClass.aprobado ?? 0,
+          rechazado: montoByClass.rechazado ?? 0,
+          enProceso: montoByClass.en_proceso ?? 0,
+        },
+        porEstatus: (estatus!.results as { label: string; c: string; n: number; m: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n), monto: n(r.m) })),
+        porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+          agent: r.agent,
+          ventas: n(r.ventas),
+          aprobadas: n(r.aprobadas),
+          rechazadas: n(r.rechazadas),
+          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+          monto: n(r.monto),
+          montoAprobado: n(r.monto_aprobado),
+        })),
+        rechazoPorMotivo: (motivos!.results as { label: string; n: number; m: number }[]).map((r) => ({ label: r.label, value: n(r.n), monto: n(r.m) })),
+        porDia: (dias!.results as { d: string; ventas: number; aprobadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+          date: r.d,
+          ventas: n(r.ventas),
+          aprobadas: n(r.aprobadas),
+          monto: n(r.monto),
+          montoAprobado: n(r.monto_aprobado),
+        })),
+        porProceso: (procesos!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) })),
+        mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; en_proceso: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+          month: r.month,
+          ventas: n(r.ventas),
+          aprobadas: n(r.aprobadas),
+          rechazadas: n(r.rechazadas),
+          enProceso: n(r.en_proceso),
+          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+          monto: n(r.monto),
+          montoAprobado: n(r.monto_aprobado),
+        })),
+        cosecha: { total: 0, monto: 0, porMes: [] },
       };
+      // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
+      if (month) {
+        const { results: prevRows } = await db
+          .prepare(
+            `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
+              WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
+          )
+          .bind(id, ...fb, month)
+          .all<{ m: string; n: number; monto: number }>();
+        out.ventas.cosecha = {
+          total: prevRows.reduce((t, r) => t + n(r.n), 0),
+          monto: prevRows.reduce((t, r) => t + n(r.monto), 0),
+          porMes: prevRows.map((r) => ({ month: r.m, ventas: n(r.n), monto: n(r.monto) })),
+        };
+      }
     }
-  }
+
+  })();
 
   /* ---------- base ---------- */
   const baseIds = bases.map((b) => b.id);
   let baseUnicos = 0;
-  if (baseIds.length) {
-    const inIds = placeholders(baseIds.length);
-    const stmts = [
-      db.prepare(`SELECT dataset, COUNT(*) AS registros, COUNT(DISTINCT niu) AS unicos FROM base_records WHERE upload_id IN (${inIds}) GROUP BY dataset`).bind(...baseIds),
-      db.prepare(`SELECT COUNT(DISTINCT niu) AS n FROM base_records WHERE upload_id IN (${inIds})`).bind(...baseIds),
-      db
-        .prepare(
-          `SELECT u.month AS month, u.dataset AS dataset, COUNT(DISTINCT b.niu) AS unicos
-             FROM base_records b JOIN uploads u ON u.id = b.upload_id
-            WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'base' GROUP BY u.month, u.dataset ORDER BY u.month`,
-        )
-        .bind(campaign),
-    ];
-    // Perfiles de la base cruzados con la sábana del mismo mes.
-    stmts.push(
-      sabana
-        ? db
-            .prepare(
-              `WITH b AS (SELECT niu, MAX(COALESCE(NULLIF(TRIM(profile), ''), 'N/D')) AS profile FROM base_records WHERE upload_id IN (${inIds}) GROUP BY niu),
-                    s AS (SELECT niu, MAX(status_class = 'aprobado') AS apr, MAX(status_class = 'rechazado') AS rech FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY niu)
-               SELECT b.profile AS profile, COUNT(*) AS base, COUNT(s.niu) AS con_venta, SUM(COALESCE(s.apr, 0)) AS aprobadas, SUM(COALESCE(s.rech, 0)) AS rechazadas
-                 FROM b LEFT JOIN s ON s.niu = b.niu GROUP BY b.profile ORDER BY base DESC LIMIT 30`,
-            )
-            .bind(...baseIds, sabana.id, ...fb)
-        : db
-            .prepare(
-              `SELECT profile, COUNT(*) AS base, 0 AS con_venta, 0 AS aprobadas, 0 AS rechazadas
-                 FROM (SELECT niu, MAX(COALESCE(NULLIF(TRIM(profile), ''), 'N/D')) AS profile FROM base_records WHERE upload_id IN (${inIds}) GROUP BY niu)
-                GROUP BY profile ORDER BY base DESC LIMIT 30`,
-            )
-            .bind(...baseIds),
-    );
-    // Cada carga de base (original y adicionales, en orden de llegada): clientes nuevos que aportó
-    // (los que no venían en una base anterior del mes) y cómo se trabajaron esos clientes.
-    const ordered = [...bases].sort((x, y) => x.is_addition - y.is_addition || x.created_at - y.created_at);
-    const effSql = efectivoSql.replace(/call_class/g, "c.call_class");
-    const perUpload = ordered.map((u, i) => {
-      const earlier = ordered.slice(0, i).map((x) => x.id);
-      const notEarlier = earlier.length ? ` AND niu NOT IN (SELECT niu FROM base_records WHERE upload_id IN (${placeholders(earlier.length)}))` : "";
-      return db
-        .prepare(
-          `WITH b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id = ?${notEarlier})
-           SELECT (SELECT COUNT(*) FROM base_records WHERE upload_id = ?) AS registros,
-                  (SELECT COUNT(DISTINCT niu) FROM base_records WHERE upload_id = ?) AS unicos,
-                  (SELECT COUNT(*) FROM b) AS nuevos,
-                  (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS llamados,
-                  (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")} AND ${effSql}) AS contactados,
-                  (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")}) AS ventas,
-                  (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")} AND s.status_class = 'aprobado') AS aprobadas`,
-        )
-        .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
-    });
-    const [porArchivo, unicos, historial, perfiles, ...cargas] = await db.batch([...stmts, ...perUpload]);
-    baseUnicos = n((unicos!.results[0] as { n: number } | undefined)?.n);
-    const porCarga = ordered.map((u, i) => {
-      const r = cargas[i]!.results[0] as Record<string, number>;
-      const nuevos = n(r.nuevos);
-      return {
-        uploadId: u.id,
-        dataset: u.dataset,
-        adicional: Boolean(u.is_addition),
-        nombre: u.label,
-        llegada: u.created_at,
-        registros: n(r.registros),
-        unicos: n(r.unicos),
-        nuevos,
-        repetidos: n(r.unicos) - nuevos,
-        llamados: n(r.llamados),
-        contactados: n(r.contactados),
-        ventas: n(r.ventas),
-        aprobadas: n(r.aprobadas),
-        penetracion: pct(n(r.ventas), nuevos),
+  const baseP = (async () => {
+    if (baseIds.length) {
+      const inIds = placeholders(baseIds.length);
+      const stmts = [
+        db.prepare(`SELECT dataset, COUNT(*) AS registros, COUNT(DISTINCT niu) AS unicos FROM base_records WHERE upload_id IN (${inIds}) GROUP BY dataset`).bind(...baseIds),
+        db.prepare(`SELECT COUNT(DISTINCT niu) AS n FROM base_records WHERE upload_id IN (${inIds})`).bind(...baseIds),
+        db
+          .prepare(
+            `SELECT u.month AS month, u.dataset AS dataset, COUNT(DISTINCT b.niu) AS unicos
+               FROM base_records b JOIN uploads u ON u.id = b.upload_id
+              WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'base' GROUP BY u.month, u.dataset ORDER BY u.month`,
+          )
+          .bind(campaign),
+      ];
+      // Perfiles de la base cruzados con la sábana del mismo mes.
+      stmts.push(
+        sabana
+          ? db
+              .prepare(
+                `WITH b AS (SELECT niu, MAX(COALESCE(NULLIF(TRIM(profile), ''), 'N/D')) AS profile FROM base_records WHERE upload_id IN (${inIds}) GROUP BY niu),
+                      s AS (SELECT niu, MAX(status_class = 'aprobado') AS apr, MAX(status_class = 'rechazado') AS rech FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY niu)
+                 SELECT b.profile AS profile, COUNT(*) AS base, COUNT(s.niu) AS con_venta, SUM(COALESCE(s.apr, 0)) AS aprobadas, SUM(COALESCE(s.rech, 0)) AS rechazadas
+                   FROM b LEFT JOIN s ON s.niu = b.niu GROUP BY b.profile ORDER BY base DESC LIMIT 30`,
+              )
+              .bind(...baseIds, sabana.id, ...fb)
+          : db
+              .prepare(
+                `SELECT profile, COUNT(*) AS base, 0 AS con_venta, 0 AS aprobadas, 0 AS rechazadas
+                   FROM (SELECT niu, MAX(COALESCE(NULLIF(TRIM(profile), ''), 'N/D')) AS profile FROM base_records WHERE upload_id IN (${inIds}) GROUP BY niu)
+                  GROUP BY profile ORDER BY base DESC LIMIT 30`,
+              )
+              .bind(...baseIds),
+      );
+      // Cada carga de base (original y adicionales, en orden de llegada): clientes nuevos que aportó
+      // (los que no venían en una base anterior del mes) y cómo se trabajaron esos clientes.
+      const ordered = [...bases].sort((x, y) => x.is_addition - y.is_addition || x.created_at - y.created_at);
+      const effSql = efectivoSql.replace(/call_class/g, "c.call_class");
+      const perUpload = ordered.map((u, i) => {
+        const earlier = ordered.slice(0, i).map((x) => x.id);
+        const notEarlier = earlier.length ? ` AND niu NOT IN (SELECT niu FROM base_records WHERE upload_id IN (${placeholders(earlier.length)}))` : "";
+        return db
+          .prepare(
+            `WITH b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id = ?${notEarlier})
+             SELECT (SELECT COUNT(*) FROM base_records WHERE upload_id = ?) AS registros,
+                    (SELECT COUNT(DISTINCT niu) FROM base_records WHERE upload_id = ?) AS unicos,
+                    (SELECT COUNT(*) FROM b) AS nuevos,
+                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS llamados,
+                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")} AND ${effSql}) AS contactados,
+                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")}) AS ventas,
+                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")} AND s.status_class = 'aprobado') AS aprobadas`,
+          )
+          .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
+      });
+      const [porArchivo, unicos, historial, perfiles, ...cargas] = await db.batch([...stmts, ...perUpload]);
+      baseUnicos = n((unicos!.results[0] as { n: number } | undefined)?.n);
+      const porCarga = ordered.map((u, i) => {
+        const r = cargas[i]!.results[0] as Record<string, number>;
+        const nuevos = n(r.nuevos);
+        return {
+          uploadId: u.id,
+          dataset: u.dataset,
+          adicional: Boolean(u.is_addition),
+          nombre: u.label,
+          llegada: u.created_at,
+          registros: n(r.registros),
+          unicos: n(r.unicos),
+          nuevos,
+          repetidos: n(r.unicos) - nuevos,
+          llamados: n(r.llamados),
+          contactados: n(r.contactados),
+          ventas: n(r.ventas),
+          aprobadas: n(r.aprobadas),
+          penetracion: pct(n(r.ventas), nuevos),
+        };
+      });
+      out.base = {
+        total: baseUnicos,
+        porCarga,
+        porArchivo: (porArchivo!.results as { dataset: string; registros: number; unicos: number }[]).map((r) => ({ dataset: r.dataset, registros: n(r.registros), unicos: n(r.unicos) })),
+        historial: (historial!.results as { month: string; dataset: string; unicos: number }[]).map((r) => ({ month: r.month, dataset: r.dataset, unicos: n(r.unicos) })),
+        porPerfil: (perfiles!.results as { profile: string; base: number; con_venta: number; aprobadas: number; rechazadas: number }[]).map((r) => ({
+          profile: r.profile,
+          base: n(r.base),
+          conVenta: n(r.con_venta),
+          aprobadas: n(r.aprobadas),
+          rechazadas: n(r.rechazadas),
+          penetracion: pct(n(r.con_venta), n(r.base)),
+        })),
       };
-    });
-    out.base = {
-      total: baseUnicos,
-      porCarga,
-      porArchivo: (porArchivo!.results as { dataset: string; registros: number; unicos: number }[]).map((r) => ({ dataset: r.dataset, registros: n(r.registros), unicos: n(r.unicos) })),
-      historial: (historial!.results as { month: string; dataset: string; unicos: number }[]).map((r) => ({ month: r.month, dataset: r.dataset, unicos: n(r.unicos) })),
-      porPerfil: (perfiles!.results as { profile: string; base: number; con_venta: number; aprobadas: number; rechazadas: number }[]).map((r) => ({
-        profile: r.profile,
-        base: n(r.base),
-        conVenta: n(r.con_venta),
-        aprobadas: n(r.aprobadas),
-        rechazadas: n(r.rechazadas),
-        penetracion: pct(n(r.con_venta), n(r.base)),
-      })),
-    };
-  }
+    }
+
+  })();
 
   /* ---------- llamadas (VICI) ---------- */
-  if (tipif) {
-    const id = tipif.id;
-    const [clases, unicos, agentes, tipologias, dias, intentos, estructura, ventasSeq] = await db.batch([
-      db.prepare(`SELECT call_class AS label, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY call_class ORDER BY n DESC`).bind(id, ...fb),
-      db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''`).bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT ${agentLabel("agent")} AS agent, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS registros,
-                  SUM(${efectivoSql}) AS efectivos, SUM(call_class = 'venta') AS ventas, SUM(call_class = 'no_contacto') AS no_contacto
-             FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY llamadas DESC`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS label, call_class AS c, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 20`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT substr(called_at, 1, 10) AS d, COUNT(*) AS llamadas, SUM(${efectivoSql}) AS efectivos
-             FROM calls WHERE upload_id = ?${fa("agent")} AND called_at IS NOT NULL GROUP BY 1 ORDER BY 1`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT CASE WHEN k >= 6 THEN '6+' ELSE CAST(k AS TEXT) END AS intentos, COUNT(*) AS clientes
-             FROM (SELECT niu, COUNT(*) AS k FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '' GROUP BY niu)
-            GROUP BY 1 ORDER BY MIN(k)`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT SUM(seq = 1) AS primeros, SUM(seq > 1) AS seguimientos
-             FROM (SELECT ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '')`,
-        )
-        .bind(id, ...fb),
-      db
-        .prepare(
-          `SELECT SUM(first_sale = 1) AS primero, SUM(first_sale > 1) AS rellamado FROM (
-             SELECT niu, MIN(seq) AS first_sale FROM (
-               SELECT niu, call_class, ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''
-             ) WHERE call_class = 'venta' GROUP BY niu)`,
-        )
-        .bind(id, ...fb),
-    ]);
-    const clasesRows = (clases!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) }));
-    const total = clasesRows.reduce((s, r) => s + r.value, 0);
-    const efectivos = clasesRows
-      .filter((r) => r.label === "venta" || r.label === "negativo" || (rule === "con_no_efectivo" && r.label === "no_efectivo"))
-      .reduce((s, r) => s + r.value, 0);
-    const u = unicos!.results[0] as { n: number; ventas: number } | undefined;
-    const est = estructura!.results[0] as { primeros: number; seguimientos: number } | undefined;
-    const vs = ventasSeq!.results[0] as { primero: number; rellamado: number } | undefined;
-    out.llamadas = {
-      total,
-      registros: n(u?.n),
-      efectivos,
-      contactabilidad: pct(efectivos, total),
-      reglaContacto: rule,
-      porClase: clasesRows,
-      porAgente: (agentes!.results as { agent: string; llamadas: number; registros: number; efectivos: number; ventas: number; no_contacto: number }[]).map((r) => ({
-        agent: r.agent,
-        llamadas: n(r.llamadas),
-        registros: n(r.registros),
-        efectivos: n(r.efectivos),
-        ventas: n(r.ventas),
-        noContacto: n(r.no_contacto),
-        contactabilidad: pct(n(r.efectivos), n(r.llamadas)),
-      })),
-      tipologias: (tipologias!.results as { label: string; c: string; n: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n) })),
-      porDia: (dias!.results as { d: string; llamadas: number; efectivos: number }[]).map((r) => ({ date: r.d, llamadas: n(r.llamadas), efectivos: n(r.efectivos) })),
-      intentos: (intentos!.results as { intentos: string; clientes: number }[]).map((r) => ({ intentos: r.intentos, clientes: n(r.clientes) })),
-      primerContacto: n(est?.primeros),
-      seguimiento: n(est?.seguimientos),
-      ventasPrimerIntento: n(vs?.primero),
-      ventasRellamado: n(vs?.rellamado),
-      ventasUnicas: n(u?.ventas),
-      penetracion: baseUnicos ? pct(n(u?.ventas), baseUnicos) : null,
-    };
-  }
+  const llamadasP = (async () => {
+    if (tipif) {
+      const id = tipif.id;
+      const [clases, unicos, agentes, tipologias, dias, intentos, estructura, ventasSeq] = await db.batch([
+        db.prepare(`SELECT call_class AS label, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY call_class ORDER BY n DESC`).bind(id, ...fb),
+        db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''`).bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT ${agentLabel("agent")} AS agent, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS registros,
+                    SUM(${efectivoSql}) AS efectivos, SUM(call_class = 'venta') AS ventas, SUM(call_class = 'no_contacto') AS no_contacto
+               FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY llamadas DESC`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS label, call_class AS c, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 20`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT substr(called_at, 1, 10) AS d, COUNT(*) AS llamadas, SUM(${efectivoSql}) AS efectivos
+               FROM calls WHERE upload_id = ?${fa("agent")} AND called_at IS NOT NULL GROUP BY 1 ORDER BY 1`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT CASE WHEN k >= 6 THEN '6+' ELSE CAST(k AS TEXT) END AS intentos, COUNT(*) AS clientes
+               FROM (SELECT niu, COUNT(*) AS k FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '' GROUP BY niu)
+              GROUP BY 1 ORDER BY MIN(k)`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT SUM(seq = 1) AS primeros, SUM(seq > 1) AS seguimientos
+               FROM (SELECT ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '')`,
+          )
+          .bind(id, ...fb),
+        db
+          .prepare(
+            `SELECT SUM(first_sale = 1) AS primero, SUM(first_sale > 1) AS rellamado FROM (
+               SELECT niu, MIN(seq) AS first_sale FROM (
+                 SELECT niu, call_class, ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''
+               ) WHERE call_class = 'venta' GROUP BY niu)`,
+          )
+          .bind(id, ...fb),
+      ]);
+      const clasesRows = (clases!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) }));
+      const total = clasesRows.reduce((s, r) => s + r.value, 0);
+      const efectivos = clasesRows
+        .filter((r) => r.label === "venta" || r.label === "negativo" || (rule === "con_no_efectivo" && r.label === "no_efectivo"))
+        .reduce((s, r) => s + r.value, 0);
+      const u = unicos!.results[0] as { n: number; ventas: number } | undefined;
+      const est = estructura!.results[0] as { primeros: number; seguimientos: number } | undefined;
+      const vs = ventasSeq!.results[0] as { primero: number; rellamado: number } | undefined;
+      out.llamadas = {
+        total,
+        registros: n(u?.n),
+        efectivos,
+        contactabilidad: pct(efectivos, total),
+        reglaContacto: rule,
+        porClase: clasesRows,
+        porAgente: (agentes!.results as { agent: string; llamadas: number; registros: number; efectivos: number; ventas: number; no_contacto: number }[]).map((r) => ({
+          agent: r.agent,
+          llamadas: n(r.llamadas),
+          registros: n(r.registros),
+          efectivos: n(r.efectivos),
+          ventas: n(r.ventas),
+          noContacto: n(r.no_contacto),
+          contactabilidad: pct(n(r.efectivos), n(r.llamadas)),
+        })),
+        tipologias: (tipologias!.results as { label: string; c: string; n: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n) })),
+        porDia: (dias!.results as { d: string; llamadas: number; efectivos: number }[]).map((r) => ({ date: r.d, llamadas: n(r.llamadas), efectivos: n(r.efectivos) })),
+        intentos: (intentos!.results as { intentos: string; clientes: number }[]).map((r) => ({ intentos: r.intentos, clientes: n(r.clientes) })),
+        primerContacto: n(est?.primeros),
+        seguimiento: n(est?.seguimientos),
+        ventasPrimerIntento: n(vs?.primero),
+        ventasRellamado: n(vs?.rellamado),
+        ventasUnicas: n(u?.ventas),
+        // Se completa cuando termina la base (las secciones van en paralelo).
+        penetracion: null,
+      };
+    }
+
+  })();
 
   /* ---------- ventas capturadas en el CRM ---------- */
-  if (crm) {
-    const [tot, agentes, dias, match] = await db.batch([
-      db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")}`).bind(crm.id, ...fb),
-      db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
-      db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
-      sabana
-        ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fa("c.agent")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
-        : db.prepare("SELECT NULL AS n"),
-    ]);
-    out.crm = {
-      total: n((tot!.results[0] as { n: number } | undefined)?.n),
-      conEstatusBanco: sabana ? n((match!.results[0] as { n: number } | undefined)?.n) : null,
-      porAgente: (agentes!.results as { label: string; n: number }[]).map((r): Count => ({ label: r.label, value: n(r.n) })),
-      porDia: (dias!.results as { d: string; n: number }[]).map((r) => ({ date: r.d, ventas: n(r.n) })),
-    };
-  }
+  const crmP = (async () => {
+    if (crm) {
+      const [tot, agentes, dias, match] = await db.batch([
+        db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")}`).bind(crm.id, ...fb),
+        db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
+        db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
+        sabana
+          ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fa("c.agent")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
+          : db.prepare("SELECT NULL AS n"),
+      ]);
+      out.crm = {
+        total: n((tot!.results[0] as { n: number } | undefined)?.n),
+        conEstatusBanco: sabana ? n((match!.results[0] as { n: number } | undefined)?.n) : null,
+        porAgente: (agentes!.results as { label: string; n: number }[]).map((r): Count => ({ label: r.label, value: n(r.n) })),
+        porDia: (dias!.results as { d: string; n: number }[]).map((r) => ({ date: r.d, ventas: n(r.n) })),
+      };
+    }
+
+  })();
 
   /* ---------- agentes del mes (para el filtro) ---------- */
-  const sources: [string | undefined, string, string][] = [
-    [sabana?.id, "bank_sales", "executive"],
-    [tipif?.id, "calls", "agent"],
-    [crm?.id, "crm_sales", "agent"],
-  ];
-  const withAgents = sources.filter((x): x is [string, string, string] => Boolean(x[0]));
-  if (withAgents.length) {
-    const { results } = await db
-      .prepare(withAgents.map(([, t, col]) => `SELECT DISTINCT ${agentLabel(col)} AS a FROM ${t} WHERE upload_id = ?`).join(" UNION ") + " ORDER BY a")
-      .bind(...withAgents.map(([id]) => id))
-      .all<{ a: string }>();
-    out.agentes = results.map((r) => r.a).sort((x, y) => x.localeCompare(y, "es"));
-  }
+  const agentesP = (async () => {
+    const sources: [string | undefined, string, string][] = [
+      [sabana?.id, "bank_sales", "executive"],
+      [tipif?.id, "calls", "agent"],
+      [crm?.id, "crm_sales", "agent"],
+    ];
+    const withAgents = sources.filter((x): x is [string, string, string] => Boolean(x[0]));
+    if (withAgents.length) {
+      const { results } = await db
+        .prepare(withAgents.map(([, t, col]) => `SELECT DISTINCT ${agentLabel(col)} AS a FROM ${t} WHERE upload_id = ?`).join(" UNION ") + " ORDER BY a")
+        .bind(...withAgents.map(([id]) => id))
+        .all<{ a: string }>();
+      out.agentes = results.map((r) => r.a).sort((x, y) => x.localeCompare(y, "es"));
+    }
+  })();
+
+  /* ---------- cumplimiento ---------- */
+  const cumplimientoP = (async () => {
+    if (month) {
+      const c = out.cumplimiento;
+      // Meta del mes; si aún no hay, la configuración del último mes con meta sirve de punto de partida.
+      const goal = goalRows.find((g) => g.month === month) ?? null;
+      const anterior = goalRows.filter((g) => g.month < month).sort((x, y) => y.month.localeCompare(x.month))[0];
+      const base: GoalRow | null = goal ?? (anterior ? { sales_goal: null, agents: null, counted_statuses: anterior.counted_statuses, work_days: anterior.work_days, holidays: "[]" } : null);
+      const savedStatuses = parseList(base?.counted_statuses);
+      c.config = {
+        estatus: [],
+        estatusPorDefecto: savedStatuses === null,
+        diasSemana: parseDays(base?.work_days),
+        feriados: (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month)),
+      };
+      c.meta = goal ? n(goal.sales_goal) : null;
+      c.agentes = goal?.agents ?? null;
+      c.metaPorAgente = c.meta !== null && c.agentes ? c.meta / c.agentes : null;
+      // Con filtro por agente, la meta que se mide es la individual.
+      if (agente) c.meta = c.metaPorAgente;
+
+      const habiles = businessDays(month, c.config.diasSemana, c.config.feriados);
+      c.diasDelMes = habiles.length;
+
+      if (sabana) {
+        const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
+        const { results: estatus } = await db
+          .prepare(`SELECT ${label} AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
+          .bind(sabana.id, ...fb)
+          .all<{ label: string; n: number; monto: number }>();
+        const cuenta = (l: string) => (savedStatuses ? savedStatuses.includes(l) : countsForGoal(campaign as CampaignCode, l));
+        c.estatusDisponibles = estatus.map((r) => ({ label: r.label, value: n(r.n), monto: n(r.monto), cuenta: cuenta(r.label) }));
+        // Los guardados se respetan aunque este mes no aparezcan; los de la regla, solo los presentes.
+        c.config.estatus = savedStatuses ?? c.estatusDisponibles.filter((e) => e.cuenta).map((e) => e.label);
+        const counted = c.config.estatus;
+        // La lista de estatus viaja como un solo JSON: D1 acepta máximo 100 valores por consulta.
+        const inList = counted.length ? `${label} IN (SELECT value FROM json_each(?))` : "0";
+        // CDC y Extra se miden en dólares: se suma el monto de la sábana en vez de contar ventas.
+        const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
+        /* Cosecha: la sábana del mes trae también ventas de meses anteriores. Cuenta para la meta de este mes
+           lo que el banco entregó, aplicó o activó y que NO contó ya en la sábana de un mes anterior
+           (misma venta = mismo NIU y misma fecha de venta). k: 0 no cuenta, 1 cuenta, 2 ya contó antes.
+           Se busca con IN (subconsulta) y no con EXISTS: así SQLite arma un índice temporal y no recorre todas las
+           ventas de los meses anteriores por cada venta (con sábanas consolidadas de varios meses tardaba demasiado). */
+        const prevLabel = "COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)')";
+        const prevCte = counted.length
+          ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
+               WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
+                 AND ${prevLabel} IN (SELECT value FROM json_each(?)))`
+          : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
+        const lista = JSON.stringify(counted);
+        const prevBinds = counted.length ? [campaign, month, lista] : [];
+        const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
+               CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
+             FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
+        const cteBinds = [...prevBinds, ...(counted.length ? [lista] : []), sabana.id, ...fb];
+        const [porAgente, porDia, origen] = await db.batch([
+          db
+            .prepare(
+              `WITH ${prevCte}, ${rowsCte}
+               SELECT agent, SUM(m) AS total, SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS ventas,
+                      SUM(k = 1) AS operaciones, COUNT(*) AS operaciones_total, SUM(status_class = 'aprobado') AS aprobadas
+                 FROM s GROUP BY 1 ORDER BY ventas DESC, total DESC`,
+            )
+            .bind(...cteBinds),
+          // El corte es el último día con ventas, pero nunca después del día en que se cargó la sábana:
+          // una fecha mal escrita (p. ej. el 30 cuando la sábana es del 22) haría ver la meta MTD como la del mes completo.
+          db
+            .prepare(
+              `SELECT MAX(CASE WHEN sale_date <= ? THEN sale_date END) AS corte, SUM(sale_date > ?) AS posteriores, MAX(sale_date) AS maxima
+                 FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`,
+            )
+            .bind(diaCarga(sabana.created_at), diaCarga(sabana.created_at), sabana.id, ...fb, `${month}%`),
+          db
+            .prepare(
+              `WITH ${prevCte}, ${rowsCte}
+               SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE substr(sale_date, 1, 7) END AS origen,
+                      SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS valor, SUM(k = 1) AS ops,
+                      SUM(CASE WHEN k = 2 THEN m ELSE 0 END) AS valor_rep, SUM(k = 2) AS ops_rep
+                 FROM s GROUP BY 1`,
+            )
+            .bind(...cteBinds, month),
+        ]);
+        const origenes = origen!.results as { origen: string; valor: number; ops: number; valor_rep: number; ops_rep: number }[];
+        const cosecha = origenes.filter((o) => o.origen !== "mes" && n(o.ops) > 0).sort((x, y) => y.origen.localeCompare(x.origen));
+        c.cosecha = {
+          valor: cosecha.reduce((t, o) => t + n(o.valor), 0),
+          operaciones: cosecha.reduce((t, o) => t + n(o.ops), 0),
+          porMes: cosecha.map((o) => ({ month: o.origen, valor: n(o.valor), operaciones: n(o.ops) })),
+        };
+        c.yaContadas = { valor: origenes.reduce((t, o) => t + n(o.valor_rep), 0), operaciones: origenes.reduce((t, o) => t + n(o.ops_rep), 0) };
+        const agentes = porAgente!.results as { agent: string; total: number; ventas: number; operaciones: number; operaciones_total: number; aprobadas: number }[];
+        c.ventas = agentes.reduce((sum, r) => sum + n(r.ventas), 0);
+        c.ventasTotales = agentes.reduce((sum, r) => sum + n(r.total), 0);
+        c.operaciones = agentes.reduce((sum, r) => sum + n(r.operaciones), 0);
+        c.operacionesTotales = agentes.reduce((sum, r) => sum + n(r.operaciones_total), 0);
+        c.aprobadas = agentes.reduce((sum, r) => sum + n(r.aprobadas), 0);
+        const corte = porDia!.results[0] as { corte: string | null; posteriores: number | null; maxima: string | null } | undefined;
+        c.fechaCorte = corte?.corte ?? null;
+        c.fechasPosteriores = n(corte?.posteriores) > 0 ? { filas: n(corte?.posteriores), hasta: corte!.maxima! } : null;
+        c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
+        c.diasRestantes = c.diasDelMes - c.diaDelMes;
+        c.ritmoDiario = c.diaDelMes ? c.ventas / c.diaDelMes : 0;
+        c.proyeccion = Math.round(c.ventas + c.ritmoDiario * c.diasRestantes);
+        c.porAgente = agentes.map((r) => ({
+          agent: r.agent,
+          ventas: n(r.ventas),
+          total: n(r.total),
+          operaciones: n(r.operaciones),
+          aprobadas: n(r.aprobadas),
+          meta: c.metaPorAgente,
+          gap: c.metaPorAgente !== null ? c.metaPorAgente - n(r.ventas) : null,
+          avance: c.metaPorAgente ? pct(n(r.ventas), c.metaPorAgente) : null,
+          metaMTD: null,
+          gapMTD: null,
+          avanceMTD: null,
+        }));
+      } else {
+        c.config.estatus = savedStatuses ?? [];
+      }
+      if (c.meta !== null) {
+        c.avance = pct(c.ventas, c.meta);
+        c.faltan = Math.max(0, c.meta - c.ventas);
+        c.ritmoNecesario = c.diasRestantes > 0 ? c.faltan / c.diasRestantes : null;
+        // MTD: la meta repartida por días hábiles hasta la fecha de corte.
+        c.esperado = c.diasDelMes ? (c.meta * c.diaDelMes) / c.diasDelMes : null;
+        c.avanceMTD = c.esperado ? pct(c.ventas, c.esperado) : null;
+      }
+      const share = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
+      for (const r of c.porAgente) {
+        if (r.meta === null) continue;
+        r.metaMTD = r.meta * share;
+        r.gapMTD = r.metaMTD - r.ventas;
+        r.avanceMTD = r.metaMTD ? pct(r.ventas, r.metaMTD) : null;
+      }
+    }
+
+  })();
+
+  await Promise.all([fechasP, ventasP, baseP, llamadasP, crmP, agentesP, cumplimientoP]);
+  if (out.llamadas) out.llamadas.penetracion = baseUnicos ? pct(out.llamadas.ventasUnicas, baseUnicos) : null;
   // Para que se vea qué nombres se unieron (solo los agentes de este mes).
   const present = new Set(out.agentes);
   out.agentesUnidos = naming.groups
     .filter((g) => present.has(g.name) && (g.variants.length > 1 || g.variants[0] !== g.name))
     .map((g) => ({ nombre: g.name, variantes: g.variants }));
-
-  /* ---------- cumplimiento ---------- */
-  if (month) {
-    const c = out.cumplimiento;
-    // Meta del mes; si aún no hay, la configuración del último mes con meta sirve de punto de partida.
-    const goal = await db
-      .prepare("SELECT sales_goal, agents, counted_statuses, work_days, holidays FROM goals WHERE campaign = ? AND month = ?")
-      .bind(campaign, month)
-      .first<GoalRow>();
-    const base =
-      goal ??
-      (await db
-        .prepare("SELECT NULL AS sales_goal, NULL AS agents, counted_statuses, work_days, '[]' AS holidays FROM goals WHERE campaign = ? AND month < ? ORDER BY month DESC LIMIT 1")
-        .bind(campaign, month)
-        .first<GoalRow>());
-    const savedStatuses = parseList(base?.counted_statuses);
-    c.config = {
-      estatus: [],
-      estatusPorDefecto: savedStatuses === null,
-      diasSemana: parseDays(base?.work_days),
-      feriados: (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month)),
-    };
-    c.meta = goal ? n(goal.sales_goal) : null;
-    c.agentes = goal?.agents ?? null;
-    c.metaPorAgente = c.meta !== null && c.agentes ? c.meta / c.agentes : null;
-    // Con filtro por agente, la meta que se mide es la individual.
-    if (agente) c.meta = c.metaPorAgente;
-
-    const habiles = businessDays(month, c.config.diasSemana, c.config.feriados);
-    c.diasDelMes = habiles.length;
-
-    if (sabana) {
-      const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
-      const { results: estatus } = await db
-        .prepare(`SELECT ${label} AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
-        .bind(sabana.id, ...fb)
-        .all<{ label: string; n: number; monto: number }>();
-      const cuenta = (l: string) => (savedStatuses ? savedStatuses.includes(l) : countsForGoal(campaign as CampaignCode, l));
-      c.estatusDisponibles = estatus.map((r) => ({ label: r.label, value: n(r.n), monto: n(r.monto), cuenta: cuenta(r.label) }));
-      // Los guardados se respetan aunque este mes no aparezcan; los de la regla, solo los presentes.
-      c.config.estatus = savedStatuses ?? c.estatusDisponibles.filter((e) => e.cuenta).map((e) => e.label);
-      const counted = c.config.estatus;
-      // La lista de estatus viaja como un solo JSON: D1 acepta máximo 100 valores por consulta.
-      const inList = counted.length ? `${label} IN (SELECT value FROM json_each(?))` : "0";
-      // CDC y Extra se miden en dólares: se suma el monto de la sábana en vez de contar ventas.
-      const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
-      /* Cosecha: la sábana del mes trae también ventas de meses anteriores. Cuenta para la meta de este mes
-         lo que el banco entregó, aplicó o activó y que NO contó ya en la sábana de un mes anterior
-         (misma venta = mismo NIU y misma fecha de venta). k: 0 no cuenta, 1 cuenta, 2 ya contó antes.
-         Se busca con IN (subconsulta) y no con EXISTS: así SQLite arma un índice temporal y no recorre todas las
-         ventas de los meses anteriores por cada venta (con sábanas consolidadas de varios meses tardaba demasiado). */
-      const prevLabel = "COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)')";
-      const prevCte = counted.length
-        ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
-             WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
-               AND ${prevLabel} IN (SELECT value FROM json_each(?)))`
-        : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
-      const lista = JSON.stringify(counted);
-      const prevBinds = counted.length ? [campaign, month, lista] : [];
-      const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
-             CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
-           FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
-      const cteBinds = [...prevBinds, ...(counted.length ? [lista] : []), sabana.id, ...fb];
-      const [porAgente, porDia, origen] = await db.batch([
-        db
-          .prepare(
-            `WITH ${prevCte}, ${rowsCte}
-             SELECT agent, SUM(m) AS total, SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS ventas,
-                    SUM(k = 1) AS operaciones, COUNT(*) AS operaciones_total, SUM(status_class = 'aprobado') AS aprobadas
-               FROM s GROUP BY 1 ORDER BY ventas DESC, total DESC`,
-          )
-          .bind(...cteBinds),
-        // El corte es el último día con ventas, pero nunca después del día en que se cargó la sábana:
-        // una fecha mal escrita (p. ej. el 30 cuando la sábana es del 22) haría ver la meta MTD como la del mes completo.
-        db
-          .prepare(
-            `SELECT MAX(CASE WHEN sale_date <= ? THEN sale_date END) AS corte, SUM(sale_date > ?) AS posteriores, MAX(sale_date) AS maxima
-               FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`,
-          )
-          .bind(diaCarga(sabana.created_at), diaCarga(sabana.created_at), sabana.id, ...fb, `${month}%`),
-        db
-          .prepare(
-            `WITH ${prevCte}, ${rowsCte}
-             SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE substr(sale_date, 1, 7) END AS origen,
-                    SUM(CASE WHEN k = 1 THEN m ELSE 0 END) AS valor, SUM(k = 1) AS ops,
-                    SUM(CASE WHEN k = 2 THEN m ELSE 0 END) AS valor_rep, SUM(k = 2) AS ops_rep
-               FROM s GROUP BY 1`,
-          )
-          .bind(...cteBinds, month),
-      ]);
-      const origenes = origen!.results as { origen: string; valor: number; ops: number; valor_rep: number; ops_rep: number }[];
-      const cosecha = origenes.filter((o) => o.origen !== "mes" && n(o.ops) > 0).sort((x, y) => y.origen.localeCompare(x.origen));
-      c.cosecha = {
-        valor: cosecha.reduce((t, o) => t + n(o.valor), 0),
-        operaciones: cosecha.reduce((t, o) => t + n(o.ops), 0),
-        porMes: cosecha.map((o) => ({ month: o.origen, valor: n(o.valor), operaciones: n(o.ops) })),
-      };
-      c.yaContadas = { valor: origenes.reduce((t, o) => t + n(o.valor_rep), 0), operaciones: origenes.reduce((t, o) => t + n(o.ops_rep), 0) };
-      const agentes = porAgente!.results as { agent: string; total: number; ventas: number; operaciones: number; operaciones_total: number; aprobadas: number }[];
-      c.ventas = agentes.reduce((sum, r) => sum + n(r.ventas), 0);
-      c.ventasTotales = agentes.reduce((sum, r) => sum + n(r.total), 0);
-      c.operaciones = agentes.reduce((sum, r) => sum + n(r.operaciones), 0);
-      c.operacionesTotales = agentes.reduce((sum, r) => sum + n(r.operaciones_total), 0);
-      c.aprobadas = agentes.reduce((sum, r) => sum + n(r.aprobadas), 0);
-      const corte = porDia!.results[0] as { corte: string | null; posteriores: number | null; maxima: string | null } | undefined;
-      c.fechaCorte = corte?.corte ?? null;
-      c.fechasPosteriores = n(corte?.posteriores) > 0 ? { filas: n(corte?.posteriores), hasta: corte!.maxima! } : null;
-      c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
-      c.diasRestantes = c.diasDelMes - c.diaDelMes;
-      c.ritmoDiario = c.diaDelMes ? c.ventas / c.diaDelMes : 0;
-      c.proyeccion = Math.round(c.ventas + c.ritmoDiario * c.diasRestantes);
-      c.porAgente = agentes.map((r) => ({
-        agent: r.agent,
-        ventas: n(r.ventas),
-        total: n(r.total),
-        operaciones: n(r.operaciones),
-        aprobadas: n(r.aprobadas),
-        meta: c.metaPorAgente,
-        gap: c.metaPorAgente !== null ? c.metaPorAgente - n(r.ventas) : null,
-        avance: c.metaPorAgente ? pct(n(r.ventas), c.metaPorAgente) : null,
-        metaMTD: null,
-        gapMTD: null,
-        avanceMTD: null,
-      }));
-    } else {
-      c.config.estatus = savedStatuses ?? [];
-    }
-    if (c.meta !== null) {
-      c.avance = pct(c.ventas, c.meta);
-      c.faltan = Math.max(0, c.meta - c.ventas);
-      c.ritmoNecesario = c.diasRestantes > 0 ? c.faltan / c.diasRestantes : null;
-      // MTD: la meta repartida por días hábiles hasta la fecha de corte.
-      c.esperado = c.diasDelMes ? (c.meta * c.diaDelMes) / c.diasDelMes : null;
-      c.avanceMTD = c.esperado ? pct(c.ventas, c.esperado) : null;
-    }
-    const share = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
-    for (const r of c.porAgente) {
-      if (r.meta === null) continue;
-      r.metaMTD = r.meta * share;
-      r.gapMTD = r.metaMTD - r.ventas;
-      r.avanceMTD = r.metaMTD ? pct(r.ventas, r.metaMTD) : null;
-    }
-  }
 
   return out;
 }
@@ -670,9 +704,10 @@ export function registerAnalisis(r: Router): void {
     if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
     const agente = url.searchParams.get("agente")?.trim() || null;
     if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
-    const first = await analyzeCampaign(env, campaign, null, agente);
+    const res = new Resultados(env);
+    const first = await analyzeCampaign(env, campaign, null, agente, res);
     const months = first.months.slice(0, 13);
-    const all = [first, ...(await Promise.all(months.slice(1).map((m) => analyzeCampaign(env, campaign, m, agente))))];
+    const all = [first, ...(await Promise.all(months.slice(1).map((m) => analyzeCampaign(env, campaign, m, agente, res))))];
     const summary: MonthSummary[] = all
       .filter((a): a is CampaignAnalysis & { month: string } => Boolean(a.month))
       .map((a) => {

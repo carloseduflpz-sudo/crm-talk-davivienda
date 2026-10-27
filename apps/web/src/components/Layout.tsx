@@ -1,9 +1,10 @@
 import { CAMPAIGNS } from "@crm/core";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pin, PinOff, Presentation, Search, Settings, Sparkles, Sun, Upload, Users, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, NavLink, Outlet } from "react-router";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { api, type Me } from "../lib/api";
+import { precargarCampana, precargarTodas } from "../lib/consultas";
 import { useTheme } from "../lib/theme";
 
 const linkBase = "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors";
@@ -24,6 +25,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function Nav({ onNavigate }: { onNavigate: () => void }) {
+  const qc = useQueryClient();
   return (
     <nav aria-label="Principal" onClick={onNavigate}>
       <NavLink to="/" end className={linkClass}>
@@ -31,7 +33,8 @@ function Nav({ onNavigate }: { onNavigate: () => void }) {
       </NavLink>
       <Section title="Campañas">
         {CAMPAIGNS.map((c) => (
-          <NavLink key={c.code} to={`/campanas/${c.code}`} className={linkClass}>
+          // Al pasar el mouse ya se piden sus cifras: al dar clic suelen estar listas.
+          <NavLink key={c.code} to={`/campanas/${c.code}`} className={linkClass} onMouseEnter={() => void precargarCampana(qc, c.code)} onFocus={() => void precargarCampana(qc, c.code)}>
             <span className="flex size-4 items-center justify-center text-[10px] font-bold" aria-hidden>
               {c.shortName.slice(0, 2).toUpperCase()}
             </span>
@@ -133,6 +136,33 @@ export function Layout() {
   const timer = useRef<number | undefined>(undefined);
   const { theme, toggle } = useTheme();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
+  const qc = useQueryClient();
+  const { pathname } = useLocation();
+  const puedeVer = me.data?.permissions.includes("datos:ver") ?? false;
+
+  /* Al abrir la app se dejan listas, en segundo plano, las cifras de las 6 campañas (primero la que está en
+     pantalla): cambiar de campaña ya no espera al cálculo. Se repite cada pocos minutos mientras siga abierta. */
+  const actual = /^\/campanas\/([^/]+)/.exec(pathname)?.[1];
+  const actualRef = useRef(actual);
+  actualRef.current = actual;
+  useEffect(() => {
+    if (!puedeVer) return;
+    let activo = true;
+    let corriendo = false;
+    const ronda = async () => {
+      if (corriendo || document.hidden) return;
+      corriendo = true;
+      await precargarTodas(qc, () => activo, actualRef.current);
+      corriendo = false;
+    };
+    const inicio = window.setTimeout(ronda, 800);
+    const cada = window.setInterval(ronda, 3 * 60_000);
+    return () => {
+      activo = false;
+      window.clearTimeout(inicio);
+      window.clearInterval(cada);
+    };
+  }, [qc, puedeVer]);
 
   const later = (fn: () => void, ms: number) => {
     window.clearTimeout(timer.current);
