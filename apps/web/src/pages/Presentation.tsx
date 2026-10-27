@@ -47,11 +47,15 @@ async function cargarDatos(mes: string): Promise<Carga> {
   const errores: Carga["errores"] = {};
   const all = await Promise.all(
     CAMPAIGNS.map((c) =>
-      api.presentacionDatos(c.code, mes).catch((e: Error) => {
-        // Si el servidor falla, se dice (no se confunde con "no hay datos").
-        errores[c.code] = e.message;
-        return null;
-      }),
+      api
+        .presentacionDatos(c.code, mes)
+        // Un tropiezo pasajero de Cloudflare no debe dejar fuera a la campaña: se intenta una vez más.
+        .catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => api.presentacionDatos(c.code, mes)))
+        .catch((e: Error) => {
+          // Si el servidor falla, se dice (no se confunde con "no hay datos").
+          errores[c.code] = e.message;
+          return null;
+        }),
     ),
   );
   const datos: PresDatos = {};
@@ -94,7 +98,7 @@ export function Presentation() {
   // Al volver a esta pestaña (p. ej. después de cargar una sábana) se piden de nuevo.
   const datos = useQuery({ queryKey: ["presentacion", mes], queryFn: () => cargarDatos(mes), refetchOnWindowFocus: true });
 
-  const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean } | null>(null);
+  const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean; fallas: { campana: string; motivo: string }[] } | null>(null);
   // Excel de las gráficas (guardado): de él salen la M, la R y el contacto; lo demás lo calcula la app.
   const control = useQuery({ queryKey: ["control"], queryFn: cargarControlGuardado });
   const usados = useMemo(() => (datos.data && control.data ? aplicarControl(datos.data.datos, control.data.data) : datos.data?.datos), [datos.data, control.data]);
@@ -112,14 +116,20 @@ export function Presentation() {
       // Las cifras se piden de nuevo al dar clic: si se acaba de cargar una sábana, ya sale con ella.
       setBusy("Leyendo lo último que se cargó…");
       const { datos: frescos, errores } = await cargarDatos(mes);
-      const fallas = Object.entries(errores);
-      if (fallas.length) throw new Error(`No se pudieron leer las cifras de ${fallas.map(([k, m]) => `${getCampaign(k as PresentacionCampania["campaign"]).shortName} (${m})`).join(", ")}. No se generó la presentación para no dejarla a medias.`);
+      // La presentación sale SIEMPRE: una campaña que no se pudo leer se queda con las cifras de la semana anterior
+      // y se avisa abajo, en rojo, con el motivo.
+      const fallas = Object.entries(errores).map(([k, m]) => ({ campana: getCampaign(k as PresentacionCampania["campaign"]).shortName, motivo: m ?? "" }));
+      if (!Object.keys(frescos).length) throw new Error(`No se pudo leer ninguna campaña de ${monthLabel(mes)}, así que no hay nada que actualizar. ${fallas.map((f) => `${f.campana}: ${f.motivo}`).join(" · ")}`);
       void qc.invalidateQueries({ queryKey: ["presentacion", mes] });
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
       setBusy("Poniendo las cifras…");
       // La M, la R y el contacto del Excel de las gráficas (si hay uno guardado); lo demás, de lo cargado.
-      const ctrl = await cargarControlGuardado();
+      // Si el Excel de las gráficas no se puede abrir, la presentación sale igual con lo calculado por la app.
+      const ctrl = await cargarControlGuardado().catch((e: Error) => {
+        fallas.push({ campana: "Excel de las gráficas", motivo: `${e.message} Se usaron las cifras calculadas por la app.` });
+        return null;
+      });
       const res = await llenarPresentacion(deck, ctrl ? aplicarControl(frescos, ctrl.data) : frescos, { mesPlantilla: p.mes });
       const bytes = await deck.save();
       const nombre = nombreSalida(p.nombre, mes, semanaActual(frescos, mes));
@@ -131,7 +141,7 @@ export function Presentation() {
         guardada = true;
         void qc.invalidateQueries({ queryKey: ["plantilla"] });
       }
-      setResult({ res, nombre, guardada });
+      setResult({ res, nombre, guardada, fallas });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -196,7 +206,7 @@ export function Presentation() {
       <div className="mt-6 flex flex-wrap items-center gap-4">
         <button
           onClick={() => void generar()}
-          disabled={!plantilla.data || !listas || Boolean(busy)}
+          disabled={!plantilla.data || (!listas && !Object.keys(datos.data?.errores ?? {}).length) || Boolean(busy)}
           className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Download className="size-4" aria-hidden />}
@@ -622,7 +632,7 @@ function rangos(ns: number[]): string {
   return out.join(", ");
 }
 
-function Resultado({ res, nombre, guardada }: { res: PresResultado; nombre: string; guardada: boolean }) {
+function Resultado({ res, nombre, guardada, fallas }: { res: PresResultado; nombre: string; guardada: boolean; fallas: { campana: string; motivo: string }[] }) {
   const porLamina = useMemo(() => {
     const m = new Map<number, { titulo: string; cambios: PresResultado["cambios"] }>();
     for (const c of res.cambios) {
@@ -648,6 +658,23 @@ function Resultado({ res, nombre, guardada }: { res: PresResultado; nombre: stri
           </p>
         </div>
       </div>
+
+      {fallas.length > 0 && (
+        <Card className="mt-4 border-red-300 dark:border-red-500/40">
+          <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink">
+            <TriangleAlert className="size-4 text-red-600" aria-hidden /> No se actualizó: quedó con las cifras de la semana anterior
+          </h3>
+          <ul className="mt-2 space-y-1 text-[13px]">
+            {fallas.map((f, i) => (
+              <li key={i}>
+                <span className="font-medium text-ink">{f.campana}</span>
+                <span className="text-ink-soft"> — {f.motivo}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[13px] text-ink-soft">Mándale una captura de este recuadro al desarrollador.</p>
+        </Card>
+      )}
 
       {res.sinCambio.length > 0 && (
         <Card className="mt-4 border-amber-300 dark:border-amber-500/40">

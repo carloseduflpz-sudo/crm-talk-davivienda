@@ -20,6 +20,7 @@ class Statement {
     private args: Value[] = [],
   ) {}
   bind(...args: unknown[]) {
+    valoresComoD1(this.sql, args.length);
     return new Statement(this.db, this.sql, args.map(toSql));
   }
   async first<T>(col?: string): Promise<T | null> {
@@ -54,6 +55,12 @@ function comoD1(sql: string): string {
   const partes = (sql.match(/\bUNION\b/gi) ?? []).length + 1;
   if (partes > MAX_PARTES) throw new Error(`D1_ERROR: too many terms in compound SELECT: SQLITE_ERROR (${partes} partes)`);
   return sql;
+}
+
+/** D1 acepta máximo 100 valores enlazados por consulta y consultas de hasta 100 KB. */
+function valoresComoD1(sql: string, n: number): void {
+  if (n > 100) throw new Error(`D1_ERROR: too many SQL variables: SQLITE_ERROR (${n})`);
+  if (sql.length > 100_000) throw new Error("D1_ERROR: statement too long: SQLITE_TOOBIG");
 }
 
 export function memoryD1(): D1Database {
