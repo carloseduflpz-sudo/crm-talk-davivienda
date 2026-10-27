@@ -98,7 +98,7 @@ export function Presentation() {
   // Al volver a esta pestaña (p. ej. después de cargar una sábana) se piden de nuevo.
   const datos = useQuery({ queryKey: ["presentacion", mes], queryFn: () => cargarDatos(mes), refetchOnWindowFocus: true });
 
-  const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean; fallas: { campana: string; motivo: string }[] } | null>(null);
+  const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean; fallas: Aviso[]; avisos: Aviso[] } | null>(null);
   // Excel de las gráficas (guardado): de él salen la M, la R y el contacto; lo demás lo calcula la app.
   const control = useQuery({ queryKey: ["control"], queryFn: cargarControlGuardado });
   const usados = useMemo(() => (datos.data && control.data ? aplicarControl(datos.data.datos, control.data.data) : datos.data?.datos), [datos.data, control.data]);
@@ -130,7 +130,11 @@ export function Presentation() {
         fallas.push({ campana: "Excel de las gráficas", motivo: `${e.message} Se usaron las cifras calculadas por la app.` });
         return null;
       });
-      const res = await llenarPresentacion(deck, ctrl ? aplicarControl(frescos, ctrl.data) : frescos, { mesPlantilla: p.mes });
+      const finales = ctrl ? aplicarControl(frescos, ctrl.data) : frescos;
+      const res = await llenarPresentacion(deck, finales, { mesPlantilla: p.mes });
+      const avisos = Object.values(finales)
+        .filter((d) => d.avisoExcel)
+        .map((d) => ({ campana: getCampaign(d.campaign).shortName, motivo: d.avisoExcel! }));
       const bytes = await deck.save();
       const nombre = nombreSalida(p.nombre, mes, semanaActual(frescos, mes));
       download(bytes, nombre);
@@ -141,7 +145,7 @@ export function Presentation() {
         guardada = true;
         void qc.invalidateQueries({ queryKey: ["plantilla"] });
       }
-      setResult({ res, nombre, guardada, fallas });
+      setResult({ res, nombre, guardada, fallas, avisos });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -181,7 +185,7 @@ export function Presentation() {
                 <li key={c.code} className="flex items-baseline justify-between gap-3 py-2">
                   <span className="font-medium text-ink">{c.shortName}</span>
                   <span className="text-right text-ink-soft">
-                    {datos.isPending ? "…" : d ? <EstadoCampana d={d} deExcel={Boolean(control.data && (control.data.data.campanas.some((x) => x.campaign === c.code) || control.data.data.hojas.some((x) => x.campaign === c.code)))} /> : datos.data?.errores[c.code] ? (
+                    {datos.isPending ? "…" : d ? <EstadoCampana d={d} deExcel={Boolean(!d.avisoExcel && control.data && (control.data.data.campanas.some((x) => x.campaign === c.code) || control.data.data.hojas.some((x) => x.campaign === c.code)))} /> : datos.data?.errores[c.code] ? (
                       <span className="text-red-600 dark:text-red-400">No se pudieron leer sus cifras: {datos.data.errores[c.code]}</span>
                     ) : (
                       <span className="text-amber-700 dark:text-amber-400">Sin datos de {nombreMes(mes).toLowerCase()}: sus cifras quedan como estaban</span>
@@ -493,6 +497,7 @@ function EstadoCampana({ d, deExcel }: { d: PresentacionCampania; deExcel: boole
       {d.fechaCorte ? `Ventas al ${fmtDay(d.fechaCorte)}` : "Sin sábana"} · {meta}
       {mtd && <span className="block text-[12px]">{mtd}</span>}
       {faltan.length > 0 && <span className="block text-[12px] text-amber-700 dark:text-amber-400">Falta: {faltan.join(", ")}</span>}
+      {d.avisoExcel && <span className="block text-[12px] text-amber-700 dark:text-amber-400">{d.avisoExcel}</span>}
       {d.fechasPosteriores && (
         <span className="block text-[12px] text-amber-700 dark:text-amber-400">
           La sábana trae {d.fechasPosteriores.filas} {d.fechasPosteriores.filas === 1 ? "venta" : "ventas"} con fecha posterior al día en que se cargó (hasta el{" "}
@@ -632,7 +637,9 @@ function rangos(ns: number[]): string {
   return out.join(", ");
 }
 
-function Resultado({ res, nombre, guardada, fallas }: { res: PresResultado; nombre: string; guardada: boolean; fallas: { campana: string; motivo: string }[] }) {
+type Aviso = { campana: string; motivo: string };
+
+function Resultado({ res, nombre, guardada, fallas, avisos }: { res: PresResultado; nombre: string; guardada: boolean; fallas: Aviso[]; avisos: Aviso[] }) {
   const porLamina = useMemo(() => {
     const m = new Map<number, { titulo: string; cambios: PresResultado["cambios"] }>();
     for (const c of res.cambios) {
@@ -673,6 +680,22 @@ function Resultado({ res, nombre, guardada, fallas }: { res: PresResultado; nomb
             ))}
           </ul>
           <p className="mt-2 text-[13px] text-ink-soft">Mándale una captura de este recuadro al desarrollador.</p>
+        </Card>
+      )}
+
+      {avisos.length > 0 && (
+        <Card className="mt-4 border-amber-300 dark:border-amber-500/40">
+          <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink">
+            <TriangleAlert className="size-4 text-amber-600" aria-hidden /> M y R calculadas con lo cargado
+          </h3>
+          <ul className="mt-2 space-y-1 text-[13px]">
+            {avisos.map((f, i) => (
+              <li key={i}>
+                <span className="font-medium text-ink">{f.campana}</span>
+                <span className="text-ink-soft"> — {f.motivo}</span>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 

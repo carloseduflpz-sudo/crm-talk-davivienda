@@ -117,6 +117,10 @@ export interface PresentacionCampania {
   documentos?: PresDocumento[];
   /** Gráficas de contacto tomadas del Excel de las gráficas, por base ("*" = toda la campaña). */
   contactoExcel?: Record<string, PresConteo[]>;
+  /** El Excel de las gráficas quedó atrás de la sábana: M, R y contacto salieron de lo cargado (texto para mostrar). */
+  avisoExcel?: string;
+  /** La M y la R vienen del Excel de las gráficas (al día). */
+  mrDeExcel?: boolean;
 }
 
 export type PresDatos = Partial<Record<CampaignCode, PresentacionCampania>>;
@@ -1177,7 +1181,8 @@ async function smartArt(c: Ctx, d: PresentacionCampania, dataPart: string, slide
   const value = t[0] === "M" ? d.esperado : d.resultado;
   if (value === null) throw new Error("Falta la meta del mes (o la sábana) para calcular la meta MTD.");
   const now = comoAntes(old, value, d.unidad === "monto" ? { comas: true } : {});
-  cambio(c, t[0] === "M" ? `Recuadro M (meta MTD, ${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles)` : "Recuadro R (resultado)", t[0]!, old, now);
+  const origen = d.mrDeExcel ? "de tu Excel" : "calculada con la sábana";
+  cambio(c, t[0] === "M" ? `Recuadro M (meta MTD, ${d.diasHabiles.transcurridos} de ${d.diasHabiles.total} días hábiles, ${origen})` : `Recuadro R (resultado, ${origen})`, t[0]!, old, now);
   if (now === old) return;
   c.deck.write(dataPart, replaceExactText(data, old, now).xml);
   // El dibujo ya armado del SmartArt (lo que se ve) también trae el número.

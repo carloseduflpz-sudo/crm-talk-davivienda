@@ -105,4 +105,16 @@ describe("Excel de control", () => {
     expect(d.trimestre[0]!.metaPorAgente!).toBeCloseTo(172.5 / 7, 6);
     expect(cuadrarControl(ctrl, { tdc: d }).find((x) => x.dato === "Meta MTD")!.cuadra).toBe(true);
   });
+
+  it("si el Excel es de la semana pasada (la sábana va 3+ días hábiles adelante), M, R y contacto salen de lo cargado y se avisa", () => {
+    const nuevo = { ...tdc, diasHabiles: { transcurridos: 20, total: 22 }, esperado: 230, resultado: 140 };
+    const d = aplicarControl({ tdc: nuevo }, ctrl).tdc!;
+    // La meta del mes y el HC siguen siendo los del Excel; la M es esa meta a los 20 días que lleva la sábana.
+    expect(d).toMatchObject({ meta: 253, hc: 7, resultado: 140, diasHabiles: { transcurridos: 20, total: 22 } });
+    expect(d.esperado!).toBeCloseTo((253 / 22) * 20, 6);
+    expect(d.contactoExcel).toBe(nuevo.contactoExcel);
+    expect(d.avisoExcel).toContain("día hábil 15");
+    // 1 día de diferencia (16 contra 15) es normal: se respeta el Excel.
+    expect(aplicarControl({ tdc }, ctrl).tdc!.avisoExcel).toBe(undefined);
+  });
 });

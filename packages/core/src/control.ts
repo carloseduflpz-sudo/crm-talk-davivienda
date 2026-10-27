@@ -249,6 +249,9 @@ function hojaPrincipal(ctrl: ControlExcel, code: CampaignCode): ControlHoja | un
  * de contacto. Con la M y la R salen también el cumplimiento y la fila del trimestre del gap; el HC del Excel
  * reparte la M entre los agentes. Todo lo demás sigue saliendo de la sábana, las bases y las tipificaciones.
  */
+/** Días hábiles de atraso desde los que el Excel de las gráficas se considera de otra semana. */
+export const EXCEL_ATRASADO = 3;
+
 export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos {
   const out: PresDatos = {};
   for (const [code, d] of Object.entries(datos) as [CampaignCode, PresentacionCampania][]) {
@@ -258,10 +261,27 @@ export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos 
       out[code] = d;
       continue;
     }
-    const total = ctrl.diasMes ?? d.diasHabiles.total;
-    const trans = ctrl.diasMTD ?? d.diasHabiles.transcurridos;
     const meta = c?.meta ?? d.meta;
     const hc = c?.hc ?? d.hc;
+    /* ¿El Excel está al día? Si la sábana ya va 3 o más días hábiles adelante del Excel (el Excel es de la semana
+       pasada), su M, su R y su contacto ya no son los de hoy: se calculan con lo cargado y se avisa. Una diferencia de
+       1 o 2 días es normal (cómo se cuenta el día del corte) y se respeta el Excel. La meta del mes y el HC sí se
+       toman del Excel (no cambian en la semana). */
+    if (ctrl.diasMTD !== null && d.diasHabiles.transcurridos - ctrl.diasMTD >= EXCEL_ATRASADO) {
+      const { total: t, transcurridos: tr } = d.diasHabiles;
+      const esperado = meta !== null && t ? (meta / t) * tr : d.esperado;
+      out[code] = {
+        ...d,
+        meta,
+        hc,
+        esperado,
+        avisoExcel: `Tu Excel de las gráficas llega al día hábil ${ctrl.diasMTD} y la sábana al ${tr}: la M, la R y el contacto se calcularon con lo cargado. Si quieres usar los de tu Excel, súbelo actualizado.`,
+        trimestre: d.trimestre.map((x) => (x.month === d.month ? { ...x, meta: esperado, metaPorAgente: esperado !== null && hc ? esperado / hc : x.metaPorAgente } : x)),
+      };
+      continue;
+    }
+    const total = ctrl.diasMes ?? d.diasHabiles.total;
+    const trans = ctrl.diasMTD ?? d.diasHabiles.transcurridos;
     const m = h?.valores.metaMTD ?? c?.metaMTD ?? (meta !== null && total ? (meta / total) * trans : null);
     const r = h?.valores.resultado ?? d.resultado;
     const contactoExcel: Record<string, { label: string; n: number }[]> = {};
@@ -283,6 +303,7 @@ export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos 
       diasHabiles: { total, transcurridos: trans },
       esperado: m,
       resultado: r,
+      mrDeExcel: true,
       contactoExcel: Object.keys(contactoExcel).length ? contactoExcel : d.contactoExcel,
       trimestre: d.trimestre.map((t) => (t.month === d.month ? { ...t, meta: m, resultado: r, metaPorAgente: m !== null && hc ? m / hc : t.metaPorAgente } : t)),
     };
