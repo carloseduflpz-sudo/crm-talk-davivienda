@@ -548,7 +548,8 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       // Los guardados se respetan aunque este mes no aparezcan; los de la regla, solo los presentes.
       c.config.estatus = savedStatuses ?? c.estatusDisponibles.filter((e) => e.cuenta).map((e) => e.label);
       const counted = c.config.estatus;
-      const inList = counted.length ? `${label} IN (${placeholders(counted.length)})` : "0";
+      // La lista de estatus viaja como un solo JSON: D1 acepta máximo 100 valores por consulta.
+      const inList = counted.length ? `${label} IN (SELECT value FROM json_each(?))` : "0";
       // CDC y Extra se miden en dólares: se suma el monto de la sábana en vez de contar ventas.
       const measure = c.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
       /* Cosecha: la sábana del mes trae también ventas de meses anteriores. Cuenta para la meta de este mes
@@ -560,13 +561,14 @@ export async function analyzeCampaign(env: Env, campaign: string, requestedMonth
       const prevCte = counted.length
         ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
              WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
-               AND ${prevLabel} IN (${placeholders(counted.length)}))`
+               AND ${prevLabel} IN (SELECT value FROM json_each(?)))`
         : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
-      const prevBinds = counted.length ? [campaign, month, ...counted] : [];
+      const lista = JSON.stringify(counted);
+      const prevBinds = counted.length ? [campaign, month, lista] : [];
       const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
              CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
            FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
-      const cteBinds = [...prevBinds, ...counted, sabana.id, ...fb];
+      const cteBinds = [...prevBinds, ...(counted.length ? [lista] : []), sabana.id, ...fb];
       const [porAgente, porDia, origen] = await db.batch([
         db
           .prepare(

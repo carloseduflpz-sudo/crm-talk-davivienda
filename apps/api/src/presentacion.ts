@@ -95,13 +95,15 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     const counted = a.cumplimiento.config.estatus;
     const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
     const prevLabel = "COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)')";
-    const inList = counted.length ? `${label} IN (${ph(counted.length)})` : "0";
+    // La lista de estatus viaja como un solo JSON: D1 acepta máximo 100 valores por consulta.
+      const inList = counted.length ? `${label} IN (SELECT value FROM json_each(?))` : "0";
     const prevCte = counted.length
       ? `prev AS (SELECT DISTINCT p.niu, COALESCE(p.sale_date, '') AS d FROM bank_sales p
            WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
-             AND ${prevLabel} IN (${ph(counted.length)}))`
+             AND ${prevLabel} IN (SELECT value FROM json_each(?)))`
       : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
-    const prevBinds = counted.length ? [campaign, month, ...counted] : [];
+    const lista = JSON.stringify(counted);
+      const prevBinds = counted.length ? [campaign, month, lista] : [];
     const measure = a.cumplimiento.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
     // TDC: la sábana dice si la venta es de primera o segunda cuenta.
     const cuentaCol = `json_extract(extra, '$."PRI - SEG / CUENTA"')`;
@@ -135,7 +137,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
                                   WHERE b.niu = s.niu AND u.campaign = ? AND u.kind = 'base' AND u.is_current = 1)) AS grupo
           FROM s)`;
     // En el orden en que aparecen los "?" en la consulta.
-    const binds = [...prevBinds, month, month, ...counted, sabana.id, month, campaign];
+    const binds = [...prevBinds, month, month, ...(counted.length ? [lista] : []), sabana.id, month, campaign];
     const [grupos, clientes, docs] = await db.batch([
       db
         .prepare(`${cte} SELECT grupo, origen, estatus, k, proceso, semana, COUNT(*) AS ops, SUM(m) AS valor, COUNT(DISTINCT niu) AS clientes FROM g GROUP BY 1, 2, 3, 4, 5, 6`)
