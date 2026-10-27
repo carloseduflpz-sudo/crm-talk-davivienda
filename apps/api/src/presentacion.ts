@@ -1,11 +1,12 @@
 /* Presentación semanal: las cifras que lleva cada lámina, calculadas con los archivos vigentes del mes,
    y la plantilla (.pptx) guardada en R2 para que cada semana baste con darle "Descargar". */
-import { isCampaignCode, semanasDelMes, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
+import { datasetsPrincipales, isCampaignCode, semanasDelMes, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
 import { analyzeCampaign } from "./analisis";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, type Router } from "./http";
 import { Resultados } from "./resultados";
+import { segmentosDeBase } from "./segmentos";
 
 const PLANTILLA = "presentacion/plantilla.pptx";
 /** Excel de las gráficas: de él salen la M, la R y el contacto de la presentación. */
@@ -50,35 +51,31 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
   const eff = rule === "sin_no_efectivo" ? "c.call_class IN ('venta','negativo')" : "c.call_class IN ('venta','negativo','no_efectivo')";
 
   /* ---------- bases: una fila por tipo de base (original + adicionales juntas) ---------- */
-  const datasets = [...new Set(ofMonth.filter((u) => u.kind === "base").map((u) => u.dataset))].sort();
-  const basesP = Promise.all(datasets.map(async (dataset): Promise<PresBase> => {
-    const ids = ofMonth.filter((u) => u.kind === "base" && u.dataset === dataset).map((u) => u.id);
-    const prevIds = uploads.filter((u) => u.kind === "base" && u.dataset === dataset && u.month !== month).map((u) => u.id);
-    const b = `b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${ph(ids.length)}))`;
+  /** Cifras de un grupo de clientes (`b`: CTE con una columna niu) contra las llamadas y la sábana del mes. */
+  const estadisticas = async (dataset: string, b: string, bBinds: unknown[], anterior: Promise<number | null>): Promise<PresBase> => {
     const c = `c AS (SELECT c.niu, c.category, c.call_class, ROW_NUMBER() OVER (PARTITION BY c.niu ORDER BY c.called_at DESC, c.id DESC) AS rn,
                         COUNT(*) OVER (PARTITION BY c.niu) AS k
                    FROM calls c WHERE c.upload_id = ? AND c.niu IN (SELECT niu FROM b))`;
-    const [tot, cont, venta, prev] = await db.batch([
-      db
-        .prepare(
-          `WITH ${b}, ${c}
-           SELECT (SELECT COUNT(*) FROM b) AS unicos, COUNT(DISTINCT c.niu) AS recorridos, COUNT(*) AS llamadas,
-                  SUM(c.rn = 1 AND c.k = 1) AS un_intento, COUNT(DISTINCT CASE WHEN ${eff} THEN c.niu END) AS contactados FROM c`,
-        )
-        .bind(...ids, tipif?.id ?? null),
-      db
-        .prepare(`WITH ${b}, ${c} SELECT COALESCE(NULLIF(TRIM(c.category), ''), 'Sin Tipificar') AS label, COUNT(*) AS n FROM c WHERE c.rn = 1 GROUP BY 1 ORDER BY n DESC`)
-        .bind(...ids, tipif?.id ?? null),
-      db
-        .prepare(`WITH ${b} SELECT COUNT(DISTINCT s.niu) AS clientes, COALESCE(SUM(s.amount), 0) AS monto FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ? AND s.sale_date LIKE ?`)
-        .bind(...ids, sabana?.id ?? null, `${month}%`),
-      prevIds.length
-        ? db.prepare(`SELECT COUNT(DISTINCT niu) AS n FROM base_records WHERE upload_id IN (${ph(prevIds.length)})`).bind(...prevIds)
-        : db.prepare("SELECT NULL AS n"),
+    const [[tot, cont, venta], p] = await Promise.all([
+      db.batch([
+        db
+          .prepare(
+            `WITH ${b}, ${c}
+             SELECT (SELECT COUNT(*) FROM b) AS unicos, COUNT(DISTINCT c.niu) AS recorridos, COUNT(*) AS llamadas,
+                    SUM(c.rn = 1 AND c.k = 1) AS un_intento, COUNT(DISTINCT CASE WHEN ${eff} THEN c.niu END) AS contactados FROM c`,
+          )
+          .bind(...bBinds, tipif?.id ?? null),
+        db
+          .prepare(`WITH ${b}, ${c} SELECT COALESCE(NULLIF(TRIM(c.category), ''), 'Sin Tipificar') AS label, COUNT(*) AS n FROM c WHERE c.rn = 1 GROUP BY 1 ORDER BY n DESC`)
+          .bind(...bBinds, tipif?.id ?? null),
+        db
+          .prepare(`WITH ${b} SELECT COUNT(DISTINCT s.niu) AS clientes, COALESCE(SUM(s.amount), 0) AS monto FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ? AND s.sale_date LIKE ?`)
+          .bind(...bBinds, sabana?.id ?? null, `${month}%`),
+      ]),
+      anterior,
     ]);
     const t = tot!.results[0] as Record<string, number>;
     const v = venta!.results[0] as { clientes: number; monto: number };
-    const p = (prev!.results[0] as { n: number | null } | undefined)?.n;
     return {
       dataset,
       unicos: n(t.unicos),
@@ -89,9 +86,40 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
       conVenta: n(v.clientes),
       montoVenta: n(v.monto),
       contacto: (cont!.results as { label: string; n: number }[]).map((x) => ({ label: x.label, n: n(x.n) })),
-      mesAnterior: p === null || p === undefined ? null : n(p),
+      mesAnterior: p,
     };
-  }));
+  };
+  const datasets = [...new Set(ofMonth.filter((u) => u.kind === "base").map((u) => u.dataset))].sort();
+  const idsDe = (dataset: string) => ofMonth.filter((u) => u.kind === "base" && u.dataset === dataset).map((u) => u.id);
+  const prevIdsDe = (dataset: string) => uploads.filter((u) => u.kind === "base" && u.dataset === dataset && u.month !== month).map((u) => u.id);
+  const basesP = Promise.all(
+    datasets.map((dataset) => {
+      const ids = idsDe(dataset);
+      const prevIds = prevIdsDe(dataset);
+      const anterior = prevIds.length
+        ? db
+            .prepare(`SELECT COUNT(DISTINCT niu) AS n FROM base_records WHERE upload_id IN (${ph(prevIds.length)})`)
+            .bind(...prevIds)
+            .first<{ n: number }>()
+            .then((r) => n(r?.n))
+        : Promise.resolve(null);
+      return estadisticas(dataset, `b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${ph(ids.length)}))`, ids, anterior);
+    }),
+  );
+  /* Remanente: clientes de la base del mes anterior que no vienen en la de este mes y se siguieron llamando
+     (Extra: "Bases trabajadas", base del mes contra base del mes anterior). */
+  const remanentesP = Promise.all(
+    datasets
+      .filter((dataset) => prevIdsDe(dataset).length)
+      .map((dataset) => {
+        const ids = idsDe(dataset);
+        const prevIds = prevIdsDe(dataset);
+        const b = `b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${ph(prevIds.length)}) AND niu NOT IN (SELECT niu FROM base_records WHERE upload_id IN (${ph(ids.length)})))`;
+        return estadisticas(dataset, b, [...prevIds, ...ids], Promise.resolve(null));
+      }),
+  );
+  /* Conversión por segmento: clientes, contactados y con venta por cada valor de las columnas de la base. */
+  const segmentosP = segmentosDeBase(env, datasetsPrincipales(campaign, datasets), idsDe, prevIdsDe, tipif?.id ?? null, sabana?.id ?? null, month, eff);
 
   /* ---------- sábana: cada venta con su estatus, si cuenta y a qué base pertenece ---------- */
   const ventas: PresVenta[] = [];
@@ -189,7 +217,7 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
   for (let mo = q0; mo <= Number(month.slice(5, 7)); mo++) delTrimestre.push(`${month.slice(0, 4)}-${String(mo).padStart(2, "0")}`);
   const trimestreP = Promise.all(delTrimestre.map((m) => (m === month ? a : a.months.includes(m) ? analyzeCampaign(env, campaign, m, null, resultados) : null)));
 
-  const [bases, , motivos, analisisTrimestre] = await Promise.all([basesP, sabanaP, motivosP, trimestreP]);
+  const [bases, remanentes, segmentos, , motivos, analisisTrimestre] = await Promise.all([basesP, remanentesP, segmentosP, sabanaP, motivosP, trimestreP]);
   const trimestre: PresMesGap[] = [];
   for (const [i, m] of delTrimestre.entries()) {
     const x = analisisTrimestre[i];
@@ -221,6 +249,8 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
     fechaCorte: a.cumplimiento.fechaCorte,
     fechasPosteriores: a.cumplimiento.fechasPosteriores,
     bases,
+    ...(remanentes.length ? { remanentes } : {}),
+    ...(segmentos.length ? { segmentos } : {}),
     ventas,
     clientesActivos,
     ...(campaign === "tdc" ? { documentos } : {}),

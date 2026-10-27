@@ -46,7 +46,7 @@ beforeAll(async () => {
     FILES: {
       head: async (k: string) => (store.has(k) ? { size: store.get(k)!.body.byteLength, customMetadata: store.get(k)!.meta } : null),
       get: async (k: string) => (store.has(k) ? { body: store.get(k)!.body } : null),
-      put: async (k: string, body: ArrayBuffer, o: { customMetadata: Record<string, string> }) => void store.set(k, { body, meta: o.customMetadata }),
+      put: async (k: string, body: ArrayBuffer, o?: { customMetadata?: Record<string, string> }) => void store.set(k, { body, meta: o?.customMetadata ?? {} }),
       delete: async (k: string) => void store.delete(k),
     } as unknown as R2Bucket,
     APP_ENV: "production",

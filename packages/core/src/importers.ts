@@ -920,6 +920,9 @@ const BASE_MAP: Record<string, { niu?: string; profile?: string; offer?: string 
   "domi:base:piloto": { offer: "Estado" },
 };
 
+/** Columnas de una base que se guardan aparte (perfil y oferta): para mostrarlas con su nombre. */
+export const columnasBase = (dataset: string): { profile?: string; offer?: string } => BASE_MAP[dataset] ?? { profile: "Perfil" };
+
 /** Teléfono de El Salvador: los últimos 8 dígitos ("(503) 7406-5924", 50374065924 y 74065924 son el mismo). */
 export function telefonoSV(v: unknown): string | null {
   if (v === null || v === undefined || v === "") return null;

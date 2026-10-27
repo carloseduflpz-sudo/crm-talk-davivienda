@@ -6,6 +6,7 @@
    así que se puede mover, quitar o agregar láminas sin romper nada. */
 import type { CampaignCode } from "./campaigns";
 import { nameTokens } from "./agentes";
+import { datasetsPrincipales, extremos, segmentosConversion, type PresSegmentoFila } from "./segmentos";
 import { type Pptx, chartTitle, fillChart, fillTable, readChart, readTables, replaceExactText, texts } from "./pptx";
 
 /* ---------- datos que entrega el servidor (uno por campaña) ---------- */
@@ -102,6 +103,10 @@ export interface PresentacionCampania {
   /** Ventas con fecha posterior al día en que se cargó la sábana: no se usaron para el corte. */
   fechasPosteriores: { filas: number; hasta: string } | null;
   bases: PresBase[];
+  /** Remanente: clientes de la base del mes anterior que no vienen en la de este mes (llamadas y ventas de este mes). */
+  remanentes?: PresBase[];
+  /** Clientes de la base principal por valor de cada columna (gráfica "Conversión por segmento"). */
+  segmentos?: PresSegmentoFila[];
   ventas: PresVenta[];
   motivos: PresMotivo[];
   /** Meses del trimestre hasta el mes elegido (para las láminas de gap). */
@@ -281,13 +286,22 @@ export function grupoDeTexto(campaign: CampaignCode, s: string): string | null {
 /** Bases que cuentan como "la base" de la campaña en las tablas generales. */
 function basesPrincipales(d: PresentacionCampania): PresBase[] {
   // DOMI y CDC: "la base" es la Bau (la piloto y la de bienvenida van en sus propias tablas).
-  const principal = { domi: "domi:base:domi", cdc: "cdc:base:cdc" }[d.campaign as string];
-  if (principal) {
-    const bau = d.bases.filter((b) => b.dataset === principal);
-    if (bau.length) return bau;
-  }
-  return d.bases;
+  const ds = datasetsPrincipales(d.campaign, d.bases.map((b) => b.dataset));
+  return d.bases.filter((b) => ds.includes(b.dataset));
 }
+
+/** Remanente del mes anterior de las bases principales (clientes que no vienen en la base de este mes). */
+function remanentesPrincipales(d: PresentacionCampania): PresBase[] {
+  const ds = datasetsPrincipales(d.campaign, d.bases.map((b) => b.dataset));
+  return (d.remanentes ?? []).filter((b) => ds.includes(b.dataset));
+}
+
+const mesAnteriorDe = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number) as [number, number];
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+};
+/** "oct", "sep"… */
+const abrevMes = (ym: string) => nombreMes(ym).slice(0, 3).toLowerCase();
 
 /** Ventas sin base del mes (referidos u otra base). */
 const SIN_BASE = "__sin_base__";
@@ -414,11 +428,12 @@ async function laminaCampana(
     const block = h0 || "Tabla";
     try {
       if (/^(cantado\s+vs\.?\s+activo|cosecha)/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells);
-      else if (d.campaign === "cdc" && /^referido|otra base/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells, SIN_BASE);
+      // Referidos / otra base (CDC, DOMI…): ventas de clientes que no están en ninguna base cargada.
+      else if (/^referido|otra base/i.test(h0)) slide = tablaCantado(c, d, slide, t.index, t.cells, SIN_BASE);
       else if (/^tipo de desembolso/.test(head)) slide = tablaProceso(c, d, slide, t.index, t.cells);
       else if (/^tipificacion\|cantidad\|%/.test(head)) slide = tablaMotivos(c, d, slide, t.index, t.cells, tituloEncima(slide, tableFrames.find((f) => f.tabla === t.index)));
       else if (/^concepto\|clientes\|%/.test(head)) slide = tablaBase(c, d, slide, t.index, t.cells, grupoLamina);
-      else if (/^concepto\|base /.test(head)) omitir(c, h0 || "Bases trabajadas", "Se deja igual: compara la base del mes con el remanente del mes anterior, que la app aún no separa.");
+      else if (/^concepto\|base /.test(head)) slide = tablaBasesTrabajadas(c, d, slide, t.index, t.cells);
       else if (/(^|\|)agente\|antiguedad\|primer trimestre/.test(head)) slide = tablaGapAgentes(c, d, slide, t.index, t.cells);
       else if (/^gap de campana/.test(head)) slide = tablaGapCampana(c, d, slide, t.index, t.cells);
     } catch (e) {
@@ -821,6 +836,78 @@ function tablaComparativo(c: Ctx, slide: string, index: number, cells: string[][
   return fillTable(slide, index, { headerRows: 1, rows });
 }
 
+/* ---------- bases trabajadas: base del mes contra el remanente del mes anterior (Extra) ---------- */
+
+function tablaBasesTrabajadas(c: Ctx, d: PresentacionCampania, slide: string, index: number, cells: string[][]): string {
+  const mesBases = basesPrincipales(d);
+  if (!mesBases.length) throw new Error("Falta la base del mes de esta campaña.");
+  const rem = remanentesPrincipales(d);
+  const cols = [efectividad(mesBases), rem.length ? efectividad(rem) : null] as const;
+  const block = "Bases trabajadas";
+  const meses = [d.month, mesAnteriorDe(d.month)];
+  // Encabezado: "Base oct | Base sep" con los meses de ahora.
+  const header = (cells[0] ?? []).map((h, i) => (i === 0 ? h : h.replace(/(\S+)\s*$/, (w) => (w === w.toUpperCase() && w.length > 1 ? abrevMes(meses[i - 1] ?? d.month).toUpperCase() : abrevMes(meses[i - 1] ?? d.month)))));
+  header.forEach((h, i) => h !== cells[0]![i] && cambio(c, block, "Encabezado", cells[0]![i]!, h));
+  const valor = (e: Efectividad, k: string, old: string): string => {
+    if (k.startsWith("clientes en base") || k.startsWith("base asignada")) return comoAntes(old || "0", e.unicos, { comas: true });
+    if (k.startsWith("clientes llamados") || k.startsWith("recorrid")) return comoAntes(old || "0", e.recorridos, { comas: true });
+    if (k.startsWith("contactad")) return comoAntes(old || "0", e.contactados, { comas: true });
+    if (k.startsWith("% contacto")) return comoAntes(old || "0%", ratio(e.contactados, e.recorridos) * 100);
+    // "Con venta": en dinero si la celda estaba en dinero; si no, clientes.
+    if (k.startsWith("con venta")) return old.trim().startsWith("$") ? comoAntes(old, e.monto) : comoAntes(old || "0", e.conVenta, { comas: true });
+    if (k.startsWith("conversion")) return comoAntes(old || "0.0%", ratio(e.conVenta, e.contactados) * 100);
+    if (k.startsWith("toques")) return comoAntes(old || "0.0", ratio(e.llamadas, e.recorridos));
+    if (k.startsWith("sin llamar")) return comoAntes(old || "0", e.unicos - e.recorridos, { comas: true });
+    return old;
+  };
+  const rows = cells.slice(1).map((r) => {
+    const k = norm(r[0] ?? "");
+    const out = [r[0] ?? "", ...cols.map((e, i) => (e ? valor(e, k, r[i + 1] ?? "") : "—"))];
+    cambio(c, block, r[0] ?? "", r.slice(1).join(" · "), out.slice(1).join(" · "));
+    return out;
+  });
+  if (!rem.length) omitir(c, block, `No hay base de ${nombreMes(meses[1]!).toLowerCase()} cargada: la columna del remanente queda en "—".`);
+  let out = fillTable(slide, index, { headerRows: 0, rows: [header, ...rows] });
+  // La nota "Base sep: remanente de septiembre llamado en octubre." con los meses de ahora.
+  out = out.replace(/(<a:t(?:\s[^>]*)?>)([^<]*remanente de[^<]*)(<\/a:t>)/i, (all, a: string, t: string, b: string) => {
+    const nuevo = t
+      .replace(/^(\s*Base\s+)\S+?(:)/i, `$1${abrevMes(meses[1]!)}$2`)
+      .replace(new RegExp(`(remanente de\\s+)${MES_RE}`, "i"), `$1${nombreMes(meses[1]!).toLowerCase()}`)
+      .replace(new RegExp(`(llamad[oa]s?\\s+en\\s+)${MES_RE}`, "i"), `$1${nombreMes(meses[0]!).toLowerCase()}`);
+    if (nuevo !== t) cambio(c, block, "Nota", t, nuevo);
+    return a + nuevo + b;
+  });
+  return out;
+}
+
+/* ---------- conversión por segmento ---------- */
+
+function graficaSegmentos(c: Ctx, d: PresentacionCampania, chart: string): string {
+  const titulo = chartTitle(chart);
+  // "Conversión por segmento, bases sep y oct": también el remanente del mes anterior.
+  const conRem = /bases\s+\S+\s+y\s+\S+/i.test(titulo);
+  if (!d.segmentos?.length) throw new Error("Falta la base del mes de esta campaña (sus columnas dan los segmentos).");
+  const segs = extremos(segmentosConversion(d.segmentos, conRem));
+  if (!segs.length) throw new Error("La base no trae columnas con segmentos de tamaño suficiente.");
+  const e = efectividad([...basesPrincipales(d), ...(conRem ? remanentesPrincipales(d) : [])]);
+  const prom = ratio(e.conVenta, e.contactados) * 100;
+  const old = readChart(chart)[0];
+  const block = "Conversión por segmento";
+  for (const s of segs) {
+    const i = old?.categories.findIndex((x) => norm(x) === norm(s.label)) ?? -1;
+    cambio(c, block, s.label, i >= 0 ? `${old!.values[i]}%` : "—", `${Math.round(s.conv)}% (${s.ventas} de ${s.contactados} contactados)`);
+  }
+  // Porcentajes enteros en las gráficas (43.6% se presenta como 44%).
+  let out = fillChart(chart, [{ categories: segs.map((s) => s.label), values: segs.map((s) => Math.round(s.conv)) }]);
+  // Las etiquetas de las barras, sin decimales (como las demás gráficas).
+  out = out.replace(/formatCode="0\.0+(&quot;%&quot;|\\?%)"/g, 'formatCode="0$1"');
+  out = out.replace(/(prom\.\s*)[\d.,]+(\s*%)/i, (_, a: string, b: string) => `${a}${prom.toFixed(1)}${b}`);
+  if (conRem) out = out.replace(/(bases\s+)\S+(\s+y\s+)([^\s(<]+)/i, (_, a: string, y: string) => `${a}${abrevMes(mesAnteriorDe(d.month))}${y}${abrevMes(d.month)}`);
+  const nuevo = chartTitle(out);
+  if (nuevo !== titulo) cambio(c, block, "Título", titulo, nuevo);
+  return out;
+}
+
 /* ---------- gap trimestral ---------- */
 
 const TRIMESTRES = ["primer", "segundo", "tercer", "cuarto"];
@@ -920,7 +1007,7 @@ function graficaCampana(c: Ctx, d: PresentacionCampania, chart: string, grupo: s
   if (title.startsWith("contacto")) return graficaContacto(c, d, chart, series, grupo);
   if (cats.length === 2 && cats[0] === "cumplimiento" && cats[1] === "gap") return graficaCumplimiento(c, d, chart, series);
   if (cats.length && cats.every((x) => /^w\s*\d+$/.test(x))) return graficaSemanas(c, d, chart, series);
-  if (title.startsWith("conversion por segmento")) omitir(c, "Conversión por segmento", "Se deja igual: los segmentos salen de varias columnas de la base que la herramienta aún no cruza.");
+  if (title.startsWith("conversion por segmento")) return graficaSegmentos(c, d, chart);
   return chart;
 }
 
