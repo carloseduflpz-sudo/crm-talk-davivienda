@@ -31,7 +31,6 @@ function memoryDeck(parts: Record<string, string>, slideRels: Record<string, Rec
 }
 
 /* ---------- datos del mes ---------- */
-let seq = 0;
 const v = (o: Partial<PresVenta> & { ops: number }): PresVenta => ({
   grupo: null,
   origen: "mes",
@@ -40,7 +39,7 @@ const v = (o: Partial<PresVenta> & { ops: number }): PresVenta => ({
   proceso: "",
   semana: 1,
   valor: o.ops,
-  nius: Array.from({ length: o.ops }, () => String(++seq)),
+  clientes: o.ops,
   ...o,
 });
 const upin: PresentacionCampania = {
@@ -328,7 +327,7 @@ describe("presentación: llenado de las láminas", () => {
       },
       {},
     );
-    const doc = (estatus: string, d: string | null, motivo: string | null = null) => ({ estatus, doc: d, pendiente: null, motivo });
+    const doc = (estatus: string, d: string | null, motivo: string | null = null) => ({ n: 1, estatus, doc: d, pendiente: null, motivo });
     const tdc: PresentacionCampania = {
       ...upin,
       campaign: "tdc",

@@ -49,12 +49,14 @@ export interface PresVenta {
   /** Semana del mes de la fecha de venta (1 = del día 1 al primer domingo). */
   semana: number | null;
   ops: number;
-  /** NIU de los clientes (para contar clientes únicos). */
-  nius: string[];
+  /** Clientes distintos del grupo. */
+  clientes: number;
   valor: number;
 }
 
 export interface PresDocumento {
+  /** Cuántas ventas tienen esta misma combinación. */
+  n: number;
   estatus: string;
   /** Columna DOCUMENTACION de la sábana. */
   doc: string | null;
@@ -104,7 +106,9 @@ export interface PresentacionCampania {
   motivos: PresMotivo[];
   /** Meses del trimestre hasta el mes elegido (para las láminas de gap). */
   trimestre: PresMesGap[];
-  /** TDC: cada venta de la sábana (del mes y cosecha) con lo que dice de documentos y su motivo de rechazo. */
+  /** Clientes distintos con una venta que cuenta (DOMI: clientes contra colectores), en total y por semana del mes. */
+  clientesActivos?: { total: number; porSemana: Record<string, number> };
+  /** TDC: ventas de la sábana (del mes y cosecha) agrupadas por estatus, documentos y motivo de rechazo. */
   documentos?: PresDocumento[];
   /** Gráficas de contacto tomadas del Excel de las gráficas, por base ("*" = toda la campaña). */
   contactoExcel?: Record<string, PresConteo[]>;
@@ -300,7 +304,6 @@ function ventasDe(d: PresentacionCampania, grupo: string | null): PresVenta[] {
 /** Lo que se suma de cada venta: el número de ventas, o el monto en CDC y Extra. */
 const medidaDe = (d: PresentacionCampania) => (v: PresVenta) => (d.unidad === "monto" ? v.valor : v.ops);
 
-const unicosNiu = (vs: PresVenta[]) => new Set(vs.flatMap((v) => v.nius)).size;
 
 /** Estatus agrupados (de mayor a menor) de un conjunto de ventas. */
 function porEstatus(vs: PresVenta[], medida: (v: PresVenta) => number = (v) => v.ops): PresConteo[] {
@@ -552,11 +555,15 @@ function laminaDocumentos(c: Ctx, docs: PresDocumento[], slide: string, tables: 
   // Requiere documento: lo dice la columna DOCUMENTACION (o, si viene vacía en toda la sábana, PENDIENTE POR REQUISITO).
   const usarDoc = docs.some((x) => tieneTexto(x.doc));
   const textoDoc = (x: PresDocumento) => (usarDoc ? x.doc : x.pendiente);
-  const requieren = docs.filter((x) => tieneTexto(textoDoc(x)));
+  const cuenta = (xs: PresDocumento[]) => sum(xs.map((x) => x.n));
+  const requiereList = docs.filter((x) => tieneTexto(textoDoc(x)));
   // Recuperado: requería documento y ya no está pendiente por requisito.
-  const recuperados = requieren.filter((x) => !norm(x.estatus).startsWith("pendiente por requisito"));
-  const rechazadas = docs.filter((x) => norm(x.estatus).startsWith("rechaz"));
-  const total = docs.length;
+  const recuperadosList = requiereList.filter((x) => !norm(x.estatus).startsWith("pendiente por requisito"));
+  const rechazadasList = docs.filter((x) => norm(x.estatus).startsWith("rechaz"));
+  const requieren = { length: cuenta(requiereList) };
+  const recuperados = { length: cuenta(recuperadosList) };
+  const rechazadas = { length: cuenta(rechazadasList) };
+  const total = cuenta(docs);
   const block = "Seguimiento de documentos";
   const pct = (old: string, a: number, b: number) => comoAntes(old || "0%", ratio(a, b) * 100, { porcentaje: true });
 
@@ -582,10 +589,12 @@ function laminaDocumentos(c: Ctx, docs: PresDocumento[], slide: string, tables: 
         const rows = cells.slice(1).map((r) => {
           const l = norm(r[0] ?? "");
           const raiz = l.split(" ")[0]!.replace(/s$/, "");
-          const n = requieren.filter((x) => {
-            const txt = norm(`${x.doc ?? ""} ${x.pendiente ?? ""}`);
-            return txt.includes(l) || (raiz.length >= 3 && txt.includes(raiz));
-          }).length;
+          const n = cuenta(
+            requiereList.filter((x) => {
+              const txt = norm(`${x.doc ?? ""} ${x.pendiente ?? ""}`);
+              return txt.includes(l) || (raiz.length >= 3 && txt.includes(raiz));
+            }),
+          );
           const now = comoAntes(r[1] || "0", n);
           cambio(c, block, r[0] ?? "", r[1] ?? "", now);
           return [r[0] ?? "", now];
@@ -602,9 +611,9 @@ function laminaDocumentos(c: Ctx, docs: PresDocumento[], slide: string, tables: 
         const body = cells.slice(1);
         const tplLabels = body.map((r) => r[0] ?? "");
         const m = new Map<string, number>();
-        for (const x of rechazadas) {
+        for (const x of rechazadasList) {
           const l = etiqueta(x.motivo ?? "Sin motivo", tplLabels);
-          m.set(l, (m.get(l) ?? 0) + 1);
+          m.set(l, (m.get(l) ?? 0) + x.n);
         }
         const pos = (l: string) => (tplLabels.includes(l) ? tplLabels.indexOf(l) : 999);
         let items = [...m.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n || pos(a.label) - pos(b.label));
@@ -1015,9 +1024,18 @@ function graficaSemanas(c: Ctx, d: PresentacionCampania, chart: string, series: 
   const act = d.ventas.filter((v) => v.k === 1);
   const delMes = act.filter((v) => v.origen === "mes");
   const block = "Ventas por semana";
-  const medida = (vs: PresVenta[], clientes: boolean) => (clientes ? unicosNiu(vs) : sum(vs.map((v) => (d.unidad === "monto" ? v.valor : v.ops))));
+  const medida = (vs: PresVenta[], clientes: boolean) => sum(vs.map((v) => (clientes ? v.clientes : d.unidad === "monto" ? v.valor : v.ops)));
+  // Clientes distintos (no se pueden sumar por grupos): los da el servidor, en total y por semana.
+  const cli = d.clientesActivos;
   const calc = (filter: (v: PresVenta) => boolean, clientes: boolean, tplVals: (number | null)[]) =>
-    porSemana(d, n, actual, medida(act.filter(filter), clientes), (w) => medida(delMes.filter((v) => filter(v) && v.semana === w), clientes), same ? tplVals : null);
+    porSemana(
+      d,
+      n,
+      actual,
+      clientes && cli ? cli.total : medida(act.filter(filter), clientes),
+      (w) => (clientes && cli ? (cli.porSemana[String(w)] ?? 0) : medida(delMes.filter((v) => filter(v) && v.semana === w), clientes)),
+      same ? tplVals : null,
+    );
 
   const fills: { name?: string; categories: string[]; values: (number | null)[] }[] = [];
   let clientes: (number | null)[] | null = null;

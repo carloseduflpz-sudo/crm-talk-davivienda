@@ -42,14 +42,24 @@ export function nombreSalida(plantilla: string, mes: string, semana: number | nu
 }
 
 /** Cifras de las 6 campañas del mes. Si una campaña no tiene datos de ese mes, el servidor da su último mes: eso no se usa (no se mezclan meses). */
-async function cargarDatos(mes: string): Promise<PresDatos> {
-  const all = await Promise.all(CAMPAIGNS.map((c) => api.presentacionDatos(c.code, mes).catch(() => null)));
-  const out: PresDatos = {};
+type Carga = { datos: PresDatos; errores: Partial<Record<string, string>> };
+async function cargarDatos(mes: string): Promise<Carga> {
+  const errores: Carga["errores"] = {};
+  const all = await Promise.all(
+    CAMPAIGNS.map((c) =>
+      api.presentacionDatos(c.code, mes).catch((e: Error) => {
+        // Si el servidor falla, se dice (no se confunde con "no hay datos").
+        errores[c.code] = e.message;
+        return null;
+      }),
+    ),
+  );
+  const datos: PresDatos = {};
   CAMPAIGNS.forEach((c, i) => {
     const d = all[i];
-    if (d && d.month === mes) out[c.code] = d;
+    if (d && d.month === mes) datos[c.code] = d;
   });
-  return out;
+  return { datos, errores };
 }
 
 /** Semana del mes de la sábana más reciente (para el nombre del archivo). */
@@ -87,11 +97,11 @@ export function Presentation() {
   const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean } | null>(null);
   // Excel de las gráficas (guardado): de él salen la M, la R y el contacto; lo demás lo calcula la app.
   const control = useQuery({ queryKey: ["control"], queryFn: cargarControlGuardado });
-  const usados = useMemo(() => (datos.data && control.data ? aplicarControl(datos.data, control.data.data) : datos.data), [datos.data, control.data]);
+  const usados = useMemo(() => (datos.data && control.data ? aplicarControl(datos.data.datos, control.data.data) : datos.data?.datos), [datos.data, control.data]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
-  const semana = useMemo(() => semanaActual(datos.data ?? {}, mes), [datos.data, mes]);
+  const semana = useMemo(() => semanaActual(datos.data?.datos ?? {}, mes), [datos.data, mes]);
 
   const generar = async () => {
     const p = plantilla.data;
@@ -101,7 +111,9 @@ export function Presentation() {
     try {
       // Las cifras se piden de nuevo al dar clic: si se acaba de cargar una sábana, ya sale con ella.
       setBusy("Leyendo lo último que se cargó…");
-      const frescos = await cargarDatos(mes);
+      const { datos: frescos, errores } = await cargarDatos(mes);
+      const fallas = Object.entries(errores);
+      if (fallas.length) throw new Error(`No se pudieron leer las cifras de ${fallas.map(([k, m]) => `${getCampaign(k as PresentacionCampania["campaign"]).shortName} (${m})`).join(", ")}. No se generó la presentación para no dejarla a medias.`);
       void qc.invalidateQueries({ queryKey: ["presentacion", mes] });
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
@@ -127,7 +139,7 @@ export function Presentation() {
     }
   };
 
-  const listas = Object.keys(datos.data ?? {}).length;
+  const listas = Object.keys(datos.data?.datos ?? {}).length;
   return (
     <>
       <PageHeader
@@ -159,7 +171,11 @@ export function Presentation() {
                 <li key={c.code} className="flex items-baseline justify-between gap-3 py-2">
                   <span className="font-medium text-ink">{c.shortName}</span>
                   <span className="text-right text-ink-soft">
-                    {datos.isPending ? "…" : d ? <EstadoCampana d={d} deExcel={Boolean(control.data && (control.data.data.campanas.some((x) => x.campaign === c.code) || control.data.data.hojas.some((x) => x.campaign === c.code)))} /> : <span className="text-amber-700 dark:text-amber-400">Sin datos de {nombreMes(mes).toLowerCase()}: sus cifras quedan como estaban</span>}
+                    {datos.isPending ? "…" : d ? <EstadoCampana d={d} deExcel={Boolean(control.data && (control.data.data.campanas.some((x) => x.campaign === c.code) || control.data.data.hojas.some((x) => x.campaign === c.code)))} /> : datos.data?.errores[c.code] ? (
+                      <span className="text-red-600 dark:text-red-400">No se pudieron leer sus cifras: {datos.data.errores[c.code]}</span>
+                    ) : (
+                      <span className="text-amber-700 dark:text-amber-400">Sin datos de {nombreMes(mes).toLowerCase()}: sus cifras quedan como estaban</span>
+                    )}
                   </span>
                 </li>
               );
@@ -169,7 +185,7 @@ export function Presentation() {
       </div>
 
       <CuadreExcel
-        datos={datos.data ?? null}
+        datos={datos.data?.datos ?? null}
         control={control.data ?? null}
         cargando={control.isPending}
         errorCarga={control.error ? (control.error as Error).message : ""}

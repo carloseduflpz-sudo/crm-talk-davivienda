@@ -50,9 +50,9 @@ const tdc: PresentacionCampania = {
     { dataset: "tdc:base:segundas", unicos: 5, recorridos: 3, contactados: 0, llamadas: 0, unIntento: 0, conVenta: 0, montoVenta: 0, mesAnterior: null, contacto: [{ label: "No contacto", n: 1 }, { label: "Sin tipificar", n: 2 }] },
   ],
   ventas: [
-    { grupo: "tdc:base:primeras", origen: "mes", estatus: "ENTREGADA", k: 1, proceso: "", semana: 2, ops: 6, nius: [], valor: 6 },
-    { grupo: "tdc:base:primeras", origen: "mes", estatus: "RECHAZADA", k: 0, proceso: "", semana: 2, ops: 4, nius: [], valor: 4 },
-    { grupo: "tdc:base:primeras", origen: "cosecha", estatus: "ENTREGADA", k: 1, proceso: "", semana: null, ops: 2, nius: [], valor: 2 },
+    { grupo: "tdc:base:primeras", origen: "mes", estatus: "ENTREGADA", k: 1, proceso: "", semana: 2, ops: 6, clientes: 0, valor: 6 },
+    { grupo: "tdc:base:primeras", origen: "mes", estatus: "RECHAZADA", k: 0, proceso: "", semana: 2, ops: 4, clientes: 0, valor: 4 },
+    { grupo: "tdc:base:primeras", origen: "cosecha", estatus: "ENTREGADA", k: 1, proceso: "", semana: null, ops: 2, clientes: 0, valor: 2 },
   ],
   motivos: [],
   trimestre: [{ month: "2026-10", meta: (253 / 22) * 16, metaPorAgente: (253 / 22) * 16 / 7, mtd: true, resultado: 69, porAgente: [], agentes: [] }],

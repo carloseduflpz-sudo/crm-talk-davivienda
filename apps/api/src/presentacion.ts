@@ -1,6 +1,6 @@
 /* Presentación semanal: las cifras que lleva cada lámina, calculadas con los archivos vigentes del mes,
    y la plantilla (.pptx) guardada en R2 para que cada semana baste con darle "Descargar". */
-import { isCampaignCode, semanaDe, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
+import { isCampaignCode, semanasDelMes, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
 import { analyzeCampaign } from "./analisis";
 import { audit } from "./audit";
 import type { Env } from "./env";
@@ -26,19 +26,6 @@ const prevMonth = (m: string) => {
   const [y, mo] = m.split("-").map(Number) as [number, number];
   return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, "0")}`;
 };
-
-/** Tipo de cuenta que trae la sábana de TDC ("PRIMERA CUENTA", "2DA", "1"…). */
-function cuentaTdc(v: unknown): string | null {
-  const s = String(v ?? "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .trim();
-  if (!s) return null;
-  if (/seg|(^|\D)2(\D|$)/.test(s)) return "tdc:base:segundas";
-  if (/pri|(^|\D)1(\D|$)/.test(s)) return "tdc:base:primeras";
-  return null;
-}
 
 export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: string | null): Promise<PresentacionCampania | null> {
   const a = await analyzeCampaign(env, campaign, mes);
@@ -103,6 +90,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
   /* ---------- sábana: cada venta con su estatus, si cuenta y a qué base pertenece ---------- */
   const ventas: PresVenta[] = [];
   const documentos: NonNullable<PresentacionCampania["documentos"]> = [];
+  const clientesActivos = { total: 0, porSemana: {} as Record<string, number> };
   if (sabana) {
     const counted = a.cumplimiento.config.estatus;
     const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
@@ -115,59 +103,61 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
       : "prev AS (SELECT NULL AS niu, NULL AS d WHERE 0)";
     const prevBinds = counted.length ? [campaign, month, ...counted] : [];
     const measure = a.cumplimiento.unidad === "monto" ? "COALESCE(amount, 0)" : "1";
-    const cuenta = campaign === "tdc" ? `json_extract(extra, '$."PRI - SEG / CUENTA"')` : "NULL";
+    // TDC: la sábana dice si la venta es de primera o segunda cuenta.
+    const cuentaCol = `json_extract(extra, '$."PRI - SEG / CUENTA"')`;
+    const cuenta =
+      campaign === "tdc"
+        ? `CASE WHEN lower(${cuentaCol}) LIKE '%seg%' OR ${cuentaCol} GLOB '*2*' THEN 'tdc:base:segundas'
+                WHEN lower(${cuentaCol}) LIKE '%pri%' OR ${cuentaCol} GLOB '*1*' THEN 'tdc:base:primeras' END`
+        : "NULL";
     // TDC: documentación pedida al cliente (lámina "Seguimiento de documentos").
     const docCols =
       campaign === "tdc"
-        ? `, json_extract(extra, '$.DOCUMENTACION') AS doc, json_extract(extra, '$."PENDIENTE POR REQUISITO"') AS pend, reason AS motivo`
+        ? `, NULLIF(TRIM(json_extract(extra, '$.DOCUMENTACION')), '') AS doc, NULLIF(TRIM(json_extract(extra, '$."PENDIENTE POR REQUISITO"')), '') AS pend, NULLIF(TRIM(reason), '') AS motivo`
         : ", NULL AS doc, NULL AS pend, NULL AS motivo";
-    const [rows, miembros] = await db.batch([
+    // Semana del mes de la fecha de venta (solo ventas del mes).
+    const semanas = semanasDelMes(month);
+    const semanaSql = `CASE WHEN origen = 'mes' AND sale_date LIKE '${month}%' THEN CASE ${semanas.map((w) => `WHEN substr(sale_date, 1, 10) <= '${w.hasta}' THEN ${w.semana}`).join(" ")} END END`;
+    /* Todo se agrupa en la base de datos (no fila por fila en el Worker): con sábanas grandes el Worker se quedaba sin tiempo.
+       Base de cada venta: la que dice la sábana (TDC) o la base vigente donde está el cliente, primero la del mes de la venta. */
+    const cte = `WITH ${prevCte},
+      s AS (
+        SELECT niu, sale_date, ${label} AS estatus, COALESCE(process, '') AS proceso, ${measure} AS m, ${cuenta} AS cuenta${docCols},
+               CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen,
+               COALESCE(substr(sale_date, 1, 7), ?) AS sm,
+               CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
+          FROM bank_sales WHERE upload_id = ?),
+      g AS (
+        SELECT s.*, ${semanaSql} AS semana,
+               -- La de menor clave: primero la del mes de la venta, luego la del mes, luego no piloto, luego por nombre.
+               COALESCE(cuenta, (SELECT substr(MIN(printf('%d%d%d', u.month <> s.sm, u.month <> ?, u.dataset LIKE '%piloto%') || u.dataset), 4)
+                                   FROM base_records b JOIN uploads u ON u.id = b.upload_id
+                                  WHERE b.niu = s.niu AND u.campaign = ? AND u.kind = 'base' AND u.is_current = 1)) AS grupo
+          FROM s)`;
+    // En el orden en que aparecen los "?" en la consulta.
+    const binds = [...prevBinds, month, month, ...counted, sabana.id, month, campaign];
+    const [grupos, clientes, docs] = await db.batch([
       db
-        .prepare(
-          `WITH ${prevCte}
-           SELECT niu, sale_date, ${label} AS estatus, COALESCE(process, '') AS proceso, ${measure} AS m, ${cuenta} AS cuenta${docCols},
-                  CASE WHEN ${inList} THEN (CASE WHEN EXISTS (SELECT 1 FROM prev WHERE prev.niu = bank_sales.niu AND prev.d = COALESCE(bank_sales.sale_date, '')) THEN 2 ELSE 1 END) ELSE 0 END AS k
-             FROM bank_sales WHERE upload_id = ?`,
-        )
-        .bind(...prevBinds, ...counted, sabana.id),
-      // A qué base (de qué mes) pertenece cada cliente de la sábana.
+        .prepare(`${cte} SELECT grupo, origen, estatus, k, proceso, semana, COUNT(*) AS ops, SUM(m) AS valor, COUNT(DISTINCT niu) AS clientes FROM g GROUP BY 1, 2, 3, 4, 5, 6`)
+        .bind(...binds),
+      // Clientes distintos con venta que cuenta (DOMI: clientes vs colectores), en total y por semana.
       db
-        .prepare(
-          `SELECT DISTINCT b.niu, b.dataset, u.month FROM base_records b JOIN uploads u ON u.id = b.upload_id
-            WHERE u.campaign = ? AND u.kind = 'base' AND u.is_current = 1 AND b.niu IN (SELECT niu FROM bank_sales WHERE upload_id = ?)`,
-        )
-        .bind(campaign, sabana.id),
+        .prepare(`${cte} SELECT -1 AS semana, COUNT(DISTINCT niu) AS n FROM g WHERE k = 1 UNION ALL SELECT semana, COUNT(DISTINCT niu) FROM g WHERE k = 1 AND semana IS NOT NULL GROUP BY semana`)
+        .bind(...binds),
+      campaign === "tdc"
+        ? db.prepare(`${cte} SELECT estatus, doc, pend, motivo, COUNT(*) AS n FROM g WHERE k <> 2 GROUP BY 1, 2, 3, 4`).bind(...binds)
+        : db.prepare("SELECT NULL AS estatus WHERE 0"),
     ]);
-    const enBase = new Map<string, { dataset: string; month: string }[]>();
-    for (const r of miembros!.results as { niu: string; dataset: string; month: string }[]) enBase.set(r.niu, [...(enBase.get(r.niu) ?? []), r]);
-    const order = (ds: string) => (/piloto/.test(ds) ? 1 : 0);
-    const grupoDe = (niu: string, saleMonth: string, cuentaRaw: unknown): string | null => {
-      const byCuenta = cuentaTdc(cuentaRaw);
-      if (byCuenta) return byCuenta;
-      const list = enBase.get(niu);
-      if (!list?.length) return null;
-      const same = list.filter((x) => x.month === saleMonth);
-      const pick = (same.length ? same : list.filter((x) => x.month === month).length ? list.filter((x) => x.month === month) : list).sort((x, y) => order(x.dataset) - order(y.dataset) || x.dataset.localeCompare(y.dataset));
-      return pick[0]!.dataset;
-    };
-    const groups = new Map<string, PresVenta>();
-    for (const r of rows!.results as { niu: string; sale_date: string | null; estatus: string; proceso: string; m: number; cuenta: unknown; k: number; doc: unknown; pend: unknown; motivo: string | null }[]) {
-      if (campaign === "tdc" && n(r.k) !== 2) {
-        const txt = (v: unknown) => (v === null || v === undefined || String(v).trim() === "" ? null : String(v).trim());
-        documentos.push({ estatus: r.estatus, doc: txt(r.doc), pendiente: txt(r.pend), motivo: txt(r.motivo) });
-      }
-      const sm = r.sale_date?.slice(0, 7) ?? month;
-      const origen = sm < month ? "cosecha" : "mes";
-      const grupo = grupoDe(r.niu, sm, r.cuenta);
-      const semana = origen === "mes" ? semanaDe(month, r.sale_date) : null;
-      const key = [grupo, origen, r.estatus, r.k, r.proceso, semana].join("|");
-      const g = groups.get(key) ?? { grupo, origen, estatus: r.estatus, k: (n(r.k) as 0 | 1 | 2), proceso: r.proceso, semana, ops: 0, nius: [], valor: 0 };
-      g.ops++;
-      g.valor += n(r.m);
-      g.nius.push(r.niu);
-      groups.set(key, g);
+    for (const r of grupos!.results as { grupo: string | null; origen: "mes" | "cosecha"; estatus: string; k: number; proceso: string; semana: number | null; ops: number; valor: number; clientes: number }[]) {
+      ventas.push({ grupo: r.grupo ?? null, origen: r.origen, estatus: r.estatus, k: n(r.k) as 0 | 1 | 2, proceso: r.proceso, semana: r.semana === null ? null : n(r.semana), ops: n(r.ops), valor: n(r.valor), clientes: n(r.clientes) });
     }
-    ventas.push(...groups.values());
+    for (const r of clientes!.results as { semana: number; n: number }[]) {
+      if (n(r.semana) === -1) clientesActivos.total = n(r.n);
+      else clientesActivos.porSemana[String(n(r.semana))] = n(r.n);
+    }
+    for (const r of docs!.results as { estatus: string; doc: string | null; pend: string | null; motivo: string | null; n: number }[]) {
+      documentos.push({ estatus: r.estatus, doc: r.doc ?? null, pendiente: r.pend ?? null, motivo: r.motivo ?? null, n: n(r.n) });
+    }
   }
 
   /* ---------- motivos de no venta: tipología → subtipología (todas las llamadas del mes) ---------- */
@@ -219,6 +209,7 @@ export async function presentacionDatos(env: Env, campaign: CampaignCode, mes: s
     fechasPosteriores: a.cumplimiento.fechasPosteriores,
     bases,
     ventas,
+    clientesActivos,
     ...(campaign === "tdc" ? { documentos } : {}),
     motivos,
     trimestre,

@@ -93,17 +93,21 @@ describe("presentación: cifras de TDC octubre", () => {
   });
 
   it("sábana: mes y cosecha, si cuenta, ya contadas y a qué base va cada venta", () => {
-    const pick = (niu: string) => d.ventas.find((v) => v.nius.includes(niu))!;
-    expect(pick("500")).toMatchObject({ origen: "cosecha", k: 2 });
-    expect(pick("501")).toMatchObject({ origen: "cosecha", k: 1, semana: null });
-    expect(pick("502")).toMatchObject({ origen: "cosecha", k: 0 });
-    expect(pick("100")).toMatchObject({ origen: "mes", k: 1, grupo: "tdc:base:segundas", semana: 1 });
-    expect(pick("101")).toMatchObject({ origen: "mes", k: 1, grupo: "tdc:base:primeras", semana: 2 });
-    expect(pick("102")).toMatchObject({ origen: "mes", k: 0, grupo: "tdc:base:primeras" });
+    // Las ventas llegan agrupadas (grupo, origen, estatus, si cuenta, proceso, semana).
+    const pick = (o: Partial<PresentacionCampania["ventas"][number]>) => d.ventas.filter((v) => Object.entries(o).every(([k, x]) => v[k as keyof typeof v] === x));
+    expect(pick({ origen: "cosecha", k: 2 })).toMatchObject([{ estatus: "ENTREGADA", ops: 1 }]); // 500: ya contó en septiembre
+    expect(pick({ origen: "cosecha", k: 1 })).toMatchObject([{ estatus: "ENTREGADA", semana: null, ops: 1 }]); // 501
+    expect(pick({ origen: "cosecha", k: 0 })).toMatchObject([{ estatus: "RECHAZADA", ops: 1 }]); // 502
+    expect(pick({ origen: "mes", k: 1, grupo: "tdc:base:segundas" })).toMatchObject([{ semana: 1, ops: 1, clientes: 1 }]); // 100: lo dice la sábana
+    expect(pick({ origen: "mes", k: 1, grupo: "tdc:base:primeras" })).toMatchObject([{ semana: 2, ops: 1 }]); // 101
+    expect(pick({ origen: "mes", k: 0, grupo: "tdc:base:primeras" })).toMatchObject([{ estatus: "PENDIENTE POR REQUISITO", ops: 1 }]); // 102
+    expect(d.ventas.reduce((s, v) => s + v.ops, 0)).toBe(6);
+    // Clientes distintos con venta que cuenta: 501, 100 y 101; por semana del mes: 100 en la 1 y 101 en la 2.
+    expect(d.clientesActivos).toEqual({ total: 3, porSemana: { "1": 1, "2": 1 } });
     expect(d.resultado).toBe(3);
-    // Documentos (TDC): todas las ventas menos las que ya contaron antes, con DOCUMENTACION y motivo de rechazo.
-    expect(d.documentos).toHaveLength(5);
-    expect(d.documentos!.find((x) => x.doc)).toEqual({ estatus: "PENDIENTE POR REQUISITO", doc: "BOLETAS DE PAGO", pendiente: null, motivo: null });
+    // Documentos (TDC): todas las ventas menos las que ya contaron antes, agrupadas, con DOCUMENTACION y motivo de rechazo.
+    expect(d.documentos!.reduce((s, x) => s + x.n, 0)).toBe(5);
+    expect(d.documentos!.find((x) => x.doc)).toEqual({ n: 1, estatus: "PENDIENTE POR REQUISITO", doc: "BOLETAS DE PAGO", pendiente: null, motivo: null });
     expect(d.documentos!.find((x) => x.estatus === "RECHAZADA")!.motivo).toBe("Base Vencida");
     expect(d.meta).toBe(20);
     // La sábana llega al 7 de octubre: 5 de los 22 días hábiles del mes → meta MTD = 20 × 5 / 22.
