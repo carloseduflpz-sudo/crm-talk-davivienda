@@ -5,12 +5,14 @@
 import {
   CAMPAIGNS,
   chunkEnds,
+  claveUnidad,
   compareSabanas,
   getCampaign,
   guessCampaign,
   isSheetFile,
   listZip,
   mesDeSabana,
+  planBases,
   planBulk,
   planSabanas,
   readZipEntry,
@@ -20,6 +22,7 @@ import {
   unitKey,
   type BulkKind,
   type BulkUnit,
+  type SiExiste,
   type CampaignCode,
   type NormalizedRow,
   type ZipEntry,
@@ -43,7 +46,9 @@ const TIPOS: Record<BulkKind, { label: string; filas: string; detalle: string }>
   tipif: { label: "Tipificaciones", filas: "llamadas", detalle: "cada llamada se guarda en el mes de su fecha" },
   ventas: { label: "Ventas del CRM", filas: "ventas", detalle: "cada venta se guarda en el mes de su fecha" },
   sabana: { label: "Sábanas", filas: "ventas", detalle: "cada archivo es la sábana de un mes y se guarda completa, con su cosecha" },
+  base: { label: "Bases", filas: "registros", detalle: "cada archivo es una base de un mes (el mes sale del nombre del archivo)" },
 };
+const porArchivo = (k: BulkKind) => k === "sabana" || k === "base";
 /** Los últimos 13 meses (para corregir el mes de una sábana aunque el archivo no traiga ventas de ese mes). */
 const ultimosMeses = Array.from({ length: 13 }, (_, i) => {
   const d = new Date();
@@ -51,7 +56,9 @@ const ultimosMeses = Array.from({ length: 13 }, (_, i) => {
   d.setMonth(d.getMonth() - i);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 });
-const esTipo = (v: string | null): v is BulkKind => v === "tipif" || v === "ventas" || v === "sabana";
+const esTipo = (v: string | null): v is BulkKind => v === "tipif" || v === "ventas" || v === "sabana" || v === "base";
+const datasetLabel = (id: string) => CAMPAIGNS.flatMap((c) => c.datasets).find((d) => d.id === id)?.label ?? id;
+const basesDe = (c: CampaignCode) => getCampaign(c).datasets.filter((d) => d.kind === "base");
 
 /** De dónde sale cada archivo: de un ZIP o suelto. */
 interface Fuente {
@@ -66,8 +73,10 @@ type FileStatus = "pendiente" | "leyendo" | "listo" | "otro-tipo" | "error" | "n
 interface Row {
   entry: Fuente;
   campaign: CampaignCode | null;
-  /** Sábanas: mes del archivo (del nombre o del mes más reciente de sus ventas). */
+  /** Sábanas y bases: mes del archivo (del nombre, de sus fechas o elegido). */
   month: string | null;
+  /** Bases: qué base es (reconocida por sus columnas o elegida). Un libro con dos bases da dos filas. */
+  dataset: string | null;
   status: FileStatus;
   byMonth: Record<string, number>;
   rows: number;
@@ -90,14 +99,40 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   }
 }
 
-/** Lee un archivo (del ZIP o suelto) con las reglas de esa campaña. */
-async function readCalls(row: Row, onStep: (s: string) => void): Promise<{ rows: NormalizedRow[]; sha: string; datasetId: string | null; dropped: number; error: string | null }> {
+interface Lectura {
+  rows: NormalizedRow[];
+  sha: string;
+  datasetId: string | null;
+  dropped: number;
+  error: string | null;
+  /** Mes según el archivo (bases con fecha, p. ej. la piloto de DOMI). */
+  mes: string | null;
+  /** Otros tipos que trae el mismo libro (un Excel con Primeras y Segundas). */
+  otros: string[];
+  /** Duda entre dos bases muy parecidas. */
+  duda: boolean;
+}
+
+/** Lee un archivo (del ZIP o suelto) con las reglas de esa campaña; con `dataset`, como ese tipo. */
+async function readCalls(row: Row, onStep: (s: string) => void, dataset: string | null = null): Promise<Lectura> {
   const f = row.entry;
   const file = f.file ?? new File([(await readZipEntry(f.zip!, f.entry!)) as BlobPart], f.name);
   const reader = new ExcelReader();
   try {
-    const { result, sha } = await reader.open(file, row.campaign!, onStep);
-    return { rows: result.rows, sha, datasetId: result.datasetId, dropped: result.dropped, error: result.error };
+    const opened = await reader.open(file, row.campaign!, onStep);
+    const result = dataset && dataset !== opened.result.datasetId ? await reader.analyze(dataset, onStep) : opened.result;
+    const [d0, d1] = opened.result.detections ?? [];
+    const esBase = (id?: string) => Boolean(id && /:base(:|$)/.test(id));
+    return {
+      rows: result.rows,
+      sha: opened.sha,
+      datasetId: result.datasetId,
+      dropped: result.dropped,
+      error: result.error,
+      mes: result.month?.month ?? null,
+      otros: [...new Set((opened.result.hojas ?? []).flatMap((h) => h.tipos))].filter((t) => t !== result.datasetId),
+      duda: Boolean(d0 && d1 && esBase(d0.datasetId) && esBase(d1.datasetId) && d0.sheet === d1.sheet && d0.score - d1.score < 3),
+    };
   } finally {
     reader.close();
   }
@@ -118,6 +153,8 @@ export function BulkUpload() {
   // Campaña × mes que ya tiene una carga vigente de este tipo → su id (para comparar sábanas).
   const [existing, setExisting] = useState<Map<string, string>>(new Map());
   const [replace, setReplace] = useState(false);
+  // Bases: qué hacer si el mes ya tiene base.
+  const [siExiste, setSiExiste] = useState<SiExiste>("saltar");
   const [unitStatus, setUnitStatus] = useState<Record<string, UnitStatus>>({});
   const cancelled = useRef(false);
   const input = useRef<HTMLInputElement>(null);
@@ -154,6 +191,7 @@ export function BulkUpload() {
           entry,
           campaign: guessCampaign(entry.path),
           month: null,
+          dataset: null,
           status: isSheetFile(entry.name) ? "pendiente" : "no-excel",
           byMonth: {},
           rows: 0,
@@ -172,7 +210,11 @@ export function BulkUpload() {
 
   const sheets = rows.filter((r) => r.status !== "no-excel");
   const missingCampaign = sheets.some((r) => !r.campaign);
-  const setCampaign = (i: number, c: CampaignCode | null) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, campaign: c, month: null, status: r.status === "no-excel" ? r.status : "pendiente", byMonth: {}, rows: 0 } : r)));
+  // Un libro con dos bases ocupa dos filas, pero es un solo archivo.
+  const archivos = new Set(sheets.map((r) => r.entry)).size;
+  const setCampaign = (i: number, c: CampaignCode | null) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, campaign: c, month: null, dataset: null, status: r.status === "no-excel" ? r.status : "pendiente", byMonth: {}, rows: 0 } : r)));
+  // Cambiar qué base es obliga a volver a leer el archivo (cada base tiene sus columnas).
+  const setDataset = (i: number, d: string) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, dataset: d, status: "pendiente", rows: 0, note: "" } : r)));
   const setMonth = (i: number, m: string) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, month: m } : r)));
 
   /* Paso 1: leer cada archivo y ver de qué meses trae llamadas. */
@@ -184,11 +226,14 @@ export function BulkUpload() {
     // Qué campaña × mes ya tiene una carga vigente de este tipo.
     try {
       const lists = await Promise.all(CAMPAIGNS.map((c) => api.uploads(c.code)));
-      setExisting(new Map(lists.flat().filter((u) => u.isCurrent && u.kind === kind).map((u) => [unitKey(u.campaign, u.month), u.id] as const)));
+      const vigentes = lists.flat().filter((u) => u.isCurrent && u.kind === kind && !u.isAddition);
+      // Bases: por tipo de base y mes (una campaña puede tener dos bases); lo demás, por campaña y mes.
+      setExisting(new Map(vigentes.map((u) => [kind === "base" ? `${u.dataset}|${u.month}` : unitKey(u.campaign, u.month), u.id] as const)));
     } catch {
       /* sin la lista se trata todo como nuevo; el servidor igual guarda versiones */
     }
     const next = [...rows];
+    // (El largo puede crecer: un libro con dos bases agrega una fila para la segunda.)
     for (let i = 0; i < next.length; i++) {
       if (cancelled.current) break;
       const r = next[i]!;
@@ -196,8 +241,22 @@ export function BulkUpload() {
       next[i] = { ...r, status: "leyendo" };
       setRows([...next]);
       try {
-        const res = await readCalls(r, (s) => setStep(`${r.entry.name}: ${s}`));
-        if (res.datasetId !== `${r.campaign}:${kind}`) {
+        const res = await readCalls(r, (s) => setStep(`${r.entry.name}: ${s}`), r.dataset);
+        if (kind === "base") {
+          if (!res.datasetId || !basesDe(r.campaign!).some((d) => d.id === res.datasetId)) {
+            next[i] = { ...r, status: "otro-tipo", note: res.datasetId ? `Es ${datasetLabel(res.datasetId)}: súbelo con ese tipo de carga.` : res.error ?? `No parece una base de ${getCampaign(r.campaign!).shortName}.` };
+          } else {
+            // Mes: del nombre del archivo (o su carpeta); si no lo dice, de las fechas de la base (si trae).
+            const month = r.month ?? monthFromName(r.entry.path.replace(/\//g, " ")) ?? res.mes;
+            const notas = [res.duda && !r.dataset ? "Revisa qué base es: se parece a dos." : "", res.error ?? ""].filter(Boolean).join(" ");
+            next[i] = { ...r, status: "listo", dataset: res.datasetId, month, byMonth: {}, rows: res.rows.length, dropped: res.dropped, sha: res.sha, note: notas };
+            // El mismo libro trae otra base (Primeras y Segundas): una fila más para guardarla también.
+            for (const otra of res.otros.filter((t) => basesDe(r.campaign!).some((d) => d.id === t))) {
+              if (next.some((x) => x.entry === r.entry && x.dataset === otra)) continue;
+              next.splice(i + 1, 0, { ...r, dataset: otra, month, status: "pendiente", rows: 0, note: "" });
+            }
+          }
+        } else if (res.datasetId !== `${r.campaign}:${kind}`) {
           const es = res.datasetId ? getCampaign(r.campaign!).datasets.find((d) => d.id === res.datasetId)?.label ?? res.datasetId : null;
           next[i] = { ...r, status: "otro-tipo", note: es ? `Es ${es}: súbelo con ese tipo de carga o en el Centro de carga.` : res.error ?? `No parece de ${tipo.label.toLowerCase()} de ${getCampaign(r.campaign!).shortName}.` };
         } else {
@@ -219,7 +278,13 @@ export function BulkUpload() {
   const existe = useMemo(() => new Set(existing.keys()), [existing]);
   const plan = useMemo(
     () =>
-      kind === "sabana"
+      kind === "base"
+        ? planBases(
+            rows.flatMap((r, index) => (r.status === "listo" && r.campaign && r.month && r.dataset ? [{ index, campaign: r.campaign, dataset: r.dataset, month: r.month, rows: r.rows }] : [])),
+            existe,
+            siExiste,
+          )
+        : kind === "sabana"
         ? planSabanas(
             rows.flatMap((r, index) => (r.status === "listo" && r.campaign && r.month ? [{ index, campaign: r.campaign, month: r.month, rows: r.rows }] : [])),
             existe,
@@ -230,9 +295,9 @@ export function BulkUpload() {
             existe,
             replace,
           ),
-    [rows, existe, replace, kind],
+    [rows, existe, replace, kind, siExiste],
   );
-  const sinMes = kind === "sabana" && rows.some((r) => r.status === "listo" && !r.month);
+  const sinMes = porArchivo(kind) && rows.some((r) => r.status === "listo" && !r.month);
   const conflictos = plan.filter((u) => u.conflicto).length;
   const toUpload = plan.filter((u) => u.upload);
   const totalRows = toUpload.reduce((s, u) => s + u.rows, 0);
@@ -245,20 +310,20 @@ export function BulkUpload() {
     setPhase("uploading");
     setError("");
     const status: Record<string, UnitStatus> = {};
-    for (const u of plan) status[unitKey(u.campaign, u.month)] = { state: u.upload ? "pendiente" : "saltado", done: 0 };
+    for (const u of plan) status[claveUnidad(u)] = { state: u.upload ? "pendiente" : "saltado", done: 0 };
     setUnitStatus({ ...status });
     const set = (k: string, s: UnitStatus) => {
       status[k] = s;
       setUnitStatus({ ...status });
     };
 
-    const remaining = new Map(toUpload.map((u) => [unitKey(u.campaign, u.month), new Set(u.files)]));
+    const remaining = new Map(toUpload.map((u) => [claveUnidad(u), new Set(u.files)]));
     const acc = new Map<string, NormalizedRow[]>();
     const fileOrder = [...new Set(toUpload.flatMap((u) => u.files))].sort((a, b) => a - b);
     let stopped = false;
 
     const save = async (u: BulkUnit, data: NormalizedRow[]) => {
-      const k = unitKey(u.campaign, u.month);
+      const k = claveUnidad(u);
       const names = u.files.map((i) => rows[i]!.entry.name);
       set(k, { state: "guardando", done: 0 });
       let id: string | null = null;
@@ -266,13 +331,15 @@ export function BulkUpload() {
         const c = await withRetry(() =>
           api.createUpload({
             campaign: u.campaign,
-            dataset: `${u.campaign}:${kind}`,
+            dataset: u.dataset ?? `${u.campaign}:${kind}`,
             month: u.month,
             fileName: `${zip.name.endsWith("archivos") ? "" : `${zip.name} › `}${names[0]}${names.length > 1 ? ` y ${names.length - 1} más` : ""}`.slice(0, 290),
             fileSha256: rows[u.files[0]!]!.sha,
             rowsTotal: data.length,
             rowsValid: data.length,
             rowsDiscarded: 0,
+            // Bases: reemplaza a la del mes o se suma como adicional (con el nombre del archivo).
+            ...(u.modo === "adicional" ? { mode: "adicional" as const, label: names[0]!.replace(/\.[a-z0-9]+$/i, "").slice(0, 60) } : u.modo === "reemplazar" ? { mode: "reemplazar" as const } : {}),
           }),
         );
         id = c.id;
@@ -302,15 +369,15 @@ export function BulkUpload() {
 
     // Sábanas: cada archivo completo es la carga de su mes. Si reemplaza a una vigente, antes se comparan:
     // si la nueva trae menos (menos ventas, llega a un día anterior, le falta cosecha), no se reemplaza.
-    if (kind === "sabana") {
+    if (porArchivo(kind)) {
       for (const u of toUpload) {
         if (stopped || cancelled.current) break;
-        const k = unitKey(u.campaign, u.month);
+        const k = claveUnidad(u);
         const r = rows[u.files[0]!]!;
         setStep(`Leyendo ${r.entry.name}…`);
         try {
-          const data = (await readCalls(r, (s) => setStep(`${r.entry.name}: ${s}`))).rows;
-          const vigente = existing.get(k);
+          const data = (await readCalls(r, (s) => setStep(`${r.entry.name}: ${s}`), u.dataset ?? null)).rows;
+          const vigente = kind === "sabana" ? existing.get(unitKey(u.campaign, u.month)) : undefined;
           if (vigente) {
             const diff = compareSabanas(await api.sabanaSummary(vigente), summarizeSales(data, u.month), u.month);
             if (diff.menos) {
@@ -319,7 +386,7 @@ export function BulkUpload() {
               continue;
             }
           }
-          setStep(`Guardando ${getCampaign(u.campaign).shortName} de ${monthLabel(u.month)}…`);
+          setStep(`Guardando ${u.dataset ? datasetLabel(u.dataset) : getCampaign(u.campaign).shortName} de ${monthLabel(u.month)}…`);
           await save(u, data);
         } catch (e) {
           set(k, { state: "error", done: 0, message: e instanceof Error ? e.message : "No se pudo leer." });
@@ -327,7 +394,7 @@ export function BulkUpload() {
       }
     }
 
-    for (const fi of kind === "sabana" ? [] : fileOrder) {
+    for (const fi of porArchivo(kind) ? [] : fileOrder) {
       if (stopped || cancelled.current) break;
       const r = rows[fi]!;
       setStep(`Leyendo ${r.entry.name}…`);
@@ -335,7 +402,7 @@ export function BulkUpload() {
       try {
         data = (await readCalls(r, (s) => setStep(`${r.entry.name}: ${s}`))).rows;
       } catch (e) {
-        for (const u of toUpload) if (u.files.includes(fi)) set(unitKey(u.campaign, u.month), { state: "error", done: 0, message: e instanceof Error ? e.message : "No se pudo leer." });
+        for (const u of toUpload) if (u.files.includes(fi)) set(claveUnidad(u), { state: "error", done: 0, message: e instanceof Error ? e.message : "No se pudo leer." });
         continue;
       }
       const byMonth = new Map<string, NormalizedRow[]>();
@@ -356,7 +423,7 @@ export function BulkUpload() {
         left.delete(fi);
         if (left.size === 0) {
           setStep(`Guardando ${getCampaign(r.campaign!).shortName} de ${monthLabel(m)}…`);
-          await save(toUpload.find((u) => unitKey(u.campaign, u.month) === k)!, acc.get(k)!);
+          await save(toUpload.find((u) => claveUnidad(u) === k)!, acc.get(k)!);
           acc.delete(k);
           if (stopped || cancelled.current) break;
         }
@@ -384,6 +451,9 @@ export function BulkUpload() {
     if (fs.length && (phase === "idle" || phase === "listed" || phase === "planned" || phase === "done" || phase === "stopped")) void open(fs);
   };
 
+  /** "1 base", "3 meses"… (cada carga es un mes; en bases, una base). */
+  const cuantas = (n: number) => (kind === "base" ? (n === 1 ? "1 base" : `${n} bases`) : n === 1 ? "1 mes" : `${n} meses`);
+  const guardadas = (n: number) => `${cuantas(n)} ${kind === "base" ? (n === 1 ? "guardada" : "guardadas") : n === 1 ? "guardado" : "guardados"}`;
   const busy = phase === "scanning" || phase === "uploading" || phase === "listing";
   const read = rows.filter((r) => r.status === "listo");
   const byCampaign = CAMPAIGNS.map((c) => ({ c, units: plan.filter((u) => u.campaign === c.code) })).filter((x) => x.units.length);
@@ -473,7 +543,7 @@ export function BulkUpload() {
               <div>
                 <p className="font-semibold">{zip.name}</p>
                 <p className="text-sm text-slate-500">
-                  {(zip.size / 1024 / 1024).toFixed(1)} MB · {sheets.length === 1 ? "1 archivo de Excel" : `${sheets.length} archivos de Excel`}
+                  {(zip.size / 1024 / 1024).toFixed(1)} MB · {archivos === 1 ? "1 archivo de Excel" : `${archivos} archivos de Excel`}
                   {read.length > 0 && ` · ${fmt.format(read.reduce((s, r) => s + r.rows, 0))} ${tipo.filas} leídas`}
                 </p>
               </div>
@@ -492,12 +562,12 @@ export function BulkUpload() {
                   <th className="px-5 py-2.5 font-semibold">Archivo</th>
                   <th className="px-3 py-2.5 font-semibold">Campaña</th>
                   <th className="px-3 py-2.5 text-right font-semibold">{tipo.filas.charAt(0).toUpperCase() + tipo.filas.slice(1)}</th>
-                  <th className="px-5 py-2.5 font-semibold">{kind === "sabana" ? "Mes de la sábana" : "Meses"}</th>
+                  <th className="px-5 py-2.5 font-semibold">{kind === "sabana" ? "Mes de la sábana" : kind === "base" ? "Base y mes" : "Meses"}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {rows.map((r, i) => (
-                  <tr key={r.entry.path} className={r.status === "no-excel" ? "text-slate-400" : ""}>
+                  <tr key={`${r.entry.path}|${r.dataset ?? ""}`} className={r.status === "no-excel" ? "text-slate-400" : ""}>
                     <td className="max-w-80 px-5 py-2.5">
                       <p className="truncate font-medium" title={r.entry.path}>
                         {r.entry.name}
@@ -531,8 +601,23 @@ export function BulkUpload() {
                           <LoaderCircle className="size-3.5 animate-spin" aria-hidden /> Leyendo…
                         </span>
                       )}
-                      {r.status === "listo" && kind === "sabana" && (
-                        <span className="flex flex-wrap items-center gap-2">
+                      {kind === "base" && r.campaign && (r.status === "listo" || r.dataset) && (
+                        <select
+                          aria-label={`Base de ${r.entry.name}`}
+                          disabled={busy}
+                          value={r.dataset ?? ""}
+                          onChange={(e) => setDataset(i, e.target.value)}
+                          className="mr-2 mb-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                        >
+                          {basesDe(r.campaign).map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {r.status === "listo" && porArchivo(kind) && (
+                        <span className="inline-flex flex-wrap items-center gap-2">
                           <select
                             aria-label={`Mes de ${r.entry.name}`}
                             disabled={busy}
@@ -551,13 +636,13 @@ export function BulkUpload() {
                               ))}
                           </select>
                           {(() => {
-                            const cosecha = Object.keys(r.byMonth).filter((m) => r.month && m < r.month).length;
+                            const cosecha = kind === "sabana" ? Object.keys(r.byMonth).filter((m) => r.month && m < r.month).length : 0;
                             return cosecha > 0 ? <span className="text-slate-500">con cosecha de {cosecha === 1 ? "1 mes anterior" : `${cosecha} meses anteriores`}</span> : null;
                           })()}
                         </span>
                       )}
                       {r.status === "listo" &&
-                        kind !== "sabana" &&
+                        !porArchivo(kind) &&
                         Object.entries(r.byMonth)
                           .sort(([a], [b]) => a.localeCompare(b))
                           .map(([m, n]) => `${monthLabel(m).split(" ")[0]} ${m.slice(2, 4)}: ${fmt.format(n)}`)
@@ -574,7 +659,7 @@ export function BulkUpload() {
           {(phase === "listed" || phase === "scanning") && (
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 px-5 py-4 dark:border-slate-800">
               <Button onClick={scan} disabled={busy || missingCampaign || !sheets.length} loading={phase === "scanning"}>
-                {kind === "sabana" ? "Leer y reconocer el mes" : "Leer y repartir por mes"}
+                {porArchivo(kind) ? "Leer y reconocer el mes" : "Leer y repartir por mes"}
               </Button>
               {phase === "scanning" && (
                 <>
@@ -598,17 +683,34 @@ export function BulkUpload() {
             <div>
               <h2 className="font-semibold">Reparto por campaña y mes</h2>
               <p className="mt-0.5 text-sm text-slate-500">
-                {toUpload.length === 1 ? "1 mes por guardar" : `${toUpload.length} meses por guardar`} · {fmt.format(totalRows)} {tipo.filas}
+                {kind === "base"
+                  ? toUpload.length === 1
+                    ? "1 base por guardar"
+                    : `${toUpload.length} bases por guardar`
+                  : toUpload.length === 1
+                    ? "1 mes por guardar"
+                    : `${toUpload.length} meses por guardar`}{" "}
+                · {fmt.format(totalRows)} {tipo.filas}
                 {plan.length - toUpload.length - conflictos > 0 && ` · ${plan.length - toUpload.length - conflictos} ya cargados se saltan`}
               </p>
               {(conflictos > 0 || sinMes) && (
                 <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
                   {conflictos > 0 && "Hay meses con dos sábanas: corrige arriba el mes de una de ellas (mientras tanto ese mes no se guarda). "}
-                  {sinMes && "Hay sábanas sin mes: elígelo arriba."}
+                  {sinMes && `Hay ${kind === "base" ? "bases" : "sábanas"} sin mes: elígelo arriba (mientras tanto no se guardan).`}
                 </p>
               )}
             </div>
-            {plan.some((u) => u.exists) && phase === "planned" && (
+            {kind === "base" && plan.some((u) => u.exists) && phase === "planned" && (
+              <label className="flex items-center gap-2 text-sm">
+                Si el mes ya tiene esa base:
+                <select value={siExiste} onChange={(e) => setSiExiste(e.target.value as SiExiste)} className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <option value="saltar">se salta</option>
+                  <option value="reemplazar">la reemplaza</option>
+                  <option value="adicional">se suma como adicional</option>
+                </select>
+              </label>
+            )}
+            {kind !== "base" && plan.some((u) => u.exists) && phase === "planned" && (
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input type="checkbox" className="accent-brand-500" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
                 Reemplazar los meses que ya tienen {tipo.label.toLowerCase()}
@@ -623,11 +725,12 @@ export function BulkUpload() {
                 <p className="mb-2 text-sm font-semibold">{c.shortName}</p>
                 <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
                   {units.map((u) => {
-                    const k = unitKey(u.campaign, u.month);
+                    const k = claveUnidad(u);
                     const st = unitStatus[k];
                     return (
                       <li key={k} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2 text-sm">
                         <span className="w-32 capitalize">{monthLabel(u.month)}</span>
+                        {u.dataset && <span className="text-xs text-slate-500">{datasetLabel(u.dataset)}</span>}
                         <span className="flex-1 text-right text-slate-600 tabular-nums dark:text-slate-300">{fmt.format(u.rows)}</span>
                         <span className="w-44 text-right text-xs">
                           {st?.state === "listo" ? (
@@ -642,6 +745,10 @@ export function BulkUpload() {
                             </span>
                           ) : u.conflicto ? (
                             <span className="text-amber-700 dark:text-amber-300">{u.files.length} sábanas de este mes</span>
+                          ) : u.modo === "adicional" ? (
+                            <span className="text-brand-600">Se suma como adicional</span>
+                          ) : u.modo === "nueva" ? (
+                            <span className="text-slate-500">Nueva</span>
                           ) : !u.upload ? (
                             <span className="text-slate-400">Ya cargado: se salta</span>
                           ) : u.exists ? (
@@ -674,7 +781,7 @@ export function BulkUpload() {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {phase === "planned" && (
               <Button onClick={upload} disabled={!toUpload.length}>
-                <CloudUpload className="size-4" aria-hidden /> Guardar {toUpload.length === 1 ? "1 mes" : `${toUpload.length} meses`}
+                <CloudUpload className="size-4" aria-hidden /> Guardar {cuantas(toUpload.length)}
               </Button>
             )}
             {phase === "uploading" && (
@@ -698,12 +805,12 @@ export function BulkUpload() {
                     </span>
                   ) : phase === "done" ? (
                     <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300">
-                      <CircleCheck className="size-4" aria-hidden /> Listo: {saved === 1 ? "1 mes guardado" : `${saved} meses guardados`}
+                      <CircleCheck className="size-4" aria-hidden /> Listo: {guardadas(saved)}
                       {failed > 0 && `, ${failed} con error`}.
                     </span>
                   ) : (
                     <span className="text-amber-700 dark:text-amber-300">
-                      Se detuvo con {saved === 1 ? "1 mes guardado" : `${saved} meses guardados`}. Vuelve a cargar los mismos archivos para continuar: los meses ya guardados se saltan.
+                      Se detuvo con {guardadas(saved)}. Vuelve a cargar los mismos archivos para continuar: lo ya guardado se salta.
                     </span>
                   )}
                 </p>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mesDeSabana, planBulk, planSabanas } from "./bulk";
+import { mesDeSabana, planBases, planBulk, planSabanas } from "./bulk";
 
 describe("carga histórica: reparto por campaña y mes", () => {
   const files = [
@@ -47,5 +47,30 @@ describe("carga masiva de sábanas", () => {
       ["tdc", "2026-10", [1, 2], true, false],
       ["domi", "2026-10", [3], false, false],
     ]);
+  });
+});
+
+describe("carga masiva de bases", () => {
+  const files = [
+    { index: 0, campaign: "tdc" as const, dataset: "tdc:base:primeras", month: "2026-10", rows: 5000 },
+    { index: 1, campaign: "tdc" as const, dataset: "tdc:base:segundas", month: "2026-10", rows: 5400 },
+    { index: 2, campaign: "tdc" as const, dataset: "tdc:base:primeras", month: "2026-10", rows: 300 }, // el banco mandó más
+    { index: 3, campaign: "domi" as const, dataset: "domi:base:domi", month: "2026-09", rows: 6000 },
+  ];
+  const existing = new Set(["domi:base:domi|2026-09"]);
+
+  it("el primer archivo de cada base y mes es la base; los demás se suman como adicionales", () => {
+    const plan = planBases(files, existing, "saltar");
+    expect(plan.map((u) => [u.dataset, u.month, u.files[0], u.modo ?? null, u.upload])).toEqual([
+      ["tdc:base:primeras", "2026-10", 0, "nueva", true],
+      ["tdc:base:primeras", "2026-10", 2, "adicional", true],
+      ["tdc:base:segundas", "2026-10", 1, "nueva", true],
+      ["domi:base:domi", "2026-09", 3, null, false],
+    ]);
+  });
+
+  it("si el mes ya tiene base: se salta, se reemplaza o se suma como adicional, según se elija", () => {
+    expect(planBases(files, existing, "reemplazar").find((u) => u.dataset === "domi:base:domi")).toMatchObject({ modo: "reemplazar", upload: true });
+    expect(planBases(files, existing, "adicional").find((u) => u.dataset === "domi:base:domi")).toMatchObject({ modo: "adicional", upload: true });
   });
 });

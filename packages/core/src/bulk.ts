@@ -25,9 +25,15 @@ export interface BulkUnit {
   upload: boolean;
   /** Sábanas: dos archivos dicen ser del mismo mes; no se guarda ninguno hasta corregir el mes. */
   conflicto?: boolean;
+  /** Bases: qué base es (p. ej. "tdc:base:primeras") y cómo entra si el mes ya tiene una. */
+  dataset?: string;
+  modo?: "nueva" | "reemplazar" | "adicional";
 }
 
-export type BulkKind = "tipif" | "ventas" | "sabana";
+export type BulkKind = "tipif" | "ventas" | "sabana" | "base";
+
+/** Clave de una carga del plan (las bases van por archivo: un mes puede tener original y adicionales). */
+export const claveUnidad = (u: Pick<BulkUnit, "campaign" | "month" | "dataset" | "files">) => (u.dataset ? `${u.dataset}|${u.month}|${u.files[0]}` : unitKey(u.campaign, u.month));
 
 export const unitKey = (campaign: string, month: string) => `${campaign}|${month}`;
 
@@ -84,4 +90,34 @@ export function planSabanas(files: readonly SabanaFile[], existing: ReadonlySet<
   return [...units.values()]
     .map((u) => ({ ...u, conflicto: u.files.length > 1, upload: u.files.length === 1 && (!u.exists || replace) }))
     .sort((a, b) => order.get(a.campaign)! - order.get(b.campaign)! || a.month.localeCompare(b.month));
+}
+
+export interface BaseFile {
+  index: number;
+  campaign: CampaignCode;
+  dataset: string;
+  month: string;
+  rows: number;
+}
+/** Qué hacer con una base de un mes que ya tiene una cargada. */
+export type SiExiste = "saltar" | "reemplazar" | "adicional";
+
+/**
+ * Bases: una carga por archivo. El primer archivo de cada base × mes es la base del mes (si ya había una: se salta,
+ * la reemplaza o se suma como adicional, según `siExiste`); los demás archivos de esa misma base y mes se suman como
+ * bases adicionales (el banco mandó más clientes).
+ */
+export function planBases(files: readonly BaseFile[], existing: ReadonlySet<string>, siExiste: SiExiste): BulkUnit[] {
+  const vistos = new Set<string>();
+  const order = new Map(CAMPAIGNS.map((c, i) => [c.code, i]));
+  return files
+    .map((f): BulkUnit => {
+      const k = `${f.dataset}|${f.month}`;
+      const exists = existing.has(k);
+      const primero = !vistos.has(k);
+      vistos.add(k);
+      const modo: BulkUnit["modo"] = !primero ? "adicional" : !exists ? "nueva" : siExiste === "saltar" ? undefined : siExiste;
+      return { campaign: f.campaign, month: f.month, rows: f.rows, files: [f.index], exists, upload: Boolean(modo), dataset: f.dataset, modo };
+    })
+    .sort((a, b) => order.get(a.campaign)! - order.get(b.campaign)! || a.month.localeCompare(b.month) || a.dataset!.localeCompare(b.dataset!) || a.files[0]! - b.files[0]!);
 }
