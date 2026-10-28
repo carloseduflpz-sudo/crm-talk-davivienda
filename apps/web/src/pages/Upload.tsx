@@ -536,7 +536,7 @@ export function Upload() {
             to="/carga/zip"
             className="inline-flex items-center gap-2 rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint dark:bg-slate-900"
           >
-            <FileArchive className="size-4 text-ink-soft" aria-hidden /> Carga histórica (ZIP)
+            <FileArchive className="size-4 text-ink-soft" aria-hidden /> Carga masiva
           </Link>
         }
       />

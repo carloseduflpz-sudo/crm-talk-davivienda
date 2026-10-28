@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planBulk } from "./bulk";
+import { mesDeSabana, planBulk, planSabanas } from "./bulk";
 
 describe("carga histórica: reparto por campaña y mes", () => {
   const files = [
@@ -21,5 +21,31 @@ describe("carga histórica: reparto por campaña y mes", () => {
     const existing = new Set(["tdc|2026-02"]);
     expect(planBulk(files, existing, false).find((u) => u.month === "2026-02")).toMatchObject({ exists: true, upload: false });
     expect(planBulk(files, existing, true).find((u) => u.month === "2026-02")).toMatchObject({ exists: true, upload: true });
+  });
+});
+
+describe("carga masiva de sábanas", () => {
+  it("el mes de una sábana es el más reciente con ventas de verdad (la cosecha y una fecha mal escrita no lo cambian)", () => {
+    expect(mesDeSabana({ "2026-08": 300, "2026-09": 250, "2026-10": 400, "2026-11": 2 })).toBe("2026-10");
+    expect(mesDeSabana({ "2026-09": 50 })).toBe("2026-09");
+    expect(mesDeSabana({})).toBe(null);
+  });
+
+  it("una carga por archivo; dos archivos del mismo mes quedan en conflicto y no se guarda ninguno", () => {
+    const plan = planSabanas(
+      [
+        { index: 0, campaign: "tdc", month: "2026-09", rows: 900 },
+        { index: 1, campaign: "tdc", month: "2026-10", rows: 1000 },
+        { index: 2, campaign: "tdc", month: "2026-10", rows: 1100 },
+        { index: 3, campaign: "domi", month: "2026-10", rows: 400 },
+      ],
+      new Set(["domi|2026-10"]),
+      false,
+    );
+    expect(plan.map((u) => [u.campaign, u.month, u.files, u.conflicto, u.upload])).toEqual([
+      ["tdc", "2026-09", [0], false, true],
+      ["tdc", "2026-10", [1, 2], true, false],
+      ["domi", "2026-10", [3], false, false],
+    ]);
   });
 });
