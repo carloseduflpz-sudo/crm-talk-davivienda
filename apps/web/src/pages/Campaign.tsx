@@ -986,16 +986,18 @@ interface Trend {
 
 function TrendCard({ t, meses, active, onSelect }: { t: Trend; meses: MonthSummary[]; active: string | null; onSelect: (m: string) => void }) {
   const rows = meses.filter((m) => t.value(m) !== null);
-  const last = rows.at(-1);
-  const before = rows.at(-2);
-  const delta = last && before ? deltaOf(t.value(last), t.value(before), `vs ${monthLabel(before.month).split(" ")[0]}`, { rate: t.rate, upIsGood: t.upIsGood }) : undefined;
+  // La cifra grande es la del mes que se eligió (o el último con dato) contra el mes anterior que tenga dato.
+  const sel = meses.find((m) => m.month === active) ?? rows.at(-1);
+  const value = sel ? t.value(sel) : null;
+  const before = sel ? rows.filter((m) => m.month < sel.month).at(-1) : undefined;
+  const delta = value !== null && before ? deltaOf(value, t.value(before), `vs ${monthLabel(before.month).split(" ")[0]}`, { rate: t.rate, upIsGood: t.upIsGood }) : undefined;
   return (
     <Panel className="p-6 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-[14px] text-ink-soft">{t.title}</h3>
-          <p className="mt-1.5 text-[30px] leading-tight font-normal tracking-[-0.02em] text-ink tabular-nums">{last ? t.format(t.value(last)!) : "—"}</p>
-          <p className="mt-1 text-[12.5px] text-ink-faint first-letter:uppercase">{last ? monthLabel(last.month) : "Sin datos"}</p>
+          <p className="mt-1.5 text-[30px] leading-tight font-normal tracking-[-0.02em] text-ink tabular-nums">{value !== null ? t.format(value) : "—"}</p>
+          <p className="mt-1 text-[12.5px] text-ink-faint first-letter:uppercase">{sel ? `${monthLabel(sel.month)}${value === null ? " · sin este dato" : ""}` : "Sin datos"}</p>
         </div>
         {delta && <DeltaBadge d={delta} />}
       </div>
