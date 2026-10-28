@@ -475,6 +475,15 @@ describe("seguimiento del cliente", () => {
     }
     expect((await buscar("180186211")).resultados).toMatchObject([{ niu: "180186211", por: "niu" }]);
     expect((await buscar("7999-9999")).resultados).toEqual([]);
+    // DUI con o sin guion, y sin el cero de adelante (en la base viene "01234567-8"; en otra, "098765432").
+    await load("seguros:base", "2026-09", [
+      { niu: "300100", profile: "P1", offer: "A", extra: { Nombre: "CARLA DIAZ", Dui: "01234567-8" } },
+      { niu: "300101", profile: "P1", offer: "A", extra: { Nombre: "LUIS RAMOS", Dui: "098765432", Edad: 12345678 } },
+    ]);
+    for (const q of ["01234567-8", "012345678", "1234567-8"]) expect((await buscar(q)).resultados).toMatchObject([{ niu: "300100", por: "dui", nombre: "CARLA DIAZ" }]);
+    expect((await buscar("09876543-2")).resultados).toMatchObject([{ niu: "300101", por: "dui" }]);
+    // Un número que solo aparece en otra columna (no es su DUI ni su teléfono) no trae a nadie.
+    expect((await buscar("1234-5678")).resultados.some((r) => r.niu === "300101")).toBe(false);
     expect((await call("GET", "/clientes/buscar?q=jo")).status).toBe(400);
   });
 });

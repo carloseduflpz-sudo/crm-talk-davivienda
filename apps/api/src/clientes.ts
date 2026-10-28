@@ -108,15 +108,18 @@ export interface Coincidencia {
   telefono: string | null;
   campanas: string[];
   /** Por qué salió: el NIU tal cual, su teléfono o su nombre. */
-  por: "niu" | "telefono" | "nombre";
+  por: "niu" | "telefono" | "nombre" | "dui";
+  dui: string | null;
 }
 
 const MAX_RESULTADOS = 50;
-const sinTelefonos = ({ telefonos: _t, ...c }: Coincidencia & { telefonos: string[] }): Coincidencia => c;
+const sinTelefonos = ({ telefonos: _t, duis: _d, ...c }: Coincidencia & { telefonos: string[]; duis: string[] }): Coincidencia => c;
+/** DUI solo con sus dígitos y sin ceros adelante ("01234567-8", "012345678" y "1234567-8" son el mismo). */
+export const duiLimpio = (v: unknown) => String(v ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
 
 /** Nombre, teléfono y campañas de cada NIU, con sus archivos vigentes. */
-async function resumirNius(env: Env, nius: string[]): Promise<Map<string, Omit<Coincidencia, "por"> & { telefonos: string[] }>> {
-  const out = new Map<string, Omit<Coincidencia, "por"> & { telefonos: string[] }>();
+async function resumirNius(env: Env, nius: string[]): Promise<Map<string, Omit<Coincidencia, "por"> & { telefonos: string[]; duis: string[] }>> {
+  const out = new Map<string, Omit<Coincidencia, "por"> & { telefonos: string[]; duis: string[] }>();
   if (!nius.length) return out;
   const db = env.DB;
   const lista = JSON.stringify(nius);
@@ -136,7 +139,9 @@ async function resumirNius(env: Env, nius: string[]): Promise<Map<string, Omit<C
   }
   for (const n of nius) {
     const c = contactFrom(...(extras.get(n) ?? []));
-    out.set(n, { niu: n, nombre: c.nombre, telefono: c.telefono, telefonos: c.telefonos, campanas: [...(camps.get(n) ?? [])] });
+    // Todos los DUI que traen sus archivos (en columnas como "DUI", "DUI OK", "NumeroDUI").
+    const duis = [...new Set((extras.get(n) ?? []).flatMap((e) => Object.entries(e).filter(([k]) => /dui/i.test(k)).map(([, v]) => duiLimpio(v))).filter((d) => d.length >= 7))];
+    out.set(n, { niu: n, nombre: c.nombre, telefono: c.telefono, dui: c.dui, telefonos: c.telefonos, duis, campanas: [...(camps.get(n) ?? [])] });
   }
   return out;
 }
@@ -168,14 +173,13 @@ export async function buscarClientes(env: Env, q: string): Promise<{ tipo: "nomb
   }
 
   const digitos = q.replace(/\D/g, "");
-  if (digitos.length < 7) throw new HttpError(400, "Escribe un teléfono de 8 dígitos o un NIU.");
+  if (digitos.length < 7) throw new HttpError(400, "Escribe un teléfono de 8 dígitos, un DUI o un NIU.");
   const tel = telefonoSV(digitos);
-  // exacto: el teléfono está en la base o en la llamada; si salió de buscar dentro de la sábana o el CRM, se confirma después.
+  // exacto: el NIU tal cual, o el teléfono en la base o en la llamada. Lo que salió de buscar dentro de los archivos
+  // (LIKE flojo) se confirma después contra los teléfonos o el DUI del cliente. Un cliente puede salir por varios motivos.
   const found: { niu: string; por: Coincidencia["por"]; exacto: boolean }[] = [];
   const add = (niu: string, por: Coincidencia["por"], exacto = true) => {
-    const ya = found.find((f) => f.niu === niu);
-    if (ya) ya.exacto ||= exacto;
-    else if (niu && found.length < MAX_RESULTADOS) found.push({ niu, por, exacto });
+    if (niu && !found.some((f) => f.niu === niu && f.por === por) && found.length < MAX_RESULTADOS * 4) found.push({ niu, por, exacto });
   };
   // ¿Es un NIU que existe tal cual?
   const niu = digitos.replace(/^0+(?=\d)/, "");
@@ -186,6 +190,15 @@ export async function buscarClientes(env: Env, q: string): Promise<{ tipo: "nomb
     ).bind(niu),
   ]);
   if (comoNiu!.results.length) add(niu, "niu");
+  // DUI (9 dígitos, con o sin guion; también sin el cero de adelante): se busca dentro de los archivos y se confirma después.
+  const dui = duiLimpio(digitos);
+  if (dui.length >= 7 && dui.length <= 9) {
+    const flojoDui = `%${dui.slice(0, -1)}%${dui.slice(-1)}%`;
+    const res = await db.batch(
+      (["base_records", "bank_sales", "crm_sales"] as const).map((t) => db.prepare(`SELECT DISTINCT niu FROM ${t} WHERE upload_id IN (${cur}) AND niu <> '' AND extra LIKE ? LIMIT 100`).bind(flojoDui)),
+    );
+    for (const r of res) for (const row of r.results as { niu: string }[]) add(row.niu, "dui", false);
+  }
   if (tel) {
     // Teléfono: en las bases (sus columnas de teléfono), en las llamadas y en la sábana, el CRM o la base (escrito con guion o espacios).
     const flojo = `%${tel.slice(0, 4)}%${tel.slice(4)}%`;
@@ -201,10 +214,17 @@ export async function buscarClientes(env: Env, q: string): Promise<{ tipo: "nomb
       for (const row of r.results as { niu: string }[]) add(row.niu, "telefono", i < 2);
     });
   }
-  const info = await resumirNius(env, found.map((f) => f.niu));
-  // Lo que salió de la sábana o el CRM: solo si ese teléfono está de verdad entre los del cliente (el LIKE es flojo).
+  const info = await resumirNius(env, [...new Set(found.map((f) => f.niu))]);
   const resultados = found
-    .filter((f) => f.exacto || f.por !== "telefono" || info.get(f.niu)!.telefonos.some((t) => telefonoSV(t) === tel))
+    .filter((f) => {
+      const i = info.get(f.niu)!;
+      if (f.exacto || f.por === "niu") return true;
+      if (f.por === "dui") return i.duis.includes(dui);
+      return i.telefonos.some((t) => telefonoSV(t) === tel);
+    })
+    // Una vez cada cliente (con el primer motivo confirmado: NIU, DUI y luego teléfono).
+    .filter((f, k, all) => all.findIndex((g) => g.niu === f.niu) === k)
+    .slice(0, MAX_RESULTADOS)
     .map((f) => sinTelefonos({ ...info.get(f.niu)!, por: f.por }));
   return { tipo: "telefono", resultados };
 }

@@ -253,9 +253,9 @@ export const api = {
   /** Metas y cumplimientos oficiales guardados, y las metas que ya tiene la app (ver apps/api/src/oficial.ts). */
   oficial: () => get<{ oficial: Oficial | null; metasApp: { campaign: string; month: string; meta: number }[] }>("/metas/oficial"),
   guardarOficial: (archivo: string, meses: MesOficial[]) => request<{ meses: number; metas: number }>("PUT", "/metas/oficial", { archivo, meses }),
-  /** Clientes por nombre o teléfono (y, si es un número, también como NIU). */
+  /** Clientes por nombre, teléfono o DUI (y, si es un número, también como NIU). */
   buscarClientes: (q: string) =>
-    get<{ tipo: "nombre" | "telefono"; resultados: { niu: string; nombre: string | null; telefono: string | null; campanas: string[]; por: "niu" | "telefono" | "nombre" }[] }>(`/clientes/buscar?q=${encodeURIComponent(q)}`),
+    get<{ tipo: "nombre" | "telefono"; resultados: { niu: string; nombre: string | null; telefono: string | null; dui: string | null; campanas: string[]; por: "niu" | "telefono" | "nombre" | "dui" }[] }>(`/clientes/buscar?q=${encodeURIComponent(q)}`),
   client: (niu: string, campaign?: string | null) => get<ClientFile>(`/clientes/${encodeURIComponent(niu)}${campaign ? `?campana=${campaign}` : ""}`),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {

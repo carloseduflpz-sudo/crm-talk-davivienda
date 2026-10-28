@@ -27,10 +27,16 @@ export function nius(text: string): string[] {
 /** ¿Lo escrito es un nombre (trae letras)? Un teléfono escrito "7406-5924" o "(503) 7406 5924" no lo es. */
 const esNombre = (s: string) => /[a-záéíóúñü]/i.test(s);
 /** Un solo número que puede ser teléfono (8 dígitos, o con el 503 adelante) o NIU: se busca de las dos formas. */
-const unSoloNumero = (s: string) => nius(s).length === 1 && !/[\n,;]/.test(s.trim()) && s.replace(/\D/g, "").length >= 7;
+const unSoloNumero = (s: string) => {
+  const t = s.trim();
+  const d = t.replace(/\D/g, "").length;
+  // "7406 5924", "(503) 7406-5924", "01234567-8": un solo número escrito con espacios o guiones.
+  if (/^[\d\s().+-]+$/.test(t) && !/\n/.test(t) && d >= 7 && d <= 12) return true;
+  return nius(t).length === 1 && !/[\n,;]/.test(t) && d >= 7;
+};
 
 const campana = (c: string) => (isCampaignCode(c) ? getCampaign(c as CampaignCode).shortName : c);
-const POR = { niu: "NIU", telefono: "Teléfono", nombre: "Nombre" } as const;
+const POR = { niu: "NIU", telefono: "Teléfono", nombre: "Nombre", dui: "DUI" } as const;
 
 export function Client() {
   const qc = useQueryClient();
@@ -52,7 +58,7 @@ export function Client() {
   useEffect(() => {
     if (!q || list.length || !busqueda.data) return;
     if (resultados.length === 1) setParams({ q, niu: resultados[0]!.niu }, { replace: true });
-    else if (!resultados.length && !esNombre(q)) setParams({ q, niu: nius(q)[0] ?? q }, { replace: true });
+    else if (!resultados.length && !esNombre(q)) setParams({ q, niu: nius(q.replace(/\D/g, ""))[0] ?? q }, { replace: true });
   }, [busqueda.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (raw: string) => {
@@ -106,17 +112,17 @@ export function Client() {
 
   return (
     <>
-      <PageHeader title="Cliente" subtitle="Busca por NIU, nombre o teléfono y ve todo lo del cliente para darle seguimiento: contacto, ventas, bases, llamadas y CRM." />
+      <PageHeader title="Cliente" subtitle="Busca por NIU, nombre, teléfono o DUI y ve todo lo del cliente para darle seguimiento: contacto, ventas, bases, llamadas y CRM." />
       <form onSubmit={submit} className="mb-6 flex max-w-2xl flex-wrap items-start gap-3">
         <label className="relative min-w-60 flex-1">
-          <span className="sr-only">NIU, nombre o teléfono del cliente</span>
+          <span className="sr-only">NIU, nombre, teléfono o DUI del cliente</span>
           <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-faint" aria-hidden />
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
             onPaste={onPaste}
             autoFocus
-            placeholder="NIU (o varios), nombre o teléfono"
+            placeholder="NIU (o varios), nombre, teléfono o DUI"
             aria-invalid={Boolean(error)}
             className="w-full rounded-full border border-hair bg-white py-2.5 pr-10 pl-10 text-[14px] text-ink outline-none placeholder:text-ink-faint focus:border-brand-500 dark:bg-slate-900"
           />
@@ -143,7 +149,7 @@ export function Client() {
 
       {q && busqueda.isPending && (
         <p className="mb-6 inline-flex items-center gap-2 text-sm text-ink-soft">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden /> Buscando {esNombre(q) ? "por nombre" : "por teléfono y NIU"}…
+          <LoaderCircle className="size-4 animate-spin" aria-hidden /> Buscando {esNombre(q) ? "por nombre" : "por teléfono, DUI y NIU"}…
         </p>
       )}
       {q && busqueda.isError && <p className="mb-6 text-sm text-[var(--st-critical)]">{busqueda.error.message}</p>}
@@ -174,6 +180,7 @@ export function Client() {
                   <span className="min-w-48 flex-1 font-medium text-ink">{r.nombre ?? "Sin nombre en los archivos"}</span>
                   <span className="text-ink-soft tabular-nums">NIU {r.niu}</span>
                   {r.telefono && <span className="text-ink-soft tabular-nums">{r.telefono}</span>}
+                  {r.dui && <span className="text-ink-soft tabular-nums">DUI {r.dui}</span>}
                   <span className="text-ink-faint">{r.campanas.map(campana).join(", ")}</span>
                   {!esNombre(q) && <span className="text-[11.5px] text-ink-faint">por {POR[r.por].toLowerCase()}</span>}
                 </button>
@@ -232,7 +239,7 @@ export function Client() {
       ) : (
         !q && (
           <p className="text-sm text-ink-soft">
-            Escribe el nombre (o solo un apellido), el teléfono o el NIU tal como lo tengas: con espacios, guiones o ceros adelante. También puedes pegar una columna de Excel con varios NIU.
+            Escribe el nombre (o solo un apellido), el teléfono, el DUI o el NIU tal como lo tengas: con espacios, guiones o ceros adelante. También puedes pegar una columna de Excel con varios NIU.
           </p>
         )
       )}
