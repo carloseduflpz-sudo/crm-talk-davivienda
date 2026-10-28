@@ -38,3 +38,16 @@ export async function downloadExcel(fileName: string, sheet: string, columns: { 
   XLSX.utils.book_append_sheet(wb, ws, sheet.slice(0, 31).replace(/[\\/?*[\]:]/g, " "));
   XLSX.writeFile(wb, fileName.replace(/[\\/:*?"<>|]+/g, " ").trim(), { compression: true });
 }
+
+/** Varias hojas en un solo Excel (cada una con sus columnas). Las hojas sin filas llevan solo el encabezado. */
+export async function downloadWorkbook(fileName: string, sheets: { name: string; columns: { key: string; label: string }[]; rows: Record<string, unknown>[] }[]) {
+  const XLSX = await loadWriter();
+  const wb = XLSX.utils.book_new();
+  for (const sh of sheets) {
+    const data = sh.rows.map((r) => Object.fromEntries(sh.columns.map((c) => [c.label, r[c.key] ?? ""])));
+    const ws = XLSX.utils.json_to_sheet(data, { header: sh.columns.map((c) => c.label) });
+    ws["!cols"] = sh.columns.map((c) => ({ wch: Math.min(60, Math.max(10, c.label.length + 2, ...data.slice(0, 200).map((r) => String(r[c.label] ?? "").length + 1))) }));
+    XLSX.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31).replace(/[\\/?*[\]:]/g, " "));
+  }
+  XLSX.writeFile(wb, fileName.replace(/[\\/:*?"<>|]+/g, " ").trim(), { compression: true });
+}

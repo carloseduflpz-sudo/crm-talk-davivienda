@@ -1,7 +1,7 @@
 /* Ficha del cliente para darle seguimiento: sus datos de contacto (de la sábana, la base o el CRM),
    sus ventas con todo lo que trae la sábana, en qué bases viene, sus llamadas y lo capturado en el CRM.
    Solo archivos vigentes; agentes con el nombre homologado. */
-import { CAMPAIGNS, isCampaignCode, normHeader } from "@crm/core";
+import { CAMPAIGNS, isCampaignCode, normHeader, telefonoSV } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
 import type { Env } from "./env";
 import { HttpError, json, type Router } from "./http";
@@ -83,7 +83,139 @@ export function contactFrom(...extras: Extra[]): Contact {
 
 const LIMIT = 200;
 
+/* ---------- búsqueda por nombre o teléfono ---------- */
+
+const sinAcentos = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+/** Palabras de un nombre buscado (sin acentos, solo letras). */
+export const palabrasDe = (q: string) =>
+  sinAcentos(q)
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 2)
+    .slice(0, 5);
+/** Patrón LIKE flojo (vocales y la n valen cualquier letra: "nunez" encuentra "NUÑEZ" y "Núñez"); el filtro exacto va después. */
+const patron = (w: string) => `%${w.replace(/[aeioun]/g, "_")}%`;
+/** ¿El nombre trae todas las palabras buscadas? (sin acentos ni mayúsculas) */
+export const nombreCoincide = (nombre: string | null, palabras: string[]) => {
+  if (!nombre) return false;
+  const n = ` ${sinAcentos(nombre).replace(/[^a-z]+/g, " ")} `;
+  return palabras.every((w) => n.includes(` ${w}`));
+};
+
+export interface Coincidencia {
+  niu: string;
+  nombre: string | null;
+  telefono: string | null;
+  campanas: string[];
+  /** Por qué salió: el NIU tal cual, su teléfono o su nombre. */
+  por: "niu" | "telefono" | "nombre";
+}
+
+const MAX_RESULTADOS = 50;
+const sinTelefonos = ({ telefonos: _t, ...c }: Coincidencia & { telefonos: string[] }): Coincidencia => c;
+
+/** Nombre, teléfono y campañas de cada NIU, con sus archivos vigentes. */
+async function resumirNius(env: Env, nius: string[]): Promise<Map<string, Omit<Coincidencia, "por"> & { telefonos: string[] }>> {
+  const out = new Map<string, Omit<Coincidencia, "por"> & { telefonos: string[] }>();
+  if (!nius.length) return out;
+  const db = env.DB;
+  const lista = JSON.stringify(nius);
+  const cur = "SELECT id FROM uploads WHERE is_current = 1";
+  const res = await db.batch(
+    (["bank_sales", "crm_sales", "base_records"] as const).map((t) =>
+      db.prepare(`SELECT x.niu, x.campaign, x.extra FROM ${t} x WHERE x.niu IN (SELECT value FROM json_each(?)) AND x.upload_id IN (${cur}) LIMIT 2000`).bind(lista),
+    ),
+  );
+  const extras = new Map<string, Extra[]>();
+  const camps = new Map<string, Set<string>>();
+  for (const r of res) {
+    for (const row of r.results as { niu: string; campaign: string; extra: string | null }[]) {
+      extras.set(row.niu, [...(extras.get(row.niu) ?? []), parseExtra(row.extra)]);
+      camps.set(row.niu, (camps.get(row.niu) ?? new Set()).add(row.campaign));
+    }
+  }
+  for (const n of nius) {
+    const c = contactFrom(...(extras.get(n) ?? []));
+    out.set(n, { niu: n, nombre: c.nombre, telefono: c.telefono, telefonos: c.telefonos, campanas: [...(camps.get(n) ?? [])] });
+  }
+  return out;
+}
+
+/** Busca clientes por nombre (todas las palabras) o por teléfono (y, si es un número, también como NIU). */
+export async function buscarClientes(env: Env, q: string): Promise<{ tipo: "nombre" | "telefono"; resultados: Coincidencia[] }> {
+  const db = env.DB;
+  const cur = "SELECT id FROM uploads WHERE is_current = 1";
+  if (/[a-záéíóúñü]/i.test(q)) {
+    const palabras = palabrasDe(q);
+    if (!palabras.length || palabras.join("").length < 3) throw new HttpError(400, "Escribe al menos un nombre o apellido (3 letras o más).");
+    const cond = palabras.map(() => "x.extra LIKE ?").join(" AND ");
+    const binds = palabras.map(patron);
+    const res = await db.batch(
+      (["base_records", "bank_sales", "crm_sales"] as const).map((t) =>
+        db.prepare(`SELECT x.niu, x.extra FROM ${t} x WHERE x.upload_id IN (${cur}) AND x.niu <> '' AND ${cond} LIMIT 400`).bind(...binds),
+      ),
+    );
+    // Solo los que de verdad se llaman así (el patrón de la base es flojo y también mira direcciones u otros campos).
+    const nius: string[] = [];
+    for (const r of res) {
+      for (const row of r.results as { niu: string; extra: string | null }[]) {
+        if (nius.includes(row.niu) || nius.length >= MAX_RESULTADOS) continue;
+        if (nombreCoincide(contactFrom(parseExtra(row.extra)).nombre, palabras)) nius.push(row.niu);
+      }
+    }
+    const info = await resumirNius(env, nius);
+    return { tipo: "nombre", resultados: nius.map((n) => sinTelefonos({ ...info.get(n)!, por: "nombre" })) };
+  }
+
+  const digitos = q.replace(/\D/g, "");
+  if (digitos.length < 7) throw new HttpError(400, "Escribe un teléfono de 8 dígitos o un NIU.");
+  const tel = telefonoSV(digitos);
+  // exacto: el teléfono está en la base o en la llamada; si salió de buscar dentro de la sábana o el CRM, se confirma después.
+  const found: { niu: string; por: Coincidencia["por"]; exacto: boolean }[] = [];
+  const add = (niu: string, por: Coincidencia["por"], exacto = true) => {
+    const ya = found.find((f) => f.niu === niu);
+    if (ya) ya.exacto ||= exacto;
+    else if (niu && found.length < MAX_RESULTADOS) found.push({ niu, por, exacto });
+  };
+  // ¿Es un NIU que existe tal cual?
+  const niu = digitos.replace(/^0+(?=\d)/, "");
+  const [comoNiu] = await db.batch([
+    db.prepare(
+      `SELECT 1 AS x FROM bank_sales WHERE niu = ?1 AND upload_id IN (${cur})
+       UNION ALL SELECT 1 FROM base_records WHERE niu = ?1 AND upload_id IN (${cur}) LIMIT 1`,
+    ).bind(niu),
+  ]);
+  if (comoNiu!.results.length) add(niu, "niu");
+  if (tel) {
+    // Teléfono: en las bases (sus columnas de teléfono), en las llamadas y en la sábana, el CRM o la base (escrito con guion o espacios).
+    const flojo = `%${tel.slice(0, 4)}%${tel.slice(4)}%`;
+    const res = await db.batch([
+      db.prepare(`SELECT DISTINCT niu FROM base_phones WHERE phone = ? AND upload_id IN (${cur}) LIMIT 100`).bind(tel),
+      db.prepare(`SELECT DISTINCT niu FROM calls WHERE upload_id IN (${cur} AND kind = 'tipif') AND phone = ? AND niu <> '' LIMIT 100`).bind(tel),
+      db.prepare(`SELECT DISTINCT niu FROM bank_sales WHERE upload_id IN (${cur}) AND extra LIKE ? LIMIT 100`).bind(flojo),
+      db.prepare(`SELECT DISTINCT niu FROM crm_sales WHERE upload_id IN (${cur}) AND extra LIKE ? LIMIT 100`).bind(flojo),
+      // Bases a las que todavía no se les sacaron los teléfonos (se hace al cargar las tipificaciones del mes).
+      db.prepare(`SELECT DISTINCT niu FROM base_records WHERE upload_id IN (${cur} AND kind = 'base' AND id NOT IN (SELECT upload_id FROM base_phones_listas)) AND extra LIKE ? LIMIT 100`).bind(flojo),
+    ]);
+    res.forEach((r, i) => {
+      for (const row of r.results as { niu: string }[]) add(row.niu, "telefono", i < 2);
+    });
+  }
+  const info = await resumirNius(env, found.map((f) => f.niu));
+  // Lo que salió de la sábana o el CRM: solo si ese teléfono está de verdad entre los del cliente (el LIKE es flojo).
+  const resultados = found
+    .filter((f) => f.exacto || f.por !== "telefono" || info.get(f.niu)!.telefonos.some((t) => telefonoSV(t) === tel))
+    .map((f) => sinTelefonos({ ...info.get(f.niu)!, por: f.por }));
+  return { tipo: "telefono", resultados };
+}
+
 export function registerClientes(r: Router): void {
+  r.on("GET", "/clientes/buscar", "datos:ver", async ({ env, url }) => {
+    const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
+    if (!q) throw new HttpError(400, "Escribe un nombre, un teléfono o un NIU.");
+    return json({ ok: true, ...(await buscarClientes(env, q)) });
+  });
+
   r.on("GET", "/clientes/:niu", "datos:ver", async ({ env, params, url }) => {
     // Igual que al cargar: sin espacios, puntos ni guiones, y sin ceros a la izquierda.
     let given = params.niu ?? "";

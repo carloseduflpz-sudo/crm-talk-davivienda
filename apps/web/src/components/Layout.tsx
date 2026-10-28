@@ -44,7 +44,7 @@ function Nav({ onNavigate }: { onNavigate: () => void }) {
       </Section>
       <Section title="Herramientas">
         <NavLink to="/cliente" className={linkClass}>
-          <Search className="size-4" aria-hidden /> Cliente (NIU)
+          <Search className="size-4" aria-hidden /> Buscar cliente
         </NavLink>
         <NavLink to="/carga" className={linkClass}>
           <Upload className="size-4" aria-hidden /> Centro de carga

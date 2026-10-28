@@ -459,4 +459,22 @@ describe("seguimiento del cliente", () => {
     expect((pegado.data.campanas as { campaign: string; sabana: { month: string } | null }[]).find((x) => x.campaign === "upin")?.sabana?.month).toBe("2026-09");
     expect(((await call("GET", "/clientes/999999")).data.campanas as unknown[]).length).toBe(0);
   });
+
+  it("busca por nombre (sin importar acentos ni mayúsculas) o por teléfono (con guion, espacios o el 503), y un número también como NIU", async () => {
+    await load("domi:base:domi", "2026-09", [
+      { niu: "180186209", profile: "P1", offer: "2", extra: { Nombre: "JOSÉ ANTONIO NÚÑEZ ROSALES", TelNotificaciones: "7406-5924" } },
+      { niu: "180186210", profile: "P1", offer: "1", extra: { Nombre: "ANTONIA NUNEZ", TelNotificaciones: "2222-3333" } },
+      { niu: "180186211", profile: "P2", offer: "1", extra: { Nombre: "MARIA LOPEZ", Direccion: "COLONIA JOSE NUNEZ", TelNotificaciones: "6000-1111" } },
+    ]);
+    const buscar = async (q: string) => (await call("GET", "/clientes/buscar?q=" + encodeURIComponent(q))).data as { tipo: string; resultados: { niu: string; nombre: string; por: string; campanas: string[] }[] };
+    expect((await buscar("jose nunez")).resultados.map((r) => r.niu)).toEqual(["180186209"]); // la dirección "Colonia José Núñez" no cuenta
+    expect((await buscar("Núñez")).resultados.map((r) => r.niu).sort()).toEqual(["180186209", "180186210"]);
+    expect((await buscar("ana perez")).resultados).toMatchObject([{ niu: "555" }]); // también está en el CRM de TDC
+    for (const tel of ["7406-5924", "(503) 7406 5924", "74065924"]) {
+      expect((await buscar(tel)).resultados).toMatchObject([{ niu: "180186209", por: "telefono", nombre: "JOSÉ ANTONIO NÚÑEZ ROSALES", campanas: ["domi"] }]);
+    }
+    expect((await buscar("180186211")).resultados).toMatchObject([{ niu: "180186211", por: "niu" }]);
+    expect((await buscar("7999-9999")).resultados).toEqual([]);
+    expect((await call("GET", "/clientes/buscar?q=jo")).status).toBe(400);
+  });
 });
