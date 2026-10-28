@@ -24,6 +24,7 @@ import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
+import { leerOficial } from "./oficial";
 import { parteClave, Resultados } from "./resultados";
 
 interface CurrentUpload {
@@ -737,6 +738,36 @@ export function registerAnalisis(r: Router): void {
         };
       })
       .sort((x, y) => x.month.localeCompare(y.month));
+    // Meses cerrados: meta, resultado y cumplimiento del Excel de cumplimientos oficial (si se subió). Los meses que
+    // no tienen archivos en la app también aparecen con esas cifras. Con filtro por agente no aplica (es de toda la campaña).
+    const oficial = agente ? null : await leerOficial(env);
+    if (oficial) {
+      const hoy = diaCarga(Date.now()).slice(0, 7);
+      const desde = summary[0]?.month ?? hoy;
+      const [ya, ma] = hoy.split("-").map(Number) as [number, number];
+      const limite = `${ma === 12 ? ya : ya - 1}-${String(ma === 12 ? 1 : ma + 1).padStart(2, "0")}`;
+      const unidad = isCampaignCode(campaign) ? GOAL_UNIT[campaign] : "ventas";
+      for (const of of oficial.meses) {
+        if (of.campaign !== campaign || of.month >= hoy) continue;
+        let s = summary.find((x) => x.month === of.month);
+        if (!s) {
+          // Del rango que ya muestra el histórico o de los últimos 12 meses.
+          if (of.month < desde && of.month < limite) continue;
+          s = {
+            month: of.month, ventas: null, aprobadas: null, rechazadas: null, aprobacion: null, monto: null, montoAprobado: null, base: null, adicionales: 0,
+            llamadas: null, registros: null, contactabilidad: null, ventasVici: null, penetracion: null, unidad, meta: null, logrado: null, cumplimiento: null,
+            diasHabiles: 0, hasta: null, acumulado: { ventas: [], monto: [] },
+          };
+          summary.push(s);
+        }
+        s.logradoSabana = s.logrado;
+        s.meta = of.meta ?? s.meta;
+        s.logrado = of.real ?? s.logrado;
+        s.cumplimiento = s.meta && s.logrado !== null ? (s.logrado / s.meta) * 100 : s.cumplimiento;
+        s.oficial = true;
+      }
+      summary.sort((x, y) => x.month.localeCompare(y.month));
+    }
     return json({ ok: true, agente, meses: summary });
   });
 

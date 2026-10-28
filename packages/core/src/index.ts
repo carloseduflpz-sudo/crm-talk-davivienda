@@ -15,4 +15,5 @@ export * from "./bulk";
 export * from "./pptx";
 export * from "./presentacion";
 export * from "./segmentos";
+export * from "./oficial";
 export * from "./control";

@@ -5,6 +5,7 @@ import { analyzeCampaign } from "./analisis";
 import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, type Router } from "./http";
+import { leerOficial } from "./oficial";
 import { Resultados } from "./resultados";
 import { segmentosDeBase } from "./segmentos";
 
@@ -224,21 +225,28 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
   for (let mo = q0; mo <= Number(month.slice(5, 7)); mo++) delTrimestre.push(`${month.slice(0, 4)}-${String(mo).padStart(2, "0")}`);
   const trimestreP = Promise.all(delTrimestre.map((m) => (m === month ? a : a.months.includes(m) ? analyzeCampaign(env, campaign, m, null, resultados) : null)));
 
-  const [bases, remanentes, segmentos, , motivos, analisisTrimestre] = await Promise.all([basesP, remanentesP, segmentosP, sabanaP, motivosP, trimestreP]);
+  const [bases, remanentes, segmentos, , motivos, analisisTrimestre, oficialTodo] = await Promise.all([basesP, remanentesP, segmentosP, sabanaP, motivosP, trimestreP, leerOficial(env)]);
+  // Metas y resultados oficiales del año (el Excel de cumplimientos): los meses cerrados se toman de ahí.
+  const oficial = (oficialTodo?.meses ?? []).filter((x) => x.campaign === campaign && x.month.startsWith(month.slice(0, 4))).map(({ month: m, meta, real }) => ({ month: m, meta, real }));
   const trimestre: PresMesGap[] = [];
   for (const [i, m] of delTrimestre.entries()) {
     const x = analisisTrimestre[i];
-    if (!x || x.month !== m) continue;
+    const of = m !== month ? oficial.find((o) => o.month === m) : undefined;
+    if (!x || x.month !== m) {
+      // Mes cerrado sin archivos en la app: solo lo del archivo oficial.
+      if (of && (of.meta !== null || of.real !== null)) trimestre.push({ month: m, meta: of.meta, metaPorAgente: null, mtd: false, resultado: of.real ?? 0, porAgente: [], agentes: [] });
+      continue;
+    }
     const c = x.cumplimiento;
     // El mes en curso se mide contra la meta MTD (a los días hábiles que lleva la sábana); los meses cerrados, contra la meta completa.
     const enCurso = m === month;
     const share = c.diasDelMes ? c.diaDelMes / c.diasDelMes : 0;
     trimestre.push({
       month: m,
-      meta: enCurso ? c.esperado : c.meta,
+      meta: enCurso ? c.esperado : (of?.meta ?? c.meta),
       metaPorAgente: enCurso ? (c.metaPorAgente === null ? null : c.metaPorAgente * share) : c.metaPorAgente,
       mtd: enCurso,
-      resultado: c.ventas,
+      resultado: of?.real ?? c.ventas,
       porAgente: c.porAgente.map((p) => ({ agent: p.agent, ventas: p.ventas })),
       agentes: x.agentes,
     });
@@ -263,6 +271,7 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
     ...(campaign === "tdc" ? { documentos } : {}),
     motivos,
     trimestre,
+    ...(oficial.length ? { oficial } : {}),
   };
 }
 

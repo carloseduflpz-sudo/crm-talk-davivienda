@@ -277,6 +277,23 @@ describe("presentación: llenado de las láminas", () => {
     expect(texts(deck.parts["ppt/slides/slide3.xml"]!).includes("PEDRO SALIDO")).toBe(false);
   });
 
+  it("gap de campaña: los trimestres cerrados salen del archivo de cumplimientos (suma de sus meses)", async () => {
+    const deck = memoryDeck({ ...parts }, rels);
+    const oficial = [
+      { month: "2026-01", meta: 100, real: 90 },
+      { month: "2026-02", meta: 110, real: 100 },
+      { month: "2026-03", meta: 120, real: 80 },
+      { month: "2025-12", meta: 999, real: 999 }, // otro año: no cuenta
+    ];
+    await llenarPresentacion(deck, { upin: { ...upin, oficial } }, { mesPlantilla: "2026-10" });
+    const campana = readTables(deck.parts["ppt/slides/slide3.xml"]!)[1]!;
+    expect(campana.cells.slice(2)).toEqual([
+      ["Primer Trimestre", "330", "270", "82%", "-60"],
+      ["Cuarto trimestre", "100", "60", "60%", "-40"],
+      ["Total", "430", "330", "77%", "-100"],
+    ]);
+  });
+
   it("CDC y Extra se llenan en dólares (Activas <mes>, cosecha y estatus por monto)", async () => {
     const deck = memoryDeck(
       {

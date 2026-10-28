@@ -121,6 +121,8 @@ export interface PresentacionCampania {
   avisoExcel?: string;
   /** La M y la R vienen del Excel de las gráficas (al día). */
   mrDeExcel?: boolean;
+  /** Metas y resultados oficiales de los meses del año (Excel de cumplimientos de campaña). */
+  oficial?: { month: string; meta: number | null; real: number | null }[];
 }
 
 export type PresDatos = Partial<Record<CampaignCode, PresentacionCampania>>;
@@ -987,9 +989,17 @@ function tablaGapCampana(c: Ctx, d: PresentacionCampania, slide: string, index: 
   if (!meses.some((m) => m.meta !== null)) throw new Error("Falta la meta del mes.");
   const block = "Gap de campaña";
   const num = (s: string | undefined) => Number((s ?? "").replace(/[,$%]/g, "")) || 0;
+  // Trimestres cerrados del año: la suma de sus meses en el Excel de cumplimientos (si se subió).
+  const delAnio = (d.oficial ?? []).filter((m) => m.month.slice(0, 4) === d.month.slice(0, 4));
+  const cerrado = (k: number) => {
+    const ms = delAnio.filter((m) => trimestreDe(m.month) === k);
+    return ms.length ? { meta: sum(ms.map((m) => m.meta ?? 0)), real: sum(ms.map((m) => m.real ?? 0)) } : null;
+  };
   const rows = body.map((r) => {
-    if (!norm(r[0] ?? "").startsWith(TRIMESTRES[q]!)) return r;
-    const out = [r[0] ?? "", comoAntes(r[1] ?? "0", meta), comoAntes(r[2] ?? "0", real), `${Math.round(ratio(real, meta) * 100)}%`, comoAntes(r[4] ?? "0", real - meta)];
+    const k = TRIMESTRES.findIndex((t) => norm(r[0] ?? "").startsWith(t));
+    const v = k === q ? { meta, real } : k >= 0 && k < q ? cerrado(k) : null;
+    if (!v) return r;
+    const out = [r[0] ?? "", comoAntes(r[1] ?? "0", v.meta), comoAntes(r[2] ?? "0", v.real), `${Math.round(ratio(v.real, v.meta) * 100)}%`, comoAntes(r[4] ?? "0", v.real - v.meta)];
     cambio(c, block, r[0] ?? "", r.slice(1).join(" · "), out.slice(1).join(" · "));
     return out;
   });

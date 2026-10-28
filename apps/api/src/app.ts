@@ -4,6 +4,7 @@ import { audit } from "./audit";
 import { registerAnalisis } from "./analisis";
 import { registerCargas } from "./cargas";
 import { registerClientes } from "./clientes";
+import { registerOficial } from "./oficial";
 import { registerPresentacion } from "./presentacion";
 import { registerDetalle } from "./detalle";
 import {
@@ -330,6 +331,7 @@ export function createApp(): Router {
   registerDetalle(r);
   registerClientes(r);
   registerPresentacion(r);
+  registerOficial(r);
 
   return r;
 }

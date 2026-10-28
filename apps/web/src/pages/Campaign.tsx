@@ -1049,7 +1049,9 @@ function HistoricoTab({ a, setMonth }: Ctx) {
       format: pct1,
       axis: pctAxis,
       rate: true,
-      note: live ? `Lo que cuenta para la meta sobre la meta del mes; ${monthLabel(live.month).split(" ")[0]} va a la fecha` : "Lo que cuenta para la meta sobre la meta del mes",
+      note:
+        (live ? `Lo que cuenta para la meta sobre la meta del mes; ${monthLabel(live.month).split(" ")[0]} va a la fecha` : "Lo que cuenta para la meta sobre la meta del mes") +
+        (meses.some((m) => m.oficial) ? ". Meses cerrados: meta y resultado de tu archivo de cumplimientos" : ""),
     },
     { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Original más bases adicionales, sin repetir" },
     { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
@@ -1134,7 +1136,29 @@ function HistoricoTab({ a, setMonth }: Ctx) {
             { key: "contactabilidad", label: "Contactabilidad", align: "right", render: (r) => opt(r.contactabilidad, (x) => fmtPct(x)), sort: (r) => r.contactabilidad ?? -1 },
             { key: "penetracion", label: "Penetración", align: "right", render: (r) => opt(r.penetracion, (x) => fmtPct(x, 2)), sort: (r) => r.penetracion ?? -1 },
             { key: "meta", label: "Meta", align: "right", render: (r) => opt(r.meta, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x))), sort: (r) => r.meta ?? -1 },
-            { key: "logrado", label: "Logrado", align: "right", render: (r) => opt(r.logrado, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x))), sort: (r) => r.logrado ?? -1 },
+            {
+              key: "logrado",
+              label: "Logrado",
+              align: "right",
+              render: (r) => (
+                <span title={r.oficial ? "Resultado oficial (archivo de cumplimientos)" : undefined}>
+                  {opt(r.logrado, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x)))}
+                  {r.oficial && <span className="ml-1 text-[11px] text-ink-faint">oficial</span>}
+                </span>
+              ),
+              sort: (r) => r.logrado ?? -1,
+            },
+            ...(meses.some((m) => m.oficial)
+              ? [
+                  {
+                    key: "logradoSabana",
+                    label: "Según la sábana",
+                    align: "right" as const,
+                    render: (r: R) => (r.oficial ? opt(r.logradoSabana ?? null, (x) => (r.unidad === "monto" ? fmtMoney(x) : fmtInt.format(x))) : ""),
+                    sort: (r: R) => r.logradoSabana ?? -1,
+                  },
+                ]
+              : []),
             { key: "cumplimiento", label: "Cumplimiento", align: "right", render: (r) => (r.cumplimiento === null ? "—" : <PctCell value={r.cumplimiento} max={Math.max(100, ...meses.map((m) => m.cumplimiento ?? 0))} />), sort: (r) => r.cumplimiento ?? -1 },
           ]}
         />

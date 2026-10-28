@@ -2,7 +2,7 @@
    se guarda por lotes con versión, sin borrar la versión anterior. */
 import { CAMPAIGNS, PREVIEW_HIDDEN, chunkEnds, compareSabanas, getCampaign, summarizeSales, onlyMonth, rowsByMonth, isCampaignCode, type CampaignCode, type ExcelReading, type NormalizedRow, type UploadKind } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleCheck, CloudUpload, Download, FileArchive, FileSpreadsheet, LoaderCircle, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, CircleCheck, CloudUpload, Download, FileArchive, FileSpreadsheet, LoaderCircle, RotateCcw, Target, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { dayLabel } from "../components/charts";
@@ -532,12 +532,20 @@ export function Upload() {
         title="Centro de carga"
         subtitle="Sábanas, bases, tipificaciones y ventas de cada mes. Cada carga es una versión nueva y la anterior queda de respaldo."
         actions={
-          <Link
-            to="/carga/zip"
-            className="inline-flex items-center gap-2 rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint dark:bg-slate-900"
-          >
-            <FileArchive className="size-4 text-ink-soft" aria-hidden /> Carga masiva
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/carga/metas"
+              className="inline-flex items-center gap-2 rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint dark:bg-slate-900"
+            >
+              <Target className="size-4 text-ink-soft" aria-hidden /> Metas y cumplimientos
+            </Link>
+            <Link
+              to="/carga/zip"
+              className="inline-flex items-center gap-2 rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint dark:bg-slate-900"
+            >
+              <FileArchive className="size-4 text-ink-soft" aria-hidden /> Carga masiva
+            </Link>
+          </div>
         }
       />
 

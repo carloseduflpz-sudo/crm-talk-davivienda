@@ -8,6 +8,7 @@ import { EmptyState } from "./components/ui";
 import { ApiError, api, avisarEscrituras } from "./lib/api";
 import { Campaign } from "./pages/Campaign";
 import { BulkUpload } from "./pages/BulkUpload";
+import { Metas } from "./pages/Metas";
 import { ChangePassword } from "./pages/ChangePassword";
 import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
@@ -88,6 +89,7 @@ const router = createBrowserRouter([
       { path: "cliente", element: <Client /> },
       { path: "carga", element: <Upload /> },
       { path: "carga/zip", element: <BulkUpload /> },
+      { path: "carga/metas", element: <Metas /> },
       { path: "presentacion", element: <Presentation /> },
       { path: "reportes", element: <Presentation /> },
       {

@@ -243,5 +243,9 @@ export interface MonthSummary {
   hasta: string | null;
   /** Ventas y monto de la sábana acumulados día a día (posición 0 = día 1): para comparar meses al mismo día. */
   acumulado: { ventas: number[]; monto: number[] };
+  /** Mes cerrado con meta y resultado del Excel de cumplimientos oficial (meta, logrado y cumplimiento salen de ahí). */
+  oficial?: boolean;
+  /** Lo que da la sábana cargada (para compararlo con el resultado oficial). */
+  logradoSabana?: number | null;
 }
 

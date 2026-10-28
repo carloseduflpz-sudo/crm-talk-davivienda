@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { CampaignAnalysis, DatasetDef, MonthSummary, Permission, PresentacionCampania, Role, SabanaSummary } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, MesOficial, MonthSummary, Oficial, Permission, PresentacionCampania, Role, SabanaSummary } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -250,6 +250,9 @@ export const api = {
     if (!res.ok) throw await errorOf(res);
   },
   quitarControl: () => post("/presentacion/control/quitar"),
+  /** Metas y cumplimientos oficiales guardados, y las metas que ya tiene la app (ver apps/api/src/oficial.ts). */
+  oficial: () => get<{ oficial: Oficial | null; metasApp: { campaign: string; month: string; meta: number }[] }>("/metas/oficial"),
+  guardarOficial: (archivo: string, meses: MesOficial[]) => request<{ meses: number; metas: number }>("PUT", "/metas/oficial", { archivo, meses }),
   client: (niu: string, campaign?: string | null) => get<ClientFile>(`/clientes/${encodeURIComponent(niu)}${campaign ? `?campana=${campaign}` : ""}`),
   /** Clientes detrás de una cifra (ver apps/api/src/detalle.ts para los filtros). */
   detail: (campaign: string, params: Record<string, string | string[] | number | null | undefined>) => {
