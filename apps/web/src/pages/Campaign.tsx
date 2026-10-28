@@ -36,7 +36,7 @@ import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
-import { consultaAnalisis, mesAnterior } from "../lib/consultas";
+import { consultaAnalisis, consultaHistorico, mesAnterior } from "../lib/consultas";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
@@ -1022,7 +1022,7 @@ function TrendCard({ t, meses, active, onSelect }: { t: Trend; meses: MonthSumma
 }
 
 function HistoricoTab({ a, setMonth }: Ctx) {
-  const h = useQuery({ queryKey: ["historico", a.campaign, a.agente], queryFn: () => api.history(a.campaign, a.agente), staleTime: 60_000 });
+  const h = useQuery(consultaHistorico(a.campaign, a.agente));
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const [cut, setCut] = useState<"dia" | "mes">("dia");
   if (h.isPending) return <p className="text-sm text-ink-soft">Calculando el histórico…</p>;

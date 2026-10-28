@@ -25,6 +25,7 @@ import { audit } from "./audit";
 import type { Env } from "./env";
 import { HttpError, json, readJson, requireString, type Router } from "./http";
 import { leerOficial } from "./oficial";
+import type { Oficial } from "@crm/core";
 import { parteClave, Resultados } from "./resultados";
 
 interface CurrentUpload {
@@ -688,24 +689,9 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   return out;
 }
 
-export function registerAnalisis(r: Router): void {
-  r.on("GET", "/analisis/:campaign", "datos:ver", async ({ env, params, url }) => {
-    const campaign = params.campaign!;
-    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
-    const mes = url.searchParams.get("mes");
-    if (mes && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(mes)) throw new HttpError(400, "Mes inválido.");
-    const agente = url.searchParams.get("agente")?.trim() || null;
-    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
-    return json({ ok: true, analysis: await analyzeCampaign(env, campaign, mes, agente) });
-  });
 
-  /** Histórico: un resumen por mes con los archivos vigentes de cada mes (mismo cálculo que cada pestaña). */
-  r.on("GET", "/analisis/:campaign/historico", "datos:ver", async ({ env, params, url }) => {
-    const campaign = params.campaign!;
-    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
-    const agente = url.searchParams.get("agente")?.trim() || null;
-    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
-    const res = new Resultados(env);
+/** Histórico con filtro por agente: el análisis completo de cada mes (lo que cuenta por agente necesita todo el cálculo). */
+async function historicoCompleto(env: Env, campaign: string, agente: string, res: Resultados): Promise<MonthSummary[]> {
     const first = await analyzeCampaign(env, campaign, null, agente, res);
     const months = first.months.slice(0, 13);
     const all = [first, ...(await Promise.all(months.slice(1).map((m) => analyzeCampaign(env, campaign, m, agente, res))))];
@@ -738,9 +724,13 @@ export function registerAnalisis(r: Router): void {
         };
       })
       .sort((x, y) => x.month.localeCompare(y.month));
+    return summary;
+}
+
+/** Meses cerrados con meta y resultado del Excel de cumplimientos oficial; los que no tienen archivos en la app también entran. */
+function aplicarOficial(campaign: string, summary: MonthSummary[], oficial: Oficial | null): MonthSummary[] {
     // Meses cerrados: meta, resultado y cumplimiento del Excel de cumplimientos oficial (si se subió). Los meses que
     // no tienen archivos en la app también aparecen con esas cifras. Con filtro por agente no aplica (es de toda la campaña).
-    const oficial = agente ? null : await leerOficial(env);
     if (oficial) {
       const hoy = diaCarga(Date.now()).slice(0, 7);
       const desde = summary[0]?.month ?? hoy;
@@ -768,7 +758,177 @@ export function registerAnalisis(r: Router): void {
       }
       summary.sort((x, y) => x.month.localeCompare(y.month));
     }
-    return json({ ok: true, agente, meses: summary });
+    return summary;
+}
+
+/**
+ * Histórico de la campaña sin repetir el análisis completo de cada mes: unas pocas consultas agrupadas por archivo
+ * dan ventas, aprobación, monto, base, llamadas, contactabilidad y penetración de los 13 meses a la vez (las mismas
+ * definiciones que cada pestaña), en tres viajes a la base sin importar cuántos meses haya.
+ */
+async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary[]> {
+  const db = env.DB;
+  const [{ results: subidas }, ruleRow, { results: goalRows }, oficial] = await Promise.all([
+    db.prepare("SELECT id, kind, month, is_addition FROM uploads WHERE campaign = ? AND is_current = 1").bind(campaign).all<{ id: string; kind: string; month: string; is_addition: number }>(),
+    db.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>(),
+    db.prepare("SELECT month, sales_goal, agents, counted_statuses, work_days, holidays FROM goals WHERE campaign = ?").bind(campaign).all<GoalRow & { month: string }>(),
+    leerOficial(env),
+  ]);
+  const months = [...new Set(subidas.map((u) => u.month))].sort().reverse().slice(0, 13);
+  const de = (kind: string) => subidas.filter((u) => u.kind === kind && months.includes(u.month));
+  const sabanas = de("sabana");
+  const tipifs = de("tipif");
+  const crms = de("ventas");
+  const efectivo = ruleRow?.contact_rule === "sin_no_efectivo" ? "call_class IN ('venta','negativo')" : "call_class IN ('venta','negativo','no_efectivo')";
+  const ids = (us: { id: string }[]) => JSON.stringify(us.map((u) => u.id));
+  const enMes = (col: string) => `substr(${col}, 1, 7) = u.month`;
+  const etiqueta = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
+  const [ventas, dias, hasta, bases, llamadas, estatus] = await db.batch([
+    db
+      .prepare(
+        `SELECT upload_id AS id, SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'en_proceso') AS ep,
+                COALESCE(SUM(amount), 0) AS m, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS ma
+           FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?)) GROUP BY upload_id`,
+      )
+      .bind(ids(sabanas)),
+    db
+      .prepare(
+        `SELECT b.upload_id AS id, b.sale_date AS d, COUNT(*) AS n, COALESCE(SUM(b.amount), 0) AS m
+           FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
+          WHERE b.upload_id IN (SELECT value FROM json_each(?)) AND b.sale_date IS NOT NULL AND ${enMes("b.sale_date")} GROUP BY 1, 2`,
+      )
+      .bind(ids(sabanas)),
+    // Hasta qué día llegan los datos del mes (sábana, llamadas y CRM).
+    db
+      .prepare(
+        `SELECT u.month AS month, MAX(substr(x.sale_date, 1, 10)) AS h FROM bank_sales x JOIN uploads u ON u.id = x.upload_id WHERE x.upload_id IN (SELECT value FROM json_each(?1)) AND ${enMes("x.sale_date")} GROUP BY 1
+         UNION ALL SELECT u.month, MAX(substr(x.called_at, 1, 10)) FROM calls x JOIN uploads u ON u.id = x.upload_id WHERE x.upload_id IN (SELECT value FROM json_each(?2)) AND ${enMes("x.called_at")} GROUP BY 1
+         UNION ALL SELECT u.month, MAX(substr(x.entered_at, 1, 10)) FROM crm_sales x JOIN uploads u ON u.id = x.upload_id WHERE x.upload_id IN (SELECT value FROM json_each(?3)) AND ${enMes("x.entered_at")} GROUP BY 1`,
+      )
+      .bind(ids(sabanas), ids(tipifs), ids(crms)),
+    // Base del mes: clientes distintos de la original y las adicionales vigentes.
+    db
+      .prepare(
+        `SELECT u.month AS month, COUNT(DISTINCT b.niu) AS n FROM base_records b JOIN uploads u ON u.id = b.upload_id
+          WHERE b.upload_id IN (SELECT value FROM json_each(?)) GROUP BY 1`,
+      )
+      .bind(ids(de("base"))),
+    db
+      .prepare(
+        `SELECT upload_id AS id, COUNT(*) AS total, COUNT(DISTINCT NULLIF(niu, '')) AS registros, SUM(${efectivo}) AS efectivos,
+                COUNT(DISTINCT CASE WHEN call_class = 'venta' AND niu <> '' THEN niu END) AS ventas
+           FROM calls WHERE upload_id IN (SELECT value FROM json_each(?)) GROUP BY upload_id`,
+      )
+      .bind(ids(tipifs)),
+    db.prepare(`SELECT DISTINCT upload_id AS id, ${etiqueta} AS label FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?))`).bind(ids(sabanas)),
+  ]);
+  type V = { id: string; ap: number; re: number; ep: number; m: number; ma: number };
+  type L = { id: string; total: number; registros: number; efectivos: number; ventas: number };
+  const porVentas = new Map((ventas!.results as V[]).map((r) => [r.id, r]));
+  const porLlamadas = new Map((llamadas!.results as L[]).map((r) => [r.id, r]));
+  const porBase = new Map((bases!.results as { month: string; n: number }[]).map((r) => [r.month, n(r.n)]));
+  const porHasta = new Map<string, string>();
+  for (const r of hasta!.results as { month: string; h: string | null }[]) if (r.h && (!porHasta.has(r.month) || r.h > porHasta.get(r.month)!)) porHasta.set(r.month, r.h);
+  const porDia = new Map<string, { date: string; ventas: number; monto: number }[]>();
+  for (const r of dias!.results as { id: string; d: string; n: number; m: number }[]) porDia.set(r.id, [...(porDia.get(r.id) ?? []), { date: r.d, ventas: n(r.n), monto: n(r.m) }]);
+
+  /* Lo que cuenta para la meta, igual que en la pestaña de cada mes: los estatus que cuentan (los guardados en Metas o
+     los de la regla) y, por la cosecha, sin las ventas que ya contaron en la sábana de un mes anterior (mismo NIU y
+     misma fecha). CDC y Extra suman el monto. Una consulta por mes, todas en un solo viaje a la base. */
+  const unidad = isCampaignCode(campaign) ? GOAL_UNIT[campaign] : "ventas";
+  const metaDe = (month: string) => {
+    const goal = goalRows.find((g) => g.month === month) ?? null;
+    const anterior = goalRows.filter((g) => g.month < month).sort((x, y) => y.month.localeCompare(x.month))[0];
+    return { goal, config: goal ?? anterior ?? null };
+  };
+  const etiquetas = new Map<string, string[]>();
+  for (const r of estatus!.results as { id: string; label: string }[]) etiquetas.set(r.id, [...(etiquetas.get(r.id) ?? []), r.label]);
+  const medida = unidad === "monto" ? "COALESCE(amount, 0)" : "1";
+  const conVentas = months.map((month) => ({ month, sab: sabanas.find((u) => u.month === month) })).filter((x): x is { month: string; sab: (typeof sabanas)[number] } => Boolean(x.sab));
+  const logrados = conVentas.length
+    ? await db.batch(
+        conVentas.map(({ month, sab }) => {
+          const guardados = parseList(metaDe(month).config?.counted_statuses);
+          const cuentan = guardados ?? (etiquetas.get(sab.id) ?? []).filter((l) => countsForGoal(campaign as CampaignCode, l));
+          if (!cuentan.length) return db.prepare("SELECT 0 AS v");
+          const lista = JSON.stringify(cuentan);
+          return db
+            .prepare(
+              `WITH prev AS (SELECT DISTINCT p.niu || '|' || COALESCE(p.sale_date, '') AS k FROM bank_sales p
+                   WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
+                     AND COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)') IN (SELECT value FROM json_each(?)))
+               SELECT COALESCE(SUM(CASE WHEN (niu || '|' || COALESCE(sale_date, '')) IN (SELECT k FROM prev) THEN 0 ELSE ${medida} END), 0) AS v FROM bank_sales
+                WHERE upload_id = ? AND ${etiqueta} IN (SELECT value FROM json_each(?))`,
+            )
+            .bind(campaign, month, lista, sab.id, lista);
+        }),
+      )
+    : [];
+  const logradoDe = new Map(conVentas.map((x, i) => [x.month, n((logrados[i]!.results[0] as { v: number } | undefined)?.v)]));
+
+
+  const summary: MonthSummary[] = months.map((month) => {
+    const sab = sabanas.find((u) => u.month === month);
+    const v = sab ? porVentas.get(sab.id) : undefined;
+    const tip = tipifs.find((u) => u.month === month);
+    const l = tip ? porLlamadas.get(tip.id) : undefined;
+    const base = porBase.get(month) ?? null;
+    const { goal, config } = metaDe(month);
+    const dias = businessDays(month, parseDays(config?.work_days), (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month))).length;
+    const ap = n(v?.ap);
+    const re = n(v?.re);
+    const ventasVici = l ? n(l.ventas) : null;
+    const meta = goal ? n(goal.sales_goal) : null;
+    const logrado = sab ? (logradoDe.get(month) ?? 0) : null;
+    return {
+      month,
+      ventas: sab ? ap + re + n(v?.ep) : null,
+      aprobadas: sab ? ap : null,
+      rechazadas: sab ? re : null,
+      aprobacion: sab ? pct(ap, ap + re) : null,
+      monto: sab ? n(v?.m) : null,
+      montoAprobado: sab ? n(v?.ma) : null,
+      base,
+      adicionales: subidas.filter((u) => u.kind === "base" && u.month === month && u.is_addition).length,
+      llamadas: tip ? n(l?.total) : null,
+      registros: tip ? n(l?.registros) : null,
+      contactabilidad: tip ? pct(n(l?.efectivos), n(l?.total)) : null,
+      ventasVici: tip ? ventasVici : null,
+      penetracion: tip ? (base ? pct(n(ventasVici), base) : null) : null,
+      unidad,
+      meta,
+      logrado,
+      cumplimiento: logrado !== null && meta !== null ? pct(logrado, meta) : null,
+      diasHabiles: dias,
+      hasta: porHasta.get(month) ?? null,
+      acumulado: acumulado(month, sab ? (porDia.get(sab.id) ?? []) : []),
+    };
+  });
+  summary.sort((x, y) => x.month.localeCompare(y.month));
+  return aplicarOficial(campaign, summary, oficial);
+}
+
+export function registerAnalisis(r: Router): void {
+  r.on("GET", "/analisis/:campaign", "datos:ver", async ({ env, params, url }) => {
+    const campaign = params.campaign!;
+    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
+    const mes = url.searchParams.get("mes");
+    if (mes && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(mes)) throw new HttpError(400, "Mes inválido.");
+    const agente = url.searchParams.get("agente")?.trim() || null;
+    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
+    return json({ ok: true, analysis: await analyzeCampaign(env, campaign, mes, agente) });
+  });
+
+  /** Histórico: un resumen por mes con los archivos vigentes de cada mes (mismo cálculo que cada pestaña). */
+  r.on("GET", "/analisis/:campaign/historico", "datos:ver", async ({ env, params, url }) => {
+    const campaign = params.campaign!;
+    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
+    const agente = url.searchParams.get("agente")?.trim() || null;
+    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
+    const res = new Resultados(env);
+    // Todo el histórico queda guardado (se recalcula solo cuando se carga o cambia algo).
+    const meses = await res.obtener(`historico/${campaign}/${parteClave(agente)}.json`, () => (agente ? historicoCompleto(env, campaign, agente, res) : historicoRapido(env, campaign)));
+    return json({ ok: true, agente, meses });
   });
 
   /** Meta de ventas y número de agentes de una campaña en un mes. */
