@@ -34,6 +34,8 @@ export interface Ctx {
   /** Solo en rutas que exigen sesión. */
   user: User;
   waitUntil: (p: Promise<unknown>) => void;
+  /** Una escritura que solo cambia cifras de esta campaña lo avisa: así las otras no se recalculan (ver resultados.ts). */
+  soloCampana: (campaign: string) => void;
 }
 
 /**
@@ -124,7 +126,8 @@ export class Router {
       const m = route.pattern.exec(path);
       route.keys.forEach((k, i) => (params[k] = decodeURIComponent(m?.[i + 1] ?? "")));
 
-      const ctx = { req, env, url, params, waitUntil } as Ctx;
+      let alcance: string | null = null;
+      const ctx = { req, env, url, params, waitUntil, soloCampana: (c: string) => void (alcance = c) } as Ctx;
       if (route.access !== "publica") {
         const user = await userFromRequest(env, req);
         if (!user) throw new HttpError(401, "Tu sesión no es válida o ya venció. Vuelve a entrar.");
@@ -136,18 +139,28 @@ export class Router {
         }
         ctx.user = user;
       }
-      // Toda escritura (salvo entrar/salir y los lotes de filas de una carga aún sin confirmar) cambia la revisión:
-      // así ningún resultado guardado de antes se vuelve a mostrar (ver resultados.ts).
+      // Toda escritura (salvo entrar/salir y los lotes de filas de una carga aún sin confirmar) cambia la revisión
+      // (la de su campaña si la ruta lo indicó, si no la general): así ningún resultado guardado de antes se vuelve
+      // a mostrar (ver resultados.ts).
       const escribe = req.method !== "GET" && req.method !== "HEAD" && !/^\/auth\/|\/filas$/.test(path);
       try {
         return await route.handler(ctx);
       } finally {
-        if (escribe) await marcarCambio(env);
+        if (escribe) await marcarCambio(env, alcance);
       }
     } catch (err) {
       if (err instanceof HttpError) return json({ ok: false, error: err.message, ...err.extra }, err.status);
       console.error("API error", err);
       const detail = err instanceof Error ? err.message : String(err);
+      // Base ocupada: D1 atiende una consulta a la vez y, si recibe demasiado trabajo en 10 segundos, rechaza lo que
+      // sigue por un momento. No es falta de espacio ni del plan: basta esperar unos segundos (la app reintenta sola).
+      if (/overloaded|too many resources|queued for too long|too many requests queued/i.test(detail)) {
+        return json(
+          { ok: false, code: "base_ocupada", error: "La base de datos está ocupada procesando otros cálculos. Espera unos segundos y vuelve a intentar.", detail: detail.slice(0, 300) },
+          503,
+          { "retry-after": "5" },
+        );
+      }
       // Límites de Cloudflare D1 (filas escritas por día, tamaño, tiempo): se explica qué pasó en vez de un error genérico.
       if (/D1|SQLITE/i.test(detail) && /exceed|limit|quota|too (many|big|large)|reset because|timed? ?out/i.test(detail)) {
         // Cada límite con su explicación: no todo es "filas escritas" (una consulta lenta también lo dispara).

@@ -6,7 +6,7 @@
 import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
 import {
@@ -1148,7 +1148,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
               ),
               sort: (r) => r.logrado ?? -1,
             },
-            ...(meses.some((m) => m.oficial)
+            ...(meses.some((m) => m.oficial && m.logradoSabana != null)
               ? [
                   {
                     key: "logradoSabana",
@@ -1237,6 +1237,11 @@ export function Campaign() {
   });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
   const [detail, setDetail] = useState<DetailSpec | null>(null);
+  // El histórico de esta campaña se deja listo cuando ya llegó lo de la pantalla (no antes: no se le pide todo junto a la base).
+  const listo = Boolean(a) && !analysis.isFetching && !prev.isFetching;
+  useEffect(() => {
+    if (valid && listo && !agent) void qc.prefetchQuery(consultaHistorico(code)).catch(() => {});
+  }, [valid, listo, agent, code, qc]);
 
   const setQuery = useCallback(
     (next: { mes?: string | null; agente?: string | null }) => {

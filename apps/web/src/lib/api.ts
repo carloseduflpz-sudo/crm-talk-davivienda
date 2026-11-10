@@ -11,13 +11,24 @@ export class ApiError extends Error {
   }
 }
 
+/** La base de datos de Cloudflare rechazó la consulta por exceso de trabajo en pocos segundos: se reintenta más despacio. */
+export const baseOcupada = (e: unknown) => e instanceof ApiError && e.data.code === "base_ocupada";
+
+/** Espera antes del reintento número i (desde 1): más larga si la base está ocupada, para no volver a saturarla. */
+export const esperaReintento = (i: number, e: unknown) => (baseOcupada(e) ? 4000 * i : 800 * i);
+
 /** Se avisa después de cada cambio guardado, para volver a pedir las cifras (ver main.tsx). */
 let alEscribir: (() => void) | null = null;
 export const avisarEscrituras = (f: () => void) => void (alEscribir = f);
 /** Entrar/salir y los lotes de filas de una carga sin confirmar no cambian ninguna cifra. */
 const cambiaCifras = (method: string, path: string) => method !== "GET" && !path.startsWith("/auth/") && !/\/filas$/.test(path);
 
+/** Cuándo se envió la última escritura (cargas, metas…): mientras se está cargando, la precarga espera. */
+let ultimaEscritura = 0;
+export const escribiendoHace = () => Date.now() - ultimaEscritura;
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  if (method !== "GET" && !path.startsWith("/auth/")) ultimaEscritura = Date.now();
   const res = await fetch(`/api${path}`, {
     method,
     credentials: "same-origin",

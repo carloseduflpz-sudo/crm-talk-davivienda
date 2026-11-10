@@ -32,7 +32,7 @@ const prevMonth = (m: string) => {
 
 /** Cifras de la presentación; si ya se calcularon con los mismos archivos, salen de lo guardado. */
 export function presentacionDatos(env: Env, campaign: CampaignCode, mes: string | null, resultados: Resultados = new Resultados(env)): Promise<PresentacionCampania | null> {
-  return resultados.obtener(`presentacion/${campaign}/${mes ?? "ultimo"}.json`, () => calcularPresentacion(env, campaign, mes, resultados));
+  return resultados.obtener(`presentacion/${campaign}/${mes ?? "ultimo"}.json`, () => calcularPresentacion(env, campaign, mes, resultados), campaign);
 }
 
 async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: string | null, resultados: Resultados): Promise<PresentacionCampania | null> {

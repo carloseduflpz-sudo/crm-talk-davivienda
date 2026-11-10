@@ -224,7 +224,7 @@ export function registerCargas(r: Router): void {
     return json({ ok: true, uploads: results.map(publicUpload) });
   });
 
-  r.on("POST", "/cargas", "datos:cargar", async ({ env, req, user }) => {
+  r.on("POST", "/cargas", "datos:cargar", async ({ env, req, user, soloCampana }) => {
     const b = await readJson(req);
     const campaign = requireString(b, "campaign", "la campaña", 20);
     const dataset = requireString(b, "dataset", "el tipo de archivo", 40);
@@ -233,6 +233,7 @@ export function registerCargas(r: Router): void {
     const sha = requireString(b, "fileSha256", "la huella del archivo", 64);
     const def = ALL_DATASETS.find((d) => d.id === dataset);
     if (!isCampaignCode(campaign) || !def || def.campaign !== campaign) throw new HttpError(400, "Ese tipo de archivo no corresponde a la campaña.");
+    soloCampana(campaign);
     if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "El mes debe tener el formato AAAA-MM.");
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new HttpError(400, "Huella de archivo inválida.");
     const counts = ["rowsTotal", "rowsValid", "rowsDiscarded"].map((k) => {
@@ -288,8 +289,9 @@ export function registerCargas(r: Router): void {
     "PUT",
     "/cargas/:id/archivo",
     "datos:cargar",
-    async ({ env, req, params }) => {
+    async ({ env, req, params, soloCampana }) => {
       const u = await getUpload(env, params.id!);
+      soloCampana(u.campaign);
       if (u.status !== "validando") throw new HttpError(409, "Esta carga ya se cerró.");
       const size = Number(req.headers.get("content-length") ?? 0);
       if (size > MAX_FILE_BYTES) throw new HttpError(413, "El archivo es demasiado grande para guardarlo como respaldo (máximo 60 MB).");
@@ -338,8 +340,9 @@ export function registerCargas(r: Router): void {
     });
   });
 
-  r.on("POST", "/cargas/:id/confirmar", "datos:cargar", async ({ env, params, user }) => {
+  r.on("POST", "/cargas/:id/confirmar", "datos:cargar", async ({ env, params, user, soloCampana }) => {
     const u = await getUpload(env, params.id!);
+    soloCampana(u.campaign);
     if (u.status !== "validando") throw new HttpError(409, "Esta carga ya se cerró.");
     const got = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${TABLE[u.kind]} WHERE upload_id = ?`).bind(u.id).first<{ n: number }>();
     if ((got?.n ?? 0) !== u.rows_valid) {
@@ -367,8 +370,9 @@ export function registerCargas(r: Router): void {
     return json({ ok: true, upload: publicUpload(await getUpload(env, u.id)) });
   });
 
-  r.on("POST", "/cargas/:id/descartar", "datos:cargar", async ({ env, params, user }) => {
+  r.on("POST", "/cargas/:id/descartar", "datos:cargar", async ({ env, params, user, soloCampana }) => {
     const u = await getUpload(env, params.id!);
+    soloCampana(u.campaign);
     if (u.is_current) throw new HttpError(400, "No se puede descartar la versión vigente. Activa otra versión primero.");
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM ${TABLE[u.kind]} WHERE upload_id = ?`).bind(u.id),
@@ -383,8 +387,9 @@ export function registerCargas(r: Router): void {
    * Elimina un archivo cargado, también el vigente: se borran sus filas y su Excel de respaldo, y deja de
    * contar en el mes. Las otras versiones de ese archivo no se tocan (una anterior se puede volver a activar).
    */
-  r.on("POST", "/cargas/:id/eliminar", "datos:restaurar", async ({ env, params, user }) => {
+  r.on("POST", "/cargas/:id/eliminar", "datos:restaurar", async ({ env, params, user, soloCampana }) => {
     const u = await getUpload(env, params.id!);
+    soloCampana(u.campaign);
     if (u.status === "descartada") throw new HttpError(400, "Este archivo ya se eliminó.");
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM ${TABLE[u.kind]} WHERE upload_id = ?`).bind(u.id),
@@ -403,8 +408,9 @@ export function registerCargas(r: Router): void {
   });
 
   /** Vuelve a dejar vigente una versión anterior (sus filas nunca se borraron). */
-  r.on("POST", "/cargas/:id/activar", "datos:restaurar", async ({ env, params, user }) => {
+  r.on("POST", "/cargas/:id/activar", "datos:restaurar", async ({ env, params, user, soloCampana }) => {
     const u = await getUpload(env, params.id!);
+    soloCampana(u.campaign);
     if (u.status !== "reemplazada") throw new HttpError(400, "Solo se puede activar una versión reemplazada.");
     await env.DB.batch([
       // Una adicional vuelve a sumarse; una original reemplaza a la original vigente.
@@ -416,8 +422,9 @@ export function registerCargas(r: Router): void {
   });
 
   /** Quita una base adicional del análisis del mes (sus filas se conservan; se puede volver a sumar). */
-  r.on("POST", "/cargas/:id/quitar", "datos:cargar", async ({ env, params, user }) => {
+  r.on("POST", "/cargas/:id/quitar", "datos:cargar", async ({ env, params, user, soloCampana }) => {
     const u = await getUpload(env, params.id!);
+    soloCampana(u.campaign);
     if (!u.is_addition || !u.is_current) throw new HttpError(400, "Solo se puede quitar una base adicional vigente.");
     await env.DB.prepare("UPDATE uploads SET is_current = 0, status = 'reemplazada' WHERE id = ?").bind(u.id).run();
     await audit(env, user.username, "base_adicional_quitada", `${u.dataset}:${u.month}:v${u.version}`, { nombre: u.label });

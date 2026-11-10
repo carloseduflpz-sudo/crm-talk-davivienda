@@ -59,10 +59,11 @@ describe("metas y cumplimientos oficiales", () => {
     expect(ago.config.estatus).toEqual(["ENTREGADA"]);
   });
 
-  it("el histórico usa la meta y el resultado oficial de los meses cerrados (y muestra lo de la sábana al lado)", async () => {
+  it("el histórico usa la meta y el resultado oficial de los meses cerrados (sin recalcular la sábana de esos meses)", async () => {
     const h = (await call("GET", "/analisis/tdc/historico")).data.meses as any[];
     const ago = h.find((m) => m.month === "2026-08");
-    expect(ago).toMatchObject({ oficial: true, meta: 200, logrado: 58, logradoSabana: 50 });
+    expect(ago).toMatchObject({ oficial: true, meta: 200, logrado: 58 });
+    expect(ago.logradoSabana === undefined).toBe(true);
     expect(ago.cumplimiento).toBeCloseTo(29, 6);
     // Julio y septiembre no tienen archivos en la app: aparecen solo con lo oficial.
     expect(h.find((m) => m.month === "2026-09")).toMatchObject({ oficial: true, meta: 223, logrado: 112, ventas: null });

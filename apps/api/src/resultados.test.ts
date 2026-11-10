@@ -94,6 +94,26 @@ describe("resultados guardados", () => {
     expect((await call("GET", "/analisis/tdc?mes=2026-09")).data.analysis.ventas.total).toBe(todos.ventas.total);
   });
 
+  it("un cambio en una campaña no obliga a recalcular las demás", async () => {
+    await load("cdc:sabana", "2026-09", Array.from({ length: 6 }, (_, i) => ({ ...venta(i), amount: 1000 })));
+    await call("GET", "/analisis/cdc?mes=2026-09");
+    await call("GET", "/analisis/tdc?mes=2026-09");
+    // Cambia la meta de TC y se carga otra sábana de TC: CDC sigue saliendo de lo guardado; TC se recalcula.
+    expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 60, agents: 2 })).status).toBe(200);
+    await load("tdc:sabana", "2026-09", Array.from({ length: 14 }, (_, i) => venta(i)));
+    const [cdc, n1] = await contando(() => call("GET", "/analisis/cdc?mes=2026-09"));
+    expect(n1).toBe(1);
+    expect(cdc.data.analysis.ventas.total).toBe(6);
+    const [tdc, n2] = await contando(() => call("GET", "/analisis/tdc?mes=2026-09"));
+    expect(n2).toBeGreaterThan(5);
+    expect(tdc.data.analysis.cumplimiento.meta).toBe(60);
+    // Una escritura general (el Excel de cumplimientos) sí renueva todas.
+    expect((await call("PUT", "/metas/oficial", { archivo: "c.xlsx", meses: [{ campaign: "cdc", month: "2026-09", meta: 9000, real: 8000 }] })).status).toBe(200);
+    const [cdc2, n3] = await contando(() => call("GET", "/analisis/cdc?mes=2026-09"));
+    expect(n3).toBeGreaterThan(5);
+    expect(cdc2.data.analysis.cumplimiento.meta).toBe(9000);
+  });
+
   it("una publicación nueva del código recalcula todo", async () => {
     await call("GET", "/analisis/tdc?mes=2026-09");
     env.CF_VERSION_METADATA = { id: "otra-publicacion" };
@@ -101,6 +121,22 @@ describe("resultados guardados", () => {
     expect(n).toBeGreaterThan(5);
     const [, n2] = await contando(() => call("GET", "/analisis/tdc?mes=2026-09"));
     expect(n2).toBe(1);
+  });
+
+  it("si la base está saturada, responde 503 'base_ocupada' (la app reintenta sola)", async () => {
+    const db = env.DB;
+    env.DB = {
+      prepare: () => {
+        throw new Error("D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window.");
+      },
+    } as unknown as D1Database;
+    try {
+      const r = await call("GET", "/analisis/tdc?mes=2026-09");
+      expect(r.status).toBe(503);
+      expect(r.data.code).toBe("base_ocupada");
+    } finally {
+      env.DB = db;
+    }
   });
 
   it("sin R2 se calcula igual", async () => {

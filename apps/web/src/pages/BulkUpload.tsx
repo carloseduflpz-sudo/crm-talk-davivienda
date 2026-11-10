@@ -33,7 +33,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Button, ErrorMessage } from "../components/form";
 import { Card, PageHeader } from "../components/ui";
-import { ApiError, api } from "../lib/api";
+import { ApiError, api, baseOcupada, esperaReintento } from "../lib/api";
 import { ExcelReader, ReadCancelled } from "../lib/excel";
 import { monthFromName, monthLabel } from "../lib/xlsx";
 
@@ -93,8 +93,9 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
       return await fn();
     } catch (e) {
       const retryable = !(e instanceof ApiError) || (e.status >= 500 && e.data.code !== "limite_cloudflare");
-      if (!retryable || i >= tries) throw e;
-      await new Promise((r) => setTimeout(r, 800 * i));
+      // Con la base ocupada se espera más y se intenta más veces (se libera en unos segundos).
+      if (!retryable || i >= (baseOcupada(e) ? Math.max(tries, 6) : tries)) throw e;
+      await new Promise((r) => setTimeout(r, esperaReintento(i, e)));
     }
   }
 }

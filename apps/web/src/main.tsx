@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { Layout } from "./components/Layout";
 import { EmptyState } from "./components/ui";
-import { ApiError, api, avisarEscrituras } from "./lib/api";
+import { ApiError, api, avisarEscrituras, baseOcupada, esperaReintento } from "./lib/api";
 import { Campaign } from "./pages/Campaign";
 import { BulkUpload } from "./pages/BulkUpload";
 import { Metas } from "./pages/Metas";
@@ -24,8 +24,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // Un 401/403 no se arregla reintentando.
-      retry: (count, err) => !(err instanceof ApiError && [401, 403].includes(err.status)) && count < 2,
+      // Un 401/403 no se arregla reintentando. Con la base ocupada se reintenta más veces y más despacio (4, 8, 12… s):
+      // se libera sola en unos segundos.
+      retry: (count, err) => !(err instanceof ApiError && [401, 403].includes(err.status)) && count < (baseOcupada(err) ? 5 : 2),
+      retryDelay: (count, err) => esperaReintento(count + 1, err),
     },
   },
 });

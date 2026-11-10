@@ -96,6 +96,7 @@ export function analyzeCampaign(
 ): Promise<CampaignAnalysis> {
   return resultados.obtener(`analisis/${campaign}/${requestedMonth ?? "ultimo"}/${parteClave(agente)}.json`, () =>
     calcularAnalisis(env, campaign, requestedMonth, agente),
+    campaign,
   );
 }
 
@@ -750,7 +751,7 @@ function aplicarOficial(campaign: string, summary: MonthSummary[], oficial: Ofic
           };
           summary.push(s);
         }
-        s.logradoSabana = s.logrado;
+        if (s.logrado !== null) s.logradoSabana = s.logrado;
         s.meta = of.meta ?? s.meta;
         s.logrado = of.real ?? s.logrado;
         s.cumplimiento = s.meta && s.logrado !== null ? (s.logrado / s.meta) * 100 : s.cumplimiento;
@@ -844,7 +845,14 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
   const etiquetas = new Map<string, string[]>();
   for (const r of estatus!.results as { id: string; label: string }[]) etiquetas.set(r.id, [...(etiquetas.get(r.id) ?? []), r.label]);
   const medida = unidad === "monto" ? "COALESCE(amount, 0)" : "1";
-  const conVentas = months.map((month) => ({ month, sab: sabanas.find((u) => u.month === month) })).filter((x): x is { month: string; sab: (typeof sabanas)[number] } => Boolean(x.sab));
+  // Los meses cerrados con resultado en el Excel de cumplimientos usan ese resultado: no se calculan (es la consulta
+  // más pesada, recorre las sábanas de los meses anteriores).
+  const hoy = diaCarga(Date.now()).slice(0, 7);
+  const conOficial = new Set((oficial?.meses ?? []).filter((o) => o.campaign === campaign && o.month < hoy && o.real !== null).map((o) => o.month));
+  const conVentas = months
+    .filter((month) => !conOficial.has(month))
+    .map((month) => ({ month, sab: sabanas.find((u) => u.month === month) }))
+    .filter((x): x is { month: string; sab: (typeof sabanas)[number] } => Boolean(x.sab));
   const logrados = conVentas.length
     ? await db.batch(
         conVentas.map(({ month, sab }) => {
@@ -879,7 +887,7 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
     const re = n(v?.re);
     const ventasVici = l ? n(l.ventas) : null;
     const meta = goal ? n(goal.sales_goal) : null;
-    const logrado = sab ? (logradoDe.get(month) ?? 0) : null;
+    const logrado = sab && logradoDe.has(month) ? logradoDe.get(month)! : null;
     return {
       month,
       ventas: sab ? ap + re + n(v?.ep) : null,
@@ -927,16 +935,17 @@ export function registerAnalisis(r: Router): void {
     if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
     const res = new Resultados(env);
     // Todo el histórico queda guardado (se recalcula solo cuando se carga o cambia algo).
-    const meses = await res.obtener(`historico/${campaign}/${parteClave(agente)}.json`, () => (agente ? historicoCompleto(env, campaign, agente, res) : historicoRapido(env, campaign)));
+    const meses = await res.obtener(`historico/${campaign}/${parteClave(agente)}.json`, () => (agente ? historicoCompleto(env, campaign, agente, res) : historicoRapido(env, campaign)), campaign);
     return json({ ok: true, agente, meses });
   });
 
   /** Meta de ventas y número de agentes de una campaña en un mes. */
-  r.on("PUT", "/metas", "config:editar", async ({ env, req, user }) => {
+  r.on("PUT", "/metas", "config:editar", async ({ env, req, user, soloCampana }) => {
     const b = await readJson(req);
     const campaign = requireString(b, "campaign", "la campaña", 20);
     const month = requireString(b, "month", "el mes", 7);
     if (!isCampaignCode(campaign)) throw new HttpError(400, "Campaña desconocida.");
+    soloCampana(campaign);
     if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "Mes inválido.");
     const goal = b.salesGoal;
     const agents = b.agents ?? null;
