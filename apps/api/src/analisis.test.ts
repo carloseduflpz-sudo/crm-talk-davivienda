@@ -288,6 +288,34 @@ describe("detalle de clientes", () => {
   });
 });
 
+describe("recorrido de la base y promedio de toques", () => {
+  it("cuadran con las llamadas de la tipificación (también por agente)", async () => {
+    for (const q of ["", "&agente=Ana"]) {
+      const a = (await call("GET", `/analisis/tdc?mes=2026-09${q}`)).data.analysis as CampaignAnalysis;
+      const b = a.base!;
+      expect(b.recorridos).not.toBe(null);
+      expect(b.cuadre).not.toBe(null);
+      const toques = b.porCarga.reduce((t, x) => t + x.toques, 0);
+      const recorridos = b.porCarga.reduce((t, x) => t + x.llamados, 0);
+      // Toda llamada del archivo está en una base, fuera de base o sin NIU.
+      expect(b.cuadre!.aBase + b.cuadre!.fueraDeBase + b.cuadre!.sinNiu).toBe(a.llamadas!.total);
+      expect(b.cuadre!.llamadas).toBe(a.llamadas!.total);
+      expect(b.cuadre!.aBase).toBe(toques);
+      expect(b.recorridos).toMatchObject({ clientes: recorridos, toques });
+      expect(Math.abs(b.recorridos!.promedioToques - toques / recorridos) < 1e-9).toBe(true);
+      expect(Math.abs(b.recorridos!.recorrido - (recorridos / b.total) * 100) < 1e-9).toBe(true);
+      for (const x of b.porCarga) expect(x.toques >= x.llamados && x.llamados <= x.nuevos).toBe(true);
+      if (!q) {
+        // Contra el archivo: llamadas cuyo NIU viene en alguna base del mes.
+        const enBase = new Set([...basePrimeras, ...baseSegundas].map((r) => r.niu));
+        expect(toques).toBe(calls.filter((c) => c.niu && enBase.has(c.niu)).length);
+        expect(recorridos).toBe(new Set(calls.filter((c) => c.niu && enBase.has(c.niu)).map((c) => c.niu)).size);
+        expect(b.cuadre!.sinNiu).toBe(calls.filter((c) => !c.niu).length);
+      }
+    }
+  });
+});
+
 describe("bases adicionales", () => {
   // 8 clientes: 3 ya venían en la base de primeras (NIU 127-129) y 5 son nuevos (200-204).
   const adicional = [...["127", "128", "129"], ...Array.from({ length: 5 }, (_, i) => String(200 + i))].map((niu) => ({ niu, profile: "Nuevo" }));

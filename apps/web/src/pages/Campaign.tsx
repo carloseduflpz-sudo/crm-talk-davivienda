@@ -70,6 +70,8 @@ const dayNum = (iso: string) => Number(iso.slice(8, 10));
 const share = (part: number, total: number) => (total ? (part / total) * 100 : 0);
 const pct1 = (n: number) => fmtPct(n);
 const pct2 = (n: number) => fmtPct(n, 2);
+const fmtDec1 = new Intl.NumberFormat("es-SV", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const dec1 = (n: number) => fmtDec1.format(n);
 const num1 = (n: number) => fmtNum(n);
 /** Etiquetas del banco EN MAYÚSCULAS, en minúsculas para usarlas dentro de una frase. */
 const lower = (s: string) => (s === s.toUpperCase() ? s.toLowerCase() : s.charAt(0).toLowerCase() + s.slice(1));
@@ -381,6 +383,25 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
                 },
               ]
             : []),
+          // Recorrido y toques, con las tipificaciones del mes.
+          ...(b.recorridos
+            ? [
+                {
+                  label: "Recorrido de la base",
+                  num: b.recorridos.recorrido,
+                  format: pct1,
+                  foot: `${fmtInt.format(b.recorridos.clientes)} de ${fmtInt.format(b.total)} clientes llamados`,
+                  delta: deltaOf(b.recorridos.recorrido, prev?.base?.recorridos?.recorrido, vs, { rate: true }),
+                },
+                {
+                  label: "Promedio de toques",
+                  num: b.recorridos.promedioToques,
+                  format: dec1,
+                  foot: `${fmtInt.format(b.recorridos.toques)} llamadas a clientes de la base`,
+                  delta: deltaOf(b.recorridos.promedioToques, prev?.base?.recorridos?.promedioToques, vs, { upIsGood: null }),
+                },
+              ]
+            : []),
           ...(a.ventas
             ? [
                 {
@@ -396,10 +417,14 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
       />
       {a.agente && <Aside>La base es la misma para todos los agentes; el cruce de ventas sí está filtrado por {a.agente}.</Aside>}
 
-      {b.porCarga.length > 1 && (
+      {(b.porCarga.length > 1 || b.recorridos) && (
         <ChartCard
-          title="Bases del mes"
-          note="La original y las adicionales, en orden de llegada. Un cliente que viene en varias se cuenta en la primera que lo trajo; llamados, contacto y ventas son de sus clientes nuevos. Clic para ver los clientes de cada base."
+          title={b.porCarga.length > 1 ? "Bases del mes" : "Recorrido de la base"}
+          note={
+            b.porCarga.length > 1
+              ? "La original y las adicionales, en orden de llegada. Un cliente que viene en varias se cuenta en la primera que lo trajo; recorrido, toques, contacto y ventas son de sus clientes nuevos. Clic para ver los clientes de cada base."
+              : "Recorrido: clientes de la base llamados al menos una vez. Toques: llamadas de la tipificación a esos clientes; el promedio es toques ÷ clientes recorridos."
+          }
         >
           <DataTable
             rows={b.porCarga}
@@ -424,10 +449,31 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
                 ? [
                     {
                       key: "llamados",
-                      label: "Llamados",
+                      label: "Recorridos",
                       align: "right" as const,
-                      render: (r: (typeof b.porCarga)[number]) => `${fmtInt.format(r.llamados)} (${fmtPct(share(r.llamados, r.nuevos), 0)})`,
-                      sort: (r: (typeof b.porCarga)[number]) => share(r.llamados, r.nuevos),
+                      render: (r: (typeof b.porCarga)[number]) => `${fmtInt.format(r.llamados)} (${fmtPct(r.recorrido, 0)})`,
+                      sort: (r: (typeof b.porCarga)[number]) => r.recorrido,
+                    },
+                    {
+                      key: "sinRecorrer",
+                      label: "Sin recorrer",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => fmtInt.format(r.nuevos - r.llamados),
+                      sort: (r: (typeof b.porCarga)[number]) => r.nuevos - r.llamados,
+                    },
+                    {
+                      key: "toques",
+                      label: "Toques",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => fmtInt.format(r.toques),
+                      sort: (r: (typeof b.porCarga)[number]) => r.toques,
+                    },
+                    {
+                      key: "promedioToques",
+                      label: "Prom. toques",
+                      align: "right" as const,
+                      render: (r: (typeof b.porCarga)[number]) => dec1(r.promedioToques),
+                      sort: (r: (typeof b.porCarga)[number]) => r.promedioToques,
                     },
                     {
                       key: "contactados",
@@ -454,6 +500,8 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
           />
         </ChartCard>
       )}
+
+      {b.cuadre && <CuadreTipificacion c={b.cuadre} bases={b.porCarga.map((x) => ({ nombre: x.adicional ? x.nombre || "Base adicional" : label(x.dataset), toques: x.toques }))} />}
 
       <ChartCard title="Perfiles de la base" note={a.ventas ? "Cruce por NIU contra la sábana del mismo mes. Clic en un perfil para ver sus clientes." : "Carga la sábana del mes para ver el cruce contra ventas"}>
         <DataTable
@@ -489,6 +537,39 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
         </ChartCard>
       )}
     </Stack>
+  );
+}
+
+/** Cuadre de los toques con el archivo de tipificaciones: cada llamada va a una base, fuera de base o sin NIU. */
+function CuadreTipificacion({ c, bases }: { c: NonNullable<NonNullable<CampaignAnalysis["base"]>["cuadre"]>; bases: { nombre: string; toques: number }[] }) {
+  const suma = c.aBase + c.fueraDeBase + c.sinNiu;
+  const cuadra = suma === c.llamadas;
+  const filas: { label: string; n: number; nota?: string }[] = [
+    ...bases.map((x) => ({ label: `A clientes de ${x.nombre}`, n: x.toques })),
+    { label: "A clientes que no vienen en ninguna base del mes", n: c.fueraDeBase, nota: c.clientesFuera ? `${fmtInt.format(c.clientesFuera)} clientes` : undefined },
+    { label: "Sin NIU", n: c.sinNiu },
+  ];
+  return (
+    <ChartCard title="Cuadre con la tipificación" note="Cada llamada del archivo de tipificaciones del mes se cuenta una sola vez: en la base de su cliente, fuera de base o sin NIU.">
+      <dl className="divide-y divide-hair text-[14px]">
+        {filas.map((f) => (
+          <div key={f.label} className="flex items-baseline justify-between gap-4 py-2">
+            <dt className="text-ink-soft">
+              {f.label}
+              {f.nota && <span className="ml-2 text-[12px]">({f.nota})</span>}
+            </dt>
+            <dd className="tabular-nums text-ink">{fmtInt.format(f.n)}</dd>
+          </div>
+        ))}
+        <div className="flex items-baseline justify-between gap-4 py-2 font-semibold">
+          <dt className="text-ink">Llamadas en la tipificación</dt>
+          <dd className="tabular-nums text-ink">{fmtInt.format(c.llamadas)}</dd>
+        </div>
+      </dl>
+      <p className={`mt-3 text-[13px] font-medium ${cuadra ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
+        {cuadra ? "Cuadra: la suma de los toques da el total de llamadas del archivo." : `No cuadra: la suma da ${fmtInt.format(suma)} y el archivo tiene ${fmtInt.format(c.llamadas)} llamadas.`}
+      </p>
+    </ChartCard>
   );
 }
 

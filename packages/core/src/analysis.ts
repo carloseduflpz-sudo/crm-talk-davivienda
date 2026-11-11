@@ -105,12 +105,21 @@ export interface CampaignAnalysis {
       repetidos: number;
       /** De los clientes nuevos: cuántos se llamaron, cuántos tuvieron contacto efectivo y cuántos compraron. */
       llamados: number;
+      /** Recorrido de la base: clientes nuevos llamados ÷ clientes nuevos, en %. */
+      recorrido: number;
+      /** Toques: llamadas de la tipificación a esos clientes; promedio = toques ÷ clientes llamados. */
+      toques: number;
+      promedioToques: number;
       contactados: number;
       ventas: number;
       aprobadas: number;
       /** Ventas ÷ clientes nuevos, en %. */
       penetracion: number;
     }[];
+    /** Todas las bases juntas (null sin tipificación del mes): clientes recorridos, % de la base, toques y promedio. */
+    recorridos: null | { clientes: number; recorrido: number; toques: number; promedioToques: number };
+    /** Cuadre con la tipificación: llamadas del archivo = a clientes de las bases + a clientes fuera de base + sin NIU. */
+    cuadre: null | { llamadas: number; aBase: number; fueraDeBase: number; clientesFuera: number; sinNiu: number };
     porArchivo: { dataset: string; registros: number; unicos: number }[];
     porPerfil: ProfileRow[];
     historial: { month: string; dataset: string; unicos: number }[];

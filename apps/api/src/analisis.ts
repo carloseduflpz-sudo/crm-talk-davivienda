@@ -370,13 +370,31 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                     (SELECT COUNT(DISTINCT niu) FROM base_records WHERE upload_id = ?) AS unicos,
                     (SELECT COUNT(*) FROM b) AS nuevos,
                     (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS llamados,
+                    (SELECT COUNT(*) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS toques,
                     (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")} AND ${effSql}) AS contactados,
                     (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")}) AS ventas,
                     (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")} AND s.status_class = 'aprobado') AS aprobadas`,
           )
-          .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
+          .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
       });
-      const [porArchivo, unicos, historial, perfiles, ...cargas] = await db.batch([...stmts, ...perUpload]);
+      // Cuadre con la tipificación: toda llamada del archivo es a un cliente de alguna base del mes, a un cliente que
+      // no viene en ninguna base, o sin NIU. Así la suma de los toques de cada base más lo de fuera da el total.
+      if (tipif)
+        stmts.push(
+          db
+            .prepare(
+              `WITH b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (SELECT value FROM json_each(?)))
+               SELECT COUNT(*) AS llamadas,
+                      SUM(COALESCE(c.niu, '') = '') AS sin_niu,
+                      SUM(COALESCE(c.niu, '') <> '' AND b.niu IS NULL) AS fuera,
+                      COUNT(DISTINCT CASE WHEN COALESCE(c.niu, '') <> '' AND b.niu IS NULL THEN c.niu END) AS clientes_fuera
+                 FROM calls c LEFT JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}`,
+            )
+            .bind(JSON.stringify(baseIds), tipif.id, ...fb),
+        );
+      const [porArchivo, unicos, historial, perfiles, ...resto] = await db.batch([...stmts, ...perUpload]);
+      const cuadre = tipif ? (resto.shift()!.results[0] as Record<string, number> | undefined) : undefined;
+      const cargas = resto;
       baseUnicos = n((unicos!.results[0] as { n: number } | undefined)?.n);
       const porCarga = ordered.map((u, i) => {
         const r = cargas[i]!.results[0] as Record<string, number>;
@@ -392,15 +410,24 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           nuevos,
           repetidos: n(r.unicos) - nuevos,
           llamados: n(r.llamados),
+          recorrido: pct(n(r.llamados), nuevos),
+          toques: n(r.toques),
+          promedioToques: n(r.llamados) ? n(r.toques) / n(r.llamados) : 0,
           contactados: n(r.contactados),
           ventas: n(r.ventas),
           aprobadas: n(r.aprobadas),
           penetracion: pct(n(r.ventas), nuevos),
         };
       });
+      const recorridos = porCarga.reduce((t, c) => t + c.llamados, 0);
+      const toques = porCarga.reduce((t, c) => t + c.toques, 0);
       out.base = {
         total: baseUnicos,
         porCarga,
+        recorridos: tipif ? { clientes: recorridos, recorrido: pct(recorridos, baseUnicos), toques, promedioToques: recorridos ? toques / recorridos : 0 } : null,
+        cuadre: cuadre
+          ? { llamadas: n(cuadre.llamadas), aBase: toques, fueraDeBase: n(cuadre.fuera), clientesFuera: n(cuadre.clientes_fuera), sinNiu: n(cuadre.sin_niu) }
+          : null,
         porArchivo: (porArchivo!.results as { dataset: string; registros: number; unicos: number }[]).map((r) => ({ dataset: r.dataset, registros: n(r.registros), unicos: n(r.unicos) })),
         historial: (historial!.results as { month: string; dataset: string; unicos: number }[]).map((r) => ({ month: r.month, dataset: r.dataset, unicos: n(r.unicos) })),
         porPerfil: (perfiles!.results as { profile: string; base: number; con_venta: number; aprobadas: number; rechazadas: number }[]).map((r) => ({
