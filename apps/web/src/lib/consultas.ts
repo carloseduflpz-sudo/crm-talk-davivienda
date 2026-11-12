@@ -33,6 +33,17 @@ export async function precargarCampana(qc: QueryClient, code: string, completa =
   }
 }
 
+/** Mientras corre un cálculo grande (las cifras de la presentación), la precarga no le suma trabajo a la base. */
+let pesados = 0;
+export async function conTrabajoPesado<T>(f: () => Promise<T>): Promise<T> {
+  pesados++;
+  try {
+    return await f();
+  } finally {
+    pesados--;
+  }
+}
+
 /**
  * En segundo plano, una campaña a la vez y solo lo indispensable (el último mes; el anterior solo de la que está
  * en pantalla): la base de datos de Cloudflare tiene un límite de trabajo cada 10 segundos y, si se le pide todo
@@ -43,7 +54,7 @@ export async function precargarTodas(qc: QueryClient, seguir: () => boolean, pri
   for (const code of orden) {
     // Mientras se cargan archivos (hubo una escritura en el último minuto) no se precarga: la base está ocupada
     // guardando filas. La siguiente ronda (cada 3 minutos) lo hace.
-    if (!seguir() || escribiendoHace() < 60_000) return;
+    if (!seguir() || escribiendoHace() < 60_000 || pesados > 0) return;
     await precargarCampana(qc, code, code === primero);
   }
 }

@@ -22,7 +22,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, CloudUpload, Download, FileSpreadsheet, LoaderCircle, Presentation as PresentationIcon, TriangleAlert } from "lucide-react";
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { Card, PageHeader } from "../components/ui";
-import { api, type PlantillaInfo } from "../lib/api";
+import { api, baseOcupada, esperaReintento, type PlantillaInfo } from "../lib/api";
+import { conTrabajoPesado } from "../lib/consultas";
 import { cargarSheetJS } from "../lib/sheetjs";
 import { currentMonth, monthFromName, monthLabel } from "../lib/xlsx";
 
@@ -44,27 +45,38 @@ export function nombreSalida(plantilla: string, mes: string, semana: number | nu
 
 /** Cifras de las 6 campañas del mes. Si una campaña no tiene datos de ese mes, el servidor da su último mes: eso no se usa (no se mezclan meses). */
 type Carga = { datos: PresDatos; errores: Partial<Record<string, string>> };
-async function cargarDatos(mes: string): Promise<Carga> {
-  const errores: Carga["errores"] = {};
-  const all = await Promise.all(
-    CAMPAIGNS.map((c) =>
-      api
-        .presentacionDatos(c.code, mes)
-        // Un tropiezo pasajero de Cloudflare no debe dejar fuera a la campaña: se intenta una vez más.
-        .catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => api.presentacionDatos(c.code, mes)))
-        .catch((e: Error) => {
-          // Si el servidor falla, se dice (no se confunde con "no hay datos").
-          errores[c.code] = e.message;
-          return null;
-        }),
-    ),
-  );
-  const datos: PresDatos = {};
-  CAMPAIGNS.forEach((c, i) => {
-    const d = all[i];
-    if (d && d.month === mes) datos[c.code] = d;
+/**
+ * Una campaña a la vez (no las 6 juntas): la base de datos de Cloudflare atiende una consulta a la vez y, si le
+ * llega mucho trabajo en pocos segundos, rechaza lo que sigue ("base ocupada"). Si pasa, se espera y se reintenta.
+ */
+async function cargarDatos(mes: string, progreso?: (campana: string, i: number) => void): Promise<Carga> {
+  return conTrabajoPesado(async () => {
+    const errores: Carga["errores"] = {};
+    const datos: PresDatos = {};
+    for (const [i, c] of CAMPAIGNS.entries()) {
+      progreso?.(c.shortName, i);
+      const d = await leerCampana(c.code, mes).catch((e: Error) => {
+        // Si el servidor falla, se dice (no se confunde con "no hay datos").
+        errores[c.code] = e.message;
+        return null;
+      });
+      if (d && d.month === mes) datos[c.code] = d;
+    }
+    progreso?.("", CAMPAIGNS.length);
+    return { datos, errores };
   });
-  return { datos, errores };
+}
+
+/** Un tropiezo pasajero no deja fuera a la campaña: se reintenta (más veces y más despacio si la base está ocupada). */
+async function leerCampana(code: string, mes: string) {
+  for (let i = 1; ; i++) {
+    try {
+      return await api.presentacionDatos(code, mes);
+    } catch (e) {
+      if (i >= (baseOcupada(e) ? 6 : 2)) throw e;
+      await new Promise((r) => setTimeout(r, esperaReintento(i, e)));
+    }
+  }
 }
 
 /** Semana del mes de la sábana más reciente (para el nombre del archivo). */
@@ -97,7 +109,9 @@ export function Presentation() {
   const [mes, setMes] = useState(currentMonth());
 
   // Al volver a esta pestaña (p. ej. después de cargar una sábana) se piden de nuevo.
-  const datos = useQuery({ queryKey: ["presentacion", mes], queryFn: () => cargarDatos(mes), refetchOnWindowFocus: true });
+  const [progreso, setProgreso] = useState<{ campana: string; i: number } | null>(null);
+  const consulta = (m: string) => ({ queryKey: ["presentacion", m], queryFn: () => cargarDatos(m, (campana, i) => setProgreso({ campana, i })), retry: false });
+  const datos = useQuery({ ...consulta(mes), refetchOnWindowFocus: true });
 
   const [result, setResult] = useState<{ res: PresResultado; nombre: string; guardada: boolean; fallas: Aviso[]; avisos: Aviso[] } | null>(null);
   // Excel de las gráficas (guardado): de él salen la M, la R y el contacto; lo demás lo calcula la app.
@@ -116,12 +130,12 @@ export function Presentation() {
     try {
       // Las cifras se piden de nuevo al dar clic: si se acaba de cargar una sábana, ya sale con ella.
       setBusy("Leyendo lo último que se cargó…");
-      const { datos: frescos, errores } = await cargarDatos(mes);
+      // (si ya se están leyendo, se espera esa misma lectura en vez de pedir todo dos veces).
+      const { datos: frescos, errores }: Carga = await qc.fetchQuery({ ...consulta(mes), staleTime: 0 });
       // La presentación sale SIEMPRE: una campaña que no se pudo leer se queda con las cifras de la semana anterior
       // y se avisa abajo, en rojo, con el motivo.
       const fallas = Object.entries(errores).map(([k, m]) => ({ campana: getCampaign(k as PresentacionCampania["campaign"]).shortName, motivo: m ?? "" }));
       if (!Object.keys(frescos).length) throw new Error(`No se pudo leer ninguna campaña de ${monthLabel(mes)}, así que no hay nada que actualizar. ${fallas.map((f) => `${f.campana}: ${f.motivo}`).join(" · ")}`);
-      void qc.invalidateQueries({ queryKey: ["presentacion", mes] });
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
       setBusy("Poniendo las cifras…");
@@ -179,6 +193,11 @@ export function Presentation() {
               </button>
             ))}
           </div>
+          {datos.isFetching && progreso && progreso.i < CAMPAIGNS.length && (
+            <p className="mt-3 text-[13px] text-ink-soft">
+              Calculando {progreso.campana} ({progreso.i + 1} de {CAMPAIGNS.length})…
+            </p>
+          )}
           <ul className="mt-4 divide-y divide-hair text-[13px]">
             {CAMPAIGNS.map((c) => {
               const d = usados?.[c.code];
