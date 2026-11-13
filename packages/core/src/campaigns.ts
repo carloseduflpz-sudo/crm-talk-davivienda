@@ -27,6 +27,15 @@ export interface CampaignDef {
   approved: readonly string[];
   /** Estatus del banco que cuentan como rechazo. */
   rejected: readonly string[];
+  /**
+   * Además de los estatus exactos: partes del estatus que lo hacen rechazo o aprobada (sin tildes, en mayúsculas).
+   * Se revisa primero el rechazo. TDC: todo lo que ya pasó por PCBM es tarjeta aprobada (en emboso, en ruta,
+   * devolución, entregada…).
+   */
+  rejectedIf?: readonly string[];
+  approvedIf?: readonly string[];
+  /** Partes que dejan la venta en proceso aunque traiga otra de las de arriba (p. ej. "DEVOLUCION TALK AMERICA": el caso regresó a Talk, no es tarjeta). */
+  pendingIf?: readonly string[];
   /** Subprocesos que la sábana separa en hojas distintas, si los hay. */
   processes?: readonly string[];
   datasets: readonly DatasetDef[];
@@ -43,6 +52,9 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     statusField: "SUBETAPA",
     approved: ["ENTREGADA", "APROBADA"],
     rejected: ["RECHAZADA"],
+    rejectedIf: ["RECHAZ"],
+    approvedIf: ["APROBAD", "ENTREG", "DEVOLU", "DEVUELT", "RUTA", "EMBOZ", "EMBOS", "DISTRIBU"],
+    pendingIf: ["TALK"],
     datasets: [
       { id: "tdc:sabana", kind: "sabana", label: "Sábana", source: "Consolidado de ventas (Reporte TDC TALK General)" },
       { id: "tdc:base:primeras", kind: "base", label: "Base Primeras Cuentas", source: "Base BAU · Tarjeta nueva" },

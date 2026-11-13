@@ -12,6 +12,7 @@ import {
   ALL_DATASETS,
   buildTipologiaIndex,
   classifyCall,
+  clasePorPartes,
   isCampaignCode,
   matchKey,
   type CallClass,
@@ -110,7 +111,8 @@ function niu(v: unknown, allowEmpty: boolean): string {
 async function saleClassifier(env: Env, campaign: string) {
   const { results } = await env.DB.prepare("SELECT status_key, class FROM status_map WHERE campaign = ?").bind(campaign).all<{ status_key: string; class: SaleClass }>();
   const map = new Map(results.map((r) => [r.status_key, r.class]));
-  return (raw: string | null): SaleClass => (raw ? (map.get(matchKey(raw)) ?? "en_proceso") : "en_proceso");
+  // Primero el catálogo exacto; si el estatus no está, las partes que lo hacen rechazo o aprobada (ver campaigns.ts).
+  return (raw: string | null): SaleClass => (raw ? (map.get(matchKey(raw)) ?? (isCampaignCode(campaign) ? clasePorPartes(campaign, raw) : null) ?? "en_proceso") : "en_proceso");
 }
 
 async function callClassifier(env: Env, campaign: CampaignCode) {

@@ -15,7 +15,24 @@ export function classifySale(campaign: CampaignCode, rawStatus: unknown): SaleCl
   if (!key) return "en_proceso";
   if (c.approved.some((s) => matchKey(s) === key)) return "aprobado";
   if (c.rejected.some((s) => matchKey(s) === key)) return "rechazado";
-  return "en_proceso";
+  return clasePorPartes(campaign, rawStatus) ?? "en_proceso";
+}
+
+const sinTildes = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+
+/** Clase por partes del estatus (approvedIf / rejectedIf de la campaña), o null si no aplica ninguna. */
+export function clasePorPartes(campaign: CampaignCode, rawStatus: unknown): SaleClass | null {
+  const c = getCampaign(campaign);
+  const t = sinTildes(matchKey(rawStatus));
+  if (!t) return null;
+  if (c.pendingIf?.some((p) => t.includes(p))) return "en_proceso";
+  if (c.rejectedIf?.some((p) => t.includes(p))) return "rechazado";
+  if (c.approvedIf?.some((p) => t.includes(p))) return "aprobado";
+  return null;
 }
 
 /** Categoría general que trae VICI, usada cuando la tipología no está homologada. */

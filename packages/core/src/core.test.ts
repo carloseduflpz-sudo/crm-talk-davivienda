@@ -30,6 +30,10 @@ describe("campañas", () => {
 describe("estatus del banco", () => {
   it("clasifica sin importar tildes, mayúsculas ni espacios", () => {
     expect(classifySale("tdc", " entregada ")).toBe("aprobado");
+    // TDC: todo lo que ya pasó por PCBM es tarjeta aprobada.
+    for (const st of ["EN EMBOZO", "En Ruta", "DEVOLUCION", "Devolución", "ENTREGADA POR COURIER", "Sin Embozo"]) expect(classifySale("tdc", st)).toBe("aprobado");
+    for (const st of ["RECHAZADA", "Rechazado PCBM"]) expect(classifySale("tdc", st)).toBe("rechazado");
+    for (const st of ["PENDIENTE DE EVALUACION POR PCBM", "CASO EN ANALISIS", "Pendiente por requisito", "Creacion de empresas", "Extrarequisito", "Devolucion Talk America"]) expect(classifySale("tdc", st)).toBe("en_proceso");
     expect(classifySale("extrafin", "Devolución")).toBe("rechazado");
     expect(classifySale("seguros", "cancelado  por solicitud")).toBe("rechazado");
     expect(classifySale("domi", "EXITOSA")).toBe("aprobado");
