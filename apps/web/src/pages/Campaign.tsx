@@ -273,7 +273,14 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
       </Pair>
 
       {v.procesos.actual.length > 0 && (
-        <TablaProcesos titulo="Proceso de las ventas del mes" nota={`Ventas con fecha de ${monthLabel(a.month!)} (o sin fecha), según el proceso en que va cada una en la sábana.`} filas={v.procesos.actual} money={money} open={open} />
+        <TablaProcesos
+          titulo="Proceso de las ventas del mes"
+          nota={`Ventas con fecha de ${monthLabel(a.month!)} (o sin fecha), según el proceso en que va cada una en la sábana. La última fila suma también la cosecha (lo vendido en meses anteriores que trae esta sábana).`}
+          filas={v.procesos.actual}
+          cosecha={v.procesos.cosecha}
+          money={money}
+          open={open}
+        />
       )}
       {v.procesos.cosecha.length > 0 && (
         <TablaProcesos titulo="Proceso de la cosecha" nota="Ventas de meses anteriores que trae la sábana de este mes, según el proceso en que va cada una." filas={v.procesos.cosecha} money={money} open={open} />
@@ -361,7 +368,22 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
 }
 
 /** Cuántas ventas hay en cada proceso: evaluadas (aprobadas + rechazadas), pendientes y % de aprobación, con total. */
-function TablaProcesos({ titulo, nota, filas, money, open }: { titulo: string; nota: string; filas: ProcesoRow[]; money: boolean; open: Ctx["open"] }) {
+function TablaProcesos({ titulo, nota, filas, cosecha = [], money, open }: { titulo: string; nota: string; filas: ProcesoRow[]; cosecha?: ProcesoRow[]; money: boolean; open: Ctx["open"] }) {
+  const sumar = (lista: ProcesoRow[], proceso: string): ProcesoRow =>
+    lista.reduce(
+      (t, f) => ({
+        proceso,
+        ventas: t.ventas + f.ventas,
+        aprobadas: t.aprobadas + f.aprobadas,
+        rechazadas: t.rechazadas + f.rechazadas,
+        pendientes: t.pendientes + f.pendientes,
+        monto: t.monto + f.monto,
+        montoAprobado: t.montoAprobado + f.montoAprobado,
+      }),
+      { proceso, ventas: 0, aprobadas: 0, rechazadas: 0, pendientes: 0, monto: 0, montoAprobado: 0 },
+    );
+  // Con cosecha: una fila más con todo lo de la sábana (lo vendido en el mes + lo vendido antes).
+  const conCosecha = cosecha.length ? sumar([...filas, ...cosecha], "Total con cosecha") : null;
   const total: ProcesoRow = filas.reduce(
     (t, f) => ({
       proceso: "Total",
@@ -374,8 +396,8 @@ function TablaProcesos({ titulo, nota, filas, money, open }: { titulo: string; n
     }),
     { proceso: "Total", ventas: 0, aprobadas: 0, rechazadas: 0, pendientes: 0, monto: 0, montoAprobado: 0 },
   );
-  const rows = filas.length > 1 ? [...filas, total] : filas;
-  const esTotal = (r: ProcesoRow) => r === total;
+  const rows = [...(filas.length > 1 || conCosecha ? [...filas, total] : filas), ...(conCosecha ? [conCosecha] : [])];
+  const esTotal = (r: ProcesoRow) => r === total || r === conCosecha;
   const fuerte = (r: ProcesoRow, x: ReactNode) => (esTotal(r) ? <span className="font-semibold text-ink">{x}</span> : x);
   return (
     <ChartCard title={titulo} note={`${nota} Evaluadas = aprobadas + rechazadas; % de aprobación = aprobadas ÷ evaluadas.`}>
