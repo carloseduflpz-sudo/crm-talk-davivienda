@@ -309,9 +309,23 @@ describe("pendientes por requisito: qué documento se pide", () => {
       { label: "DUI", clientes: 1 },
       { label: "Recibo de luz", clientes: 1 },
     ]);
+    // Desde cuándo: la primera sábana en que venía pendiente (cargada hoy → el último día de su mes, septiembre).
+    expect(r.clientes.find((c) => c.niu === "1")!.pendienteDesde).toBe("2026-09-30");
+    // Si una versión anterior (cargada el 10 de septiembre) ya lo traía pendiente, desde ese día.
+    await env.DB.prepare("UPDATE uploads SET created_at = ? WHERE dataset = 'upin:sabana' AND month = '2026-09'").bind(Date.UTC(2026, 8, 10, 15)).run();
+    await load("upin:sabana", "2026-09", [
+      { niu: "1", saleDate: "2026-09-02", executive: "Ana", statusRaw: "Pendiente por requisito", extra: { NOMBRE: "UNO", [R]: "DUI, Constancia de salario" } },
+      { niu: "2", saleDate: "2026-09-03", executive: "Luis", statusRaw: "PENDIENTE POR REQUISITO/VENCIDOS", extra: { NOMBRE: "DOS", [R]: "constancia de  salario" } },
+      { niu: "3", saleDate: "2026-08-28", executive: "Ana", statusRaw: "PENDIENTE POR REQUISITO", extra: { DOCUMENTACION: "Recibo de luz" } },
+      { niu: "4", saleDate: "2026-09-04", executive: "Ana", statusRaw: "APLICADO", extra: { [R]: "DUI" } },
+      { niu: "5", saleDate: "2026-09-20", executive: "Ana", statusRaw: "PENDIENTE POR REQUISITO", extra: { [R]: "DUI" } },
+    ]);
+    const r2 = ((await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!.requisitos!;
+    expect(r2.clientes.find((c) => c.niu === "1")!.pendienteDesde).toBe("2026-09-10");
+    expect(r2.clientes.find((c) => c.niu === "5")!.pendienteDesde).toBe("2026-09-30");
     // Por agente: solo los de Ana.
     const ana = (await call("GET", "/analisis/upin?mes=2026-09&agente=Ana")).data.analysis as CampaignAnalysis;
-    expect(ana.ventas!.requisitos!.clientes.map((c) => c.niu)).toEqual(["3", "1"]);
+    expect(ana.ventas!.requisitos!.clientes.map((c) => c.niu)).toEqual(["3", "1", "5"]);
   });
 });
 

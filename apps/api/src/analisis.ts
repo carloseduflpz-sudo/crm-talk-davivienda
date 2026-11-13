@@ -394,13 +394,34 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                       NULLIF(TRIM(json_extract(extra, '$."PENDIENTE POR REQUISITO"')), '') AS pend,
                       NULLIF(TRIM(json_extract(extra, '$.DOCUMENTACION')), '') AS doc,
                       NULLIF(TRIM(json_extract(extra, '$."MOTIVO DEVOLUCION/OBSERVACIONES EXTRARREQUISITO/COMENTARIO GENERAL"')), '') AS obs,
-                      CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen
+                      CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen,
+                      days_in_process AS dias_banco,
+                      /* Desde cuándo está pendiente: la primera sábana cargada (también versiones anteriores) donde esa
+                         misma venta (NIU y fecha) ya venía pendiente por requisito. Fecha de esa sábana = el día en que
+                         se cargó, o el último día de su mes si se cargó después (cargas atrasadas); nunca antes de la venta. */
+                      (SELECT MIN(MIN(date(u2.created_at / 1000 - 21600, 'unixepoch'), date(u2.month || '-01', '+1 month', '-1 day')))
+                         FROM bank_sales p JOIN uploads u2 ON u2.id = p.upload_id
+                        WHERE p.niu = bank_sales.niu AND COALESCE(p.sale_date, '') = COALESCE(bank_sales.sale_date, '')
+                          AND u2.campaign = ? AND u2.kind = 'sabana' AND u2.status IN ('vigente', 'reemplazada')
+                          AND p.status_raw LIKE '%PENDIENTE%REQUISITO%') AS visto
                  FROM bank_sales WHERE upload_id = ?${fs("")} AND status_raw LIKE '%PENDIENTE%REQUISITO%'
                 ORDER BY sale_date, niu LIMIT 3000`,
             )
-            .bind(month, id, ...fb),
+            .bind(month, campaign, id, ...fb),
         ]);
-        type Req = { niu: string; fecha: string | null; agente: string; estatus: string; nombre: string | null; pend: string | null; doc: string | null; obs: string | null; origen: "mes" | "cosecha" };
+        type Req = {
+          niu: string;
+          fecha: string | null;
+          agente: string;
+          estatus: string;
+          nombre: string | null;
+          pend: string | null;
+          doc: string | null;
+          obs: string | null;
+          origen: "mes" | "cosecha";
+          dias_banco: number | null;
+          visto: string | null;
+        };
         const pendientes = (req!.results as Req[]).map((r) => ({
           niu: r.niu,
           nombre: r.nombre,
@@ -411,6 +432,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           documentacion: r.doc,
           observacion: r.obs,
           origen: r.origen,
+          pendienteDesde: r.visto && r.fecha && /^\d{4}-\d{2}-\d{2}/.test(r.fecha) && r.fecha.slice(0, 10) > r.visto ? r.fecha.slice(0, 10) : r.visto,
+          diasBanco: r.dias_banco === null || r.dias_banco === undefined ? null : n(r.dias_banco),
         }));
         out.ventas.requisitos = pendientes.length ? { clientes: pendientes, porDocumento: contarDocumentos(pendientes.map((x) => x.documento)) } : null;
         const prevRows = cos!.results as { m: string; n: number; monto: number }[];

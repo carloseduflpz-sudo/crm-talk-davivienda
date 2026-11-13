@@ -115,6 +115,10 @@ export interface CampaignAnalysis {
         documentacion: string | null;
         observacion: string | null;
         origen: "mes" | "cosecha";
+        /** Primera sábana cargada en que ya venía pendiente por requisito (AAAA-MM-DD). Los días se cuentan hasta hoy. */
+        pendienteDesde: string | null;
+        /** "CONTADOR DIAS" de la sábana (días en proceso según el banco), si viene. */
+        diasBanco: number | null;
       }[];
     };
   };
