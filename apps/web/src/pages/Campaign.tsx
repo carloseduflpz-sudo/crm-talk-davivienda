@@ -3,7 +3,7 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary } from "@crm/core";
+import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type ProcesoRow } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -272,7 +272,14 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         </ChartCard>
       </Pair>
 
-      {v.porProceso.length > 1 && (
+      {v.procesos.actual.length > 0 && (
+        <TablaProcesos titulo="Proceso de las ventas del mes" nota={`Ventas con fecha de ${monthLabel(a.month!)} (o sin fecha), según el proceso en que va cada una en la sábana.`} filas={v.procesos.actual} money={money} open={open} />
+      )}
+      {v.procesos.cosecha.length > 0 && (
+        <TablaProcesos titulo="Proceso de la cosecha" nota="Ventas de meses anteriores que trae la sábana de este mes, según el proceso en que va cada una." filas={v.procesos.cosecha} money={money} open={open} />
+      )}
+
+      {v.porProceso.length > 1 && !v.procesos.actual.length && !v.procesos.cosecha.length && (
         <ChartCard title="Por proceso">
           <BarList rows={v.porProceso.map((x) => ({ label: x.label, value: x.value }))} total={v.total} onSelect={(r) => open({ fuente: "ventas", title: `Proceso ${r.label}`, filters: { proceso: r.label } })} />
         </ChartCard>
@@ -350,6 +357,54 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         </ChartCard>
       )}
     </Stack>
+  );
+}
+
+/** Cuántas ventas hay en cada proceso: evaluadas (aprobadas + rechazadas), pendientes y % de aprobación, con total. */
+function TablaProcesos({ titulo, nota, filas, money, open }: { titulo: string; nota: string; filas: ProcesoRow[]; money: boolean; open: Ctx["open"] }) {
+  const total: ProcesoRow = filas.reduce(
+    (t, f) => ({
+      proceso: "Total",
+      ventas: t.ventas + f.ventas,
+      aprobadas: t.aprobadas + f.aprobadas,
+      rechazadas: t.rechazadas + f.rechazadas,
+      pendientes: t.pendientes + f.pendientes,
+      monto: t.monto + f.monto,
+      montoAprobado: t.montoAprobado + f.montoAprobado,
+    }),
+    { proceso: "Total", ventas: 0, aprobadas: 0, rechazadas: 0, pendientes: 0, monto: 0, montoAprobado: 0 },
+  );
+  const rows = filas.length > 1 ? [...filas, total] : filas;
+  const esTotal = (r: ProcesoRow) => r === total;
+  const fuerte = (r: ProcesoRow, x: ReactNode) => (esTotal(r) ? <span className="font-semibold text-ink">{x}</span> : x);
+  return (
+    <ChartCard title={titulo} note={`${nota} Evaluadas = aprobadas + rechazadas; % de aprobación = aprobadas ÷ evaluadas.`}>
+      <DataTable
+        rows={rows}
+        onRowClick={(r) => (!esTotal(r) && r.proceso !== "Sin proceso" ? open({ fuente: "ventas", title: `Proceso ${r.proceso}`, filters: { proceso: r.proceso } }) : undefined)}
+        rowHint="Ver las ventas de este proceso"
+        cols={[
+          { key: "proceso", label: "Proceso", render: (r) => fuerte(r, r.proceso) },
+          { key: "ventas", label: "Ventas", align: "right", render: (r) => fuerte(r, fmtInt.format(r.ventas)) },
+          { key: "evaluadas", label: "Evaluadas", align: "right", render: (r) => fuerte(r, fmtInt.format(r.aprobadas + r.rechazadas)) },
+          { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fuerte(r, fmtInt.format(r.aprobadas)) },
+          { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fuerte(r, fmtInt.format(r.rechazadas)) },
+          { key: "pendientes", label: "Pendientes", align: "right", render: (r) => fuerte(r, fmtInt.format(r.pendientes)) },
+          ...(money
+            ? [
+                { key: "monto", label: "Monto", align: "right" as const, render: (r: ProcesoRow) => fuerte(r, fmtMoney(r.monto)) },
+                { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: ProcesoRow) => fuerte(r, fmtMoney(r.montoAprobado)) },
+              ]
+            : []),
+          {
+            key: "aprobacion",
+            label: "% Aprobación",
+            align: "right",
+            render: (r) => fuerte(r, r.aprobadas + r.rechazadas ? fmtPct(share(r.aprobadas, r.aprobadas + r.rechazadas)) : "—"),
+          },
+        ]}
+      />
+    </ChartCard>
   );
 }
 

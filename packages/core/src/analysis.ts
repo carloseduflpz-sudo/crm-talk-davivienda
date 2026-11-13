@@ -17,6 +17,17 @@ export interface SalesAgentRow {
   montoAprobado: number;
 }
 
+/** Ventas en un proceso del banco: evaluadas = aprobadas + rechazadas; pendientes = siguen en proceso. */
+export interface ProcesoRow {
+  proceso: string;
+  ventas: number;
+  aprobadas: number;
+  rechazadas: number;
+  pendientes: number;
+  monto: number;
+  montoAprobado: number;
+}
+
 export interface MonthlySalesRow {
   month: string;
   ventas: number;
@@ -88,6 +99,8 @@ export interface CampaignAnalysis {
     mensual: MonthlySalesRow[];
     /** Cosecha: ventas de meses anteriores que trae la sábana de este mes (por fecha de venta). */
     cosecha: { total: number; monto: number; porMes: { month: string; ventas: number; monto: number }[] };
+    /** En qué proceso va cada venta, por separado las del mes (actual) y las de meses anteriores (cosecha). */
+    procesos: { actual: ProcesoRow[]; cosecha: ProcesoRow[] };
   };
 
   base: null | {

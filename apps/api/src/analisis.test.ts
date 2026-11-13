@@ -288,6 +288,17 @@ describe("detalle de clientes", () => {
   });
 });
 
+describe("proceso de las ventas (del mes y cosecha por separado)", () => {
+  it("suma lo mismo que la sábana; evaluadas + pendientes = ventas", () => {
+    const todas = [...a.ventas!.procesos.actual, ...a.ventas!.procesos.cosecha];
+    expect(todas.reduce((t, r) => t + r.ventas, 0)).toBe(a.ventas!.total);
+    expect(todas.reduce((t, r) => t + r.aprobadas, 0)).toBe(a.ventas!.aprobadas);
+    for (const r of todas) expect(r.aprobadas + r.rechazadas + r.pendientes).toBe(r.ventas);
+    // Toda la sábana de septiembre es del mes: no hay cosecha.
+    expect(a.ventas!.procesos.cosecha).toEqual([]);
+  });
+});
+
 describe("rango de días del mes (comparar meses al mismo corte)", () => {
   const get = async (q: string) => {
     const r = await call("GET", `/analisis/tdc?mes=2026-09${q}`);

@@ -336,21 +336,41 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           montoAprobado: n(r.monto_aprobado),
         })),
         cosecha: { total: 0, monto: 0, porMes: [] },
+        procesos: { actual: [], cosecha: [] },
       };
       // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
       if (month) {
-        const { results: prevRows } = await db
-          .prepare(
-            `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
-              WHERE upload_id = ?${fs("")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
-          )
-          .bind(id, ...fb, month)
-          .all<{ m: string; n: number; monto: number }>();
+        const [cos, proc] = await db.batch([
+          db
+            .prepare(
+              `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
+                WHERE upload_id = ?${fs("")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
+            )
+            .bind(id, ...fb, month),
+          /* En qué proceso va cada venta: del mes (fecha del mes o sin fecha) y de la cosecha (fecha de un mes
+             anterior), por separado. Evaluadas = aprobadas + rechazadas; pendientes = las que siguen en proceso. */
+          db
+            .prepare(
+              `SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'actual' ELSE 'cosecha' END AS origen,
+                      COALESCE(NULLIF(TRIM(process), ''), 'Sin proceso') AS proceso, COUNT(*) AS n,
+                      SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'en_proceso') AS ep,
+                      COALESCE(SUM(amount), 0) AS m, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS ma
+                 FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2 ORDER BY n DESC`,
+            )
+            .bind(month, id, ...fb),
+        ]);
+        const prevRows = cos!.results as { m: string; n: number; monto: number }[];
         out.ventas.cosecha = {
           total: prevRows.reduce((t, r) => t + n(r.n), 0),
           monto: prevRows.reduce((t, r) => t + n(r.monto), 0),
           porMes: prevRows.map((r) => ({ month: r.m, ventas: n(r.n), monto: n(r.monto) })),
         };
+        type P = { origen: string; proceso: string; n: number; ap: number; re: number; ep: number; m: number; ma: number };
+        const filas = (origen: string) =>
+          (proc!.results as P[])
+            .filter((r) => r.origen === origen)
+            .map((r) => ({ proceso: r.proceso, ventas: n(r.n), aprobadas: n(r.ap), rechazadas: n(r.re), pendientes: n(r.ep), monto: n(r.m), montoAprobado: n(r.ma) }));
+        out.ventas.procesos = { actual: filas("actual"), cosecha: filas("cosecha") };
       }
     }
 
