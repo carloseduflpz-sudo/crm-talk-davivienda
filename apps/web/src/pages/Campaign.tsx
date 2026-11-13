@@ -38,10 +38,11 @@ import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { consultaAnalisis, consultaHistorico, mesAnterior, type Dias } from "../lib/consultas";
+import { downloadWorkbook } from "../lib/export";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
-  { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Evaluadas, aprobadas, rechazadas y pendientes por etapa y subetapa." },
+  { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Evaluadas, pendientes, estatus del banco, rechazo por motivo, ejecutivos y comparativo mensual." },
   { slug: "base", label: "Base", icon: Database, needs: "base", about: "Clientes de la base, perfiles y penetración contra la sábana." },
   { slug: "efectividad", label: "Efectividad", icon: BarChart3, needs: "tipif", about: "Contactabilidad, registros y penetración, general y por agente." },
   { slug: "llamadas", label: "Llamadas", icon: PhoneCall, needs: "tipif", about: "Tipificaciones, intentos por cliente y ventas capturadas en el CRM." },
@@ -50,6 +51,8 @@ export const CAMPAIGN_TABS = [
   { slug: "comparativo", label: "Comparativo", icon: Columns2, needs: "sabana", about: "Mes contra mes al mismo corte de días." },
 ] as const;
 
+const SALE_COLORS = { aprobado: "var(--st-good)", en_proceso: "var(--st-warning)", rechazado: "var(--st-critical)" } as Record<string, string>;
+const SALE_LABEL = { aprobado: "Aprobadas", en_proceso: "Pendientes", rechazado: "Rechazadas" } as Record<string, string>;
 const CALL_ORDER = ["venta", "negativo", "no_efectivo", "no_contacto", "sin_tipificar"] as const;
 const CALL_COLORS: Record<string, string> = {
   venta: "var(--viz-1)",
@@ -125,7 +128,7 @@ function compareOf<T extends { date: string }>(prev: CampaignAnalysis | undefine
 
 /* ---------- Ventas ---------- */
 
-function VentasTab({ a, prev, open, desglosar }: Ctx) {
+function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
   const v = a.ventas;
   if (!v) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={TrendingUp} />;
   const p = prev?.ventas;
@@ -144,7 +147,37 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   // Evaluadas (ya resueltas: en TC, ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre las evaluadas.
   const ev = evaluacionDe(a.campaign);
+  const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
+    key: k,
+    label: k === "en_proceso" ? "Pendientes" : SALE_LABEL[k]!,
+    value: money
+      ? k === "aprobado"
+        ? v.monto.aprobado
+        : k === "rechazado"
+          ? v.monto.rechazado
+          : v.monto.enProceso
+      : k === "aprobado"
+        ? v.aprobadas
+        : k === "rechazado"
+          ? v.rechazadas
+          : v.enProceso,
+    color: SALE_COLORS[k]!,
+  }));
   const ventasN = (n: number) => `${fmtInt.format(n)} ${n === 1 ? "venta" : "ventas"}`;
+  // Cifra del comparativo mensual: clic abre su desglose (sin cambiar de mes; clic en el resto de la fila sí cambia).
+  const cifraMes = (n: number, mes: string, titulo: string, clases: SaleClass[] | null) => (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        desglosar(titulo, clases, mes);
+      }}
+      title="Ver el desglose por etapa y estatus"
+      className="tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600"
+    >
+      {fmtInt.format(n)}
+    </button>
+  );
   const etapasDe = (clases: SaleClass[]) => (v.pcbm?.etapas ?? []).filter((e) => clases.includes(e.clase));
   return (
     <Stack>
@@ -213,7 +246,11 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
             delta: deltaOf(share(v.rechazadas, v.aprobadas + v.rechazadas), p ? share(p.rechazadas, p.aprobadas + p.rechazadas) : undefined, vs, { rate: true, upIsGood: false }),
           },
         ]}
-      />
+      >
+        <ShareBar parts={parts} format={money ? fmtMoney : intOf} label={money ? "Monto por estatus del banco" : "Ventas por estatus del banco"} />
+      </FigureStrip>
+
+      {v.pcbm && a.campaign === "tdc" && <EvaluacionPcbm p={v.pcbm} desglosar={desglosar} />}
 
       <ChartCard title={ev.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note="Aprobadas y rechazadas, por etapa y subetapa">
         <TablaDesglose etapas={etapasDe(["aprobado", "rechazado"])} vacio="Sin ventas evaluadas." />
@@ -222,7 +259,366 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
       <ChartCard title={ev.cosa === "TC" ? "Pendientes de PCBM" : "Pendientes"} note="Por etapa y subetapa">
         <TablaDesglose etapas={etapasDe(["en_proceso"])} vacio="Sin ventas pendientes." />
       </ChartCard>
+
+      <ChartCard
+        title={money ? "Monto por día" : "Ventas por día"}
+        note={cosechaTxt ? "Por fecha de venta, sin cosecha" : "Por fecha de venta"}
+      >
+        <AreaChart
+          seriesLabel={money ? "Monto" : "Ventas"}
+          unit={money ? "monto" : "ventas"}
+          format={money ? fmtMoney : undefined}
+          tickPrefix={money ? "$" : ""}
+          compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
+          data={days.map((d) => ({
+            key: d.date,
+            day: dayNum(d.date),
+            label: String(dayNum(d.date)),
+            title: dayLabel(d.date),
+            value: money ? d.monto : d.ventas,
+            extra: money
+              ? [
+                  { label: "aprobado", value: fmtMoney(d.montoAprobado) },
+                  { label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) },
+                ]
+              : [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }],
+          }))}
+          onOpenDay={(d) => open({ fuente: "ventas", title: `Ventas del ${d.title}`, filters: { dia: d.key } })}
+          onOpenRange={(f, t) => open({ fuente: "ventas", title: `Ventas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
+        />
+      </ChartCard>
+
+      <Pair>
+        <ChartCard title="Estatus del banco" note="Según la sábana del banco">
+          <BarList
+            rows={v.porEstatus.map((s) =>
+              money
+                ? { label: s.label, value: s.monto, display: fmtMoney(s.monto), note: ventasN(s.value), color: SALE_COLORS[s.class] }
+                : { label: s.label, value: s.value, color: SALE_COLORS[s.class] },
+            )}
+            total={money ? v.monto.total : v.total}
+            onSelect={(r) => open({ fuente: "ventas", title: `Estatus ${lower(r.label)}`, filters: { estatus: r.label } })}
+          />
+        </ChartCard>
+        <ChartCard title="Motivos de rechazo" note={`${fmtInt.format(v.rechazadas)} ventas rechazadas`}>
+          <BarList
+            rows={v.rechazoPorMotivo.map((m) =>
+              money ? { label: m.label, value: m.monto, display: fmtMoney(m.monto), note: ventasN(m.value), color: "var(--st-critical)" } : { label: m.label, value: m.value, color: "var(--st-critical)" },
+            )}
+            total={money ? v.monto.rechazado : v.rechazadas}
+            onSelect={(r) => open({ fuente: "ventas", title: `Rechazadas por ${lower(r.label)}`, filters: { motivo: r.label } })}
+          />
+        </ChartCard>
+      </Pair>
+
+      {v.requisitos && <PendientesRequisito r={v.requisitos} campana={a.campaign} mes={a.month!} />}
+
+      {v.porProceso.length > 1 && !v.procesos.actual.length && !v.procesos.cosecha.length && (
+        <ChartCard title="Por proceso">
+          <BarList rows={v.porProceso.map((x) => ({ label: x.label, value: x.value }))} total={v.total} onSelect={(r) => open({ fuente: "ventas", title: `Proceso ${r.label}`, filters: { proceso: r.label } })} />
+        </ChartCard>
+      )}
+
+      <ChartCard title="Ejecutivos" note={a.agente ? `Solo ${a.agente}` : undefined}>
+        <DataTable
+          rows={v.porEjecutivo}
+          initialSort="ventas"
+          onRowClick={(r) => setAgent(a.agente === r.agent ? null : r.agent)}
+          rowHint="Filtrar la campaña por este ejecutivo"
+          isActive={(r) => r.agent === a.agente}
+          cols={[
+            { key: "agent", label: "Ejecutivo", render: (r) => r.agent, sort: (r) => r.agent },
+            { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
+            { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas), sort: (r) => r.aprobadas },
+            { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas), sort: (r) => r.rechazadas },
+            ...(money
+              ? [
+                  { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.monto), sort: (r: (typeof v.porEjecutivo)[number]) => r.monto },
+                  { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.montoAprobado), sort: (r: (typeof v.porEjecutivo)[number]) => r.montoAprobado },
+                ]
+              : []),
+            { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => <PctCell value={r.aprobacion} />, sort: (r) => r.aprobacion },
+          ]}
+        />
+      </ChartCard>
+
+      {v.mensual.length > 1 && (
+        <ChartCard title="Comparativo mensual" note="Sábana vigente de cada mes">
+          <Columns
+            legend
+            active={a.month}
+            onSelect={(d) => setMonth(d.key)}
+            selectHint="Clic para ver este mes"
+            data={v.mensual.map((m) => ({
+              key: m.month,
+              label: monthShort(m.month),
+              title: monthLabel(m.month),
+              parts: [
+                { label: "Aprobadas", value: m.aprobadas, color: SALE_COLORS.aprobado! },
+                { label: "Pendientes", value: m.enProceso, color: SALE_COLORS.en_proceso! },
+                { label: "Rechazadas", value: m.rechazadas, color: SALE_COLORS.rechazado! },
+              ],
+              extra: [
+                { label: "evaluadas", value: fmtInt.format(m.aprobadas + m.rechazadas) },
+                { label: "aprobación", value: fmtPct(m.aprobacion) },
+                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.aprobadas + m.rechazadas)) },
+              ],
+            }))}
+          />
+          <div className="mt-10">
+            <DataTable
+              rows={[...v.mensual].reverse()}
+              onRowClick={(r) => setMonth(r.month)}
+              rowHint="Ver este mes"
+              isActive={(r) => r.month === a.month}
+              cols={[
+                { key: "month", label: "Mes", render: (r) => <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span> },
+                // Igual que arriba: ventas → evaluadas → aprobadas → rechazadas → pendientes → % sobre evaluadas.
+                // Clic en una cifra: su desglose por etapa y estatus (del mes, cosecha y total) de ese mes.
+                { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas) },
+                { key: "evaluadas", label: "Evaluadas", align: "right", render: (r) => cifraMes(r.aprobadas + r.rechazadas, r.month, `${ev.cosa} evaluadas`, ["aprobado", "rechazado"]) },
+                { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas) },
+                { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas) },
+                { key: "enProceso", label: "Pendientes", align: "right", render: (r) => cifraMes(r.enProceso, r.month, `${ev.cosa} pendientes`, ["en_proceso"]) },
+                ...(money
+                  ? [
+                      { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.monto) },
+                      { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.montoAprobado) },
+                    ]
+                  : []),
+                { key: "aprobacion", label: "% Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
+                // % de rechazo sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
+                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) },
+              ]}
+            />
+          </div>
+        </ChartCard>
+      )}
     </Stack>
+  );
+}
+
+/** Evaluación PCBM (TDC): del mes, cosecha y total; % sobre evaluadas. */
+function EvaluacionPcbm({ p, desglosar }: { p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>; desglosar: Ctx["desglosar"] }) {
+  const filas = [
+    { nombre: "Del mes", f: p.mes },
+    { nombre: "Cosecha", f: p.cosecha },
+    { nombre: "Total", f: p.total, total: true },
+  ].filter((x) => x.total || x.f.ventas > 0);
+  type F = (typeof filas)[number];
+  const b = (x: F, v: ReactNode) => (x.total ? <span className="font-semibold text-ink">{v}</span> : v);
+  // Solo evaluadas y pendientes abren su desglose por etapa.
+  const cifra = (x: F, n: number, titulo: string, clases: SaleClass[]) =>
+    n > 0 ? (
+      <button type="button" onClick={() => desglosar(titulo, clases)} title="Ver desglose" className={`tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600 ${x.total ? "font-semibold text-ink" : ""}`}>
+        {fmtInt.format(n)}
+      </button>
+    ) : (
+      b(x, "0")
+    );
+  return (
+    <ChartCard title="Evaluación PCBM" note="% Aprobación y % Rechazo sobre evaluadas">
+      <DataTable
+        rows={filas}
+        cols={[
+          { key: "nombre", label: "", render: (x: F) => b(x, x.nombre) },
+          { key: "ventas", label: "Ventas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.ventas)) },
+          { key: "evaluadas", label: "Evaluadas", align: "right", render: (x: F) => cifra(x, x.f.evaluadas, "TC evaluadas", ["aprobado", "rechazado"]) },
+          { key: "aprobadas", label: "Aprobadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.aprobadas)) },
+          { key: "rechazadas", label: "Rechazadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.rechazadas)) },
+          { key: "aprobacion", label: "% Aprobación", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.aprobacion) : "—") },
+          { key: "rechazo", label: "% Rechazo", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.rechazo) : "—") },
+          { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => cifra(x, x.f.pendientes, "TC pendientes", ["en_proceso"]) },
+        ]}
+      />
+      <p className="mt-3 text-[13px] text-ink-soft">
+        Cuadre: {fmtInt.format(p.total.aprobadas)} aprobadas + {fmtInt.format(p.total.rechazadas)} rechazadas = {fmtInt.format(p.total.evaluadas)} evaluadas; + {fmtInt.format(p.total.pendientes)} pendientes ={" "}
+        {fmtInt.format(p.total.ventas)} ventas.
+      </p>
+    </ChartCard>
+  );
+}
+
+/** Pendientes por requisito: qué documento se le está pidiendo a cada cliente, con la lista para descargar. */
+function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>; campana: string; mes: string }) {
+  // La lista de clientes va aparte (panel lateral); aquí solo las cantidades.
+  const [lista, setLista] = useState<{ titulo: string; filtro: (c: (typeof r.clientes)[number]) => boolean } | null>(null);
+  // Días pendiente: desde la primera sábana en que ya venía pendiente por requisito hasta hoy.
+  const hoy = new Date();
+  const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const dias = (iso: string | null) => (iso ? Math.max(0, Math.round((hoyUTC - Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)))) / 86_400_000)) : null);
+  const total = r.clientes.length;
+  const cosecha = r.clientes.filter((c) => c.origen === "cosecha").length;
+  const conDias = r.clientes.map((c) => dias(c.pendienteDesde)).filter((d): d is number => d !== null);
+  const promedio = conDias.length ? conDias.reduce((t, d) => t + d, 0) / conDias.length : null;
+  const TRAMOS = [
+    { label: "0 a 7 días", de: 0, a: 7 },
+    { label: "8 a 15 días", de: 8, a: 15 },
+    { label: "16 a 30 días", de: 16, a: 30 },
+    { label: "Más de 30 días", de: 31, a: Infinity },
+  ];
+  const enTramo = (t: (typeof TRAMOS)[number]) => (c: (typeof r.clientes)[number]) => {
+    const d = dias(c.pendienteDesde);
+    return d !== null && d >= t.de && d <= t.a;
+  };
+  const mas15 = r.clientes.filter((c) => (dias(c.pendienteDesde) ?? 0) > 15).length;
+
+  const columnas = [
+    { key: "niu", label: "NIU" },
+    { key: "nombre", label: "Cliente" },
+    { key: "agente", label: "Ejecutivo" },
+    { key: "fecha", label: "Fecha de venta" },
+    { key: "estatus", label: "Estatus" },
+    { key: "pendienteDesde", label: "Pendiente desde" },
+    { key: "dias", label: "Días pendiente" },
+    { key: "diasBanco", label: "Días en proceso (banco)" },
+    { key: "grupo", label: "Documentos (unificado)" },
+    { key: "documento", label: "Documento pedido (como viene)" },
+    { key: "documentacion", label: "Documentación" },
+    { key: "observacion", label: "Observación" },
+    { key: "origen", label: "Venta" },
+  ];
+  const descargar = (filas: typeof r.clientes) =>
+    void downloadWorkbook(`Pendientes por requisito ${campana.toUpperCase()} ${mes}.xlsx`, [
+      { name: "Pendientes", columns: columnas, rows: filas.map((c) => ({ ...c, dias: dias(c.pendienteDesde), origen: c.origen === "mes" ? "Del mes" : "Cosecha" })) },
+      {
+        name: "Por documento",
+        columns: [
+          { key: "label", label: "Documentos" },
+          { key: "clientes", label: "Ventas pendientes" },
+        ],
+        rows: [...r.porDocumento, { label: "Total", clientes: total }],
+      },
+    ]);
+  const kpis = [
+    { label: "Pendientes por requisito", v: fmtInt.format(total), foot: `${fmtInt.format(total - cosecha)} del mes · ${fmtInt.format(cosecha)} de cosecha` },
+    { label: "Promedio de días pendiente", v: promedio === null ? "—" : fmtNum(promedio, 1), foot: "desde la primera sábana con este estatus" },
+    { label: "Más de 15 días", v: fmtInt.format(mas15), foot: `${fmtPct(share(mas15, total))} de los pendientes`, alerta: mas15 > 0 },
+  ];
+  return (
+    <ChartCard
+      title="Pendientes por requisito"
+      note="Subetapa Pendiente por requisito: documento solicitado y días pendiente"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setLista({ titulo: "Todos los pendientes por requisito", filtro: () => true })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+            Ver lista de clientes
+          </button>
+          <button type="button" onClick={() => descargar(r.clientes)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+            Descargar
+          </button>
+        </div>
+      }
+    >
+      <div className="mb-8 grid gap-4 sm:grid-cols-3">
+        {kpis.map((k) => (
+          <div key={k.label} className="rounded-xl border border-hair px-4 py-3">
+            <p className="text-[12.5px] text-ink-soft">{k.label}</p>
+            <p className={`mt-0.5 text-[26px] font-semibold tabular-nums ${k.alerta ? "text-[var(--st-critical)]" : "text-ink"}`}>{k.v}</p>
+            <p className="text-[12px] text-ink-soft">{k.foot}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-10 xl:grid-cols-2">
+        <div>
+          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Qué documento se pide</h3>
+          <BarList
+            rows={r.porDocumento.map((d) => ({ label: d.label, value: d.clientes }))}
+            total={total}
+            onSelect={(x) => setLista({ titulo: `Deben: ${x.label}`, filtro: (c) => c.grupo === x.label })}
+            selectHint="Ver estos clientes"
+          />
+        </div>
+        <div>
+          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Cuánto tiempo llevan pendientes</h3>
+          <BarList
+            rows={TRAMOS.map((t) => ({
+              label: t.label,
+              value: r.clientes.filter(enTramo(t)).length,
+              color: t.de > 15 ? "var(--st-critical)" : t.de > 7 ? "var(--st-warning)" : "var(--st-good)",
+            }))}
+            total={total}
+            onSelect={(x) => {
+              const t = TRAMOS.find((y) => y.label === x.label)!;
+              setLista({ titulo: `Pendientes ${t.label.toLowerCase()}`, filtro: enTramo(t) });
+            }}
+            selectHint="Ver estos clientes"
+          />
+        </div>
+      </div>
+      {lista && <ListaPendientes titulo={lista.titulo} filas={r.clientes.filter(lista.filtro)} dias={dias} onClose={() => setLista(null)} onDescargar={descargar} />}
+    </ChartCard>
+  );
+}
+
+/** Lista de clientes pendientes por requisito, en un panel lateral (para no saturar la pantalla). */
+function ListaPendientes({
+  titulo,
+  filas,
+  dias,
+  onClose,
+  onDescargar,
+}: {
+  titulo: string;
+  filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"];
+  dias: (iso: string | null) => number | null;
+  onClose: () => void;
+  onDescargar: (filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"]) => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={titulo}>
+      <div className="fade-in absolute inset-0 bg-[#0e1b3d]/20 backdrop-blur-[2px] dark:bg-black/50" onClick={onClose} aria-hidden />
+      <div className="drawer-in absolute inset-y-0 right-0 flex w-full max-w-[920px] flex-col border-l border-hair bg-white shadow-[-24px_0_48px_rgba(14,27,61,0.10)] dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-hair px-6 pt-6 pb-5">
+          <div className="min-w-0">
+            <h2 className="text-[20px] leading-tight font-semibold text-ink">{titulo}</h2>
+            <p className="mt-1 text-[13px] text-ink-soft">
+              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta" : "ventas"} · ordenadas por días pendiente
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => onDescargar(filas)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+              Descargar
+            </button>
+            <button type="button" onClick={onClose} className="rounded-full p-2 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800" aria-label="Cerrar">
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto px-6 pb-6">
+          <DataTable
+            rows={filas}
+            maxRows={5000}
+            cols={[
+              { key: "niu", label: "NIU", render: (c) => c.niu },
+              { key: "nombre", label: "Cliente", render: (c) => <span title={`${c.agente} · venta ${c.fecha ?? "sin fecha"}${c.origen === "cosecha" ? " (cosecha)" : ""}`}>{c.nombre ?? "—"}</span> },
+              {
+                key: "dias",
+                label: "Días",
+                align: "right",
+                render: (c) => {
+                  const d = dias(c.pendienteDesde);
+                  return d === null ? "—" : <span className={d > 15 ? "font-semibold text-[var(--st-critical)]" : d > 7 ? "font-medium text-amber-700 dark:text-amber-300" : ""}>{fmtInt.format(d)}</span>;
+                },
+                sort: (c) => dias(c.pendienteDesde) ?? -1,
+              },
+              { key: "grupo", label: "Documentos que debe", render: (c) => c.grupo, sort: (c) => c.grupo },
+            ]}
+            initialSort="dias"
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
