@@ -518,12 +518,28 @@ function EvaluacionPcbm({
 
 /** Pendientes por requisito: qué documento se le está pidiendo a cada cliente, con la lista para descargar. */
 function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>; campana: string; mes: string }) {
-  const [doc, setDoc] = useState<string | null>(null);
+  // La lista de clientes va aparte (panel lateral); aquí solo las cantidades.
+  const [lista, setLista] = useState<{ titulo: string; filtro: (c: (typeof r.clientes)[number]) => boolean } | null>(null);
   // Días pendiente: desde la primera sábana en que ya venía pendiente por requisito hasta hoy.
   const hoy = new Date();
   const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
   const dias = (iso: string | null) => (iso ? Math.max(0, Math.round((hoyUTC - Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)))) / 86_400_000)) : null);
-  const filas = doc ? r.clientes.filter((c) => c.grupo === doc) : r.clientes;
+  const total = r.clientes.length;
+  const cosecha = r.clientes.filter((c) => c.origen === "cosecha").length;
+  const conDias = r.clientes.map((c) => dias(c.pendienteDesde)).filter((d): d is number => d !== null);
+  const promedio = conDias.length ? conDias.reduce((t, d) => t + d, 0) / conDias.length : null;
+  const TRAMOS = [
+    { label: "0 a 7 días", de: 0, a: 7 },
+    { label: "8 a 15 días", de: 8, a: 15 },
+    { label: "16 a 30 días", de: 16, a: 30 },
+    { label: "Más de 30 días", de: 31, a: Infinity },
+  ];
+  const enTramo = (t: (typeof TRAMOS)[number]) => (c: (typeof r.clientes)[number]) => {
+    const d = dias(c.pendienteDesde);
+    return d !== null && d >= t.de && d <= t.a;
+  };
+  const mas15 = r.clientes.filter((c) => (dias(c.pendienteDesde) ?? 0) > 15).length;
+
   const columnas = [
     { key: "niu", label: "NIU" },
     { key: "nombre", label: "Cliente" },
@@ -539,7 +555,7 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
     { key: "observacion", label: "Observación" },
     { key: "origen", label: "Venta" },
   ];
-  const descargar = () =>
+  const descargar = (filas: typeof r.clientes) =>
     void downloadWorkbook(`Pendientes por requisito ${campana.toUpperCase()} ${mes}.xlsx`, [
       { name: "Pendientes", columns: columnas, rows: filas.map((c) => ({ ...c, dias: dias(c.pendienteDesde), origen: c.origen === "mes" ? "Del mes" : "Cosecha" })) },
       {
@@ -548,60 +564,138 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
           { key: "label", label: "Documentos" },
           { key: "clientes", label: "Ventas pendientes" },
         ],
-        rows: [...r.porDocumento, { label: "Total", clientes: r.clientes.length }],
+        rows: [...r.porDocumento, { label: "Total", clientes: total }],
       },
     ]);
+  const kpis = [
+    { label: "Pendientes por requisito", v: fmtInt.format(total), foot: `${fmtInt.format(total - cosecha)} del mes · ${fmtInt.format(cosecha)} de cosecha` },
+    { label: "Promedio de días pendiente", v: promedio === null ? "—" : fmtNum(promedio, 1), foot: "desde la primera sábana en que venía pendiente" },
+    { label: "Más de 15 días", v: fmtInt.format(mas15), foot: `${fmtPct(share(mas15, total))} de los pendientes`, alerta: mas15 > 0 },
+  ];
   return (
     <ChartCard
-      title="Pendientes por requisito: qué documento se pide"
-      note={`${fmtInt.format(r.clientes.length)} ${r.clientes.length === 1 ? "venta pendiente" : "ventas pendientes"} por requisito en la sábana (del mes y de la cosecha). Cada una cuenta una sola vez, en la combinación de documentos que debe (por ejemplo, "Boleta + Recibo"): la suma da el total. Clic en un grupo para ver solo esos clientes. "Pendiente desde" es la primera sábana cargada en que ya venía pendiente; los días se cuentan hasta hoy.`}
+      title="Pendientes por requisito"
+      note="Cuántas ventas esperan documentos, qué se les pide y cuánto tiempo llevan. Cada venta cuenta una sola vez, en la combinación de documentos que debe (por ejemplo, Boleta + Recibo). Clic en una barra para ver esos clientes."
       actions={
-        <button type="button" onClick={descargar} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
-          Descargar {doc ? "estos clientes" : "la lista"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setLista({ titulo: "Todos los pendientes por requisito", filtro: () => true })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+            Ver lista de clientes
+          </button>
+          <button type="button" onClick={() => descargar(r.clientes)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+            Descargar
+          </button>
+        </div>
       }
     >
-      <BarList
-        rows={r.porDocumento.map((d) => ({ label: d.label, value: d.clientes }))}
-        total={r.clientes.length}
-        onSelect={(x) => setDoc(doc === x.label ? null : x.label)}
-        selectHint="Ver solo estos clientes"
-        active={doc ?? undefined}
-      />
-      <div className="mt-8">
-        {doc && (
-          <p className="mb-3 text-[13px] text-ink-soft">
-            Clientes que deben <span className="font-medium text-ink">{doc}</span> ·{" "}
-            <button type="button" onClick={() => setDoc(null)} className="font-medium text-brand-600 hover:underline">
-              ver todos
-            </button>
-          </p>
-        )}
-        <DataTable
-          rows={filas}
-          cols={[
-            { key: "niu", label: "NIU", render: (c) => c.niu },
-            { key: "nombre", label: "Cliente", render: (c) => c.nombre ?? "—" },
-            { key: "agente", label: "Ejecutivo", render: (c) => c.agente },
-            { key: "fecha", label: "Venta", render: (c) => `${c.fecha ?? "—"}${c.origen === "cosecha" ? " (cosecha)" : ""}`, sort: (c) => c.fecha ?? "" },
-            { key: "pendienteDesde", label: "Pendiente desde", render: (c) => c.pendienteDesde ?? "—", sort: (c) => c.pendienteDesde ?? "" },
-            {
-              key: "dias",
-              label: "Días",
-              align: "right",
-              render: (c) => {
-                const d = dias(c.pendienteDesde);
-                return d === null ? "—" : <span className={d >= 15 ? "font-semibold text-[var(--st-critical)]" : d >= 7 ? "font-medium text-amber-700 dark:text-amber-300" : ""} title={c.diasBanco !== null ? `Según el banco: ${c.diasBanco} días en proceso` : undefined}>{fmtInt.format(d)}</span>;
-              },
-              sort: (c) => dias(c.pendienteDesde) ?? -1,
-            },
-            { key: "grupo", label: "Documentos que debe", render: (c) => <span title={c.documento ? `En la sábana: ${c.documento}` : undefined}>{c.grupo}</span>, sort: (c) => c.grupo },
-            { key: "observacion", label: "Observación", render: (c) => c.observacion ?? "—" },
-          ]}
-          initialSort="dias"
-        />
+      <div className="mb-8 grid gap-4 sm:grid-cols-3">
+        {kpis.map((k) => (
+          <div key={k.label} className="rounded-xl border border-hair px-4 py-3">
+            <p className="text-[12.5px] text-ink-soft">{k.label}</p>
+            <p className={`mt-0.5 text-[26px] font-semibold tabular-nums ${k.alerta ? "text-[var(--st-critical)]" : "text-ink"}`}>{k.v}</p>
+            <p className="text-[12px] text-ink-soft">{k.foot}</p>
+          </div>
+        ))}
       </div>
+      <div className="grid gap-10 xl:grid-cols-2">
+        <div>
+          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Qué documento se pide</h3>
+          <BarList
+            rows={r.porDocumento.map((d) => ({ label: d.label, value: d.clientes }))}
+            total={total}
+            onSelect={(x) => setLista({ titulo: `Deben: ${x.label}`, filtro: (c) => c.grupo === x.label })}
+            selectHint="Ver estos clientes"
+          />
+        </div>
+        <div>
+          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Cuánto tiempo llevan pendientes</h3>
+          <BarList
+            rows={TRAMOS.map((t) => ({
+              label: t.label,
+              value: r.clientes.filter(enTramo(t)).length,
+              color: t.de > 15 ? "var(--st-critical)" : t.de > 7 ? "var(--st-warning)" : "var(--st-good)",
+            }))}
+            total={total}
+            onSelect={(x) => {
+              const t = TRAMOS.find((y) => y.label === x.label)!;
+              setLista({ titulo: `Pendientes ${t.label.toLowerCase()}`, filtro: enTramo(t) });
+            }}
+            selectHint="Ver estos clientes"
+          />
+        </div>
+      </div>
+      {lista && <ListaPendientes titulo={lista.titulo} filas={r.clientes.filter(lista.filtro)} dias={dias} onClose={() => setLista(null)} onDescargar={descargar} />}
     </ChartCard>
+  );
+}
+
+/** Lista de clientes pendientes por requisito, en un panel lateral (para no saturar la pantalla). */
+function ListaPendientes({
+  titulo,
+  filas,
+  dias,
+  onClose,
+  onDescargar,
+}: {
+  titulo: string;
+  filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"];
+  dias: (iso: string | null) => number | null;
+  onClose: () => void;
+  onDescargar: (filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"]) => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={titulo}>
+      <div className="fade-in absolute inset-0 bg-[#0e1b3d]/20 backdrop-blur-[2px] dark:bg-black/50" onClick={onClose} aria-hidden />
+      <div className="drawer-in absolute inset-y-0 right-0 flex w-full max-w-[920px] flex-col border-l border-hair bg-white shadow-[-24px_0_48px_rgba(14,27,61,0.10)] dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-hair px-6 pt-6 pb-5">
+          <div className="min-w-0">
+            <h2 className="text-[20px] leading-tight font-semibold text-ink">{titulo}</h2>
+            <p className="mt-1 text-[13px] text-ink-soft">
+              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta" : "ventas"} · ordenadas por días pendiente
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => onDescargar(filas)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+              Descargar
+            </button>
+            <button type="button" onClick={onClose} className="rounded-full p-2 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800" aria-label="Cerrar">
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto px-6 pb-6">
+          <DataTable
+            rows={filas}
+            maxRows={5000}
+            cols={[
+              { key: "niu", label: "NIU", render: (c) => c.niu },
+              { key: "nombre", label: "Cliente", render: (c) => <span title={`${c.agente} · venta ${c.fecha ?? "sin fecha"}${c.origen === "cosecha" ? " (cosecha)" : ""}`}>{c.nombre ?? "—"}</span> },
+              {
+                key: "dias",
+                label: "Días",
+                align: "right",
+                render: (c) => {
+                  const d = dias(c.pendienteDesde);
+                  return d === null ? "—" : <span className={d > 15 ? "font-semibold text-[var(--st-critical)]" : d > 7 ? "font-medium text-amber-700 dark:text-amber-300" : ""}>{fmtInt.format(d)}</span>;
+                },
+                sort: (c) => dias(c.pendienteDesde) ?? -1,
+              },
+              { key: "grupo", label: "Documentos que debe", render: (c) => c.grupo, sort: (c) => c.grupo },
+            ]}
+            initialSort="dias"
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
