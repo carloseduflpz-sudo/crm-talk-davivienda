@@ -662,7 +662,9 @@ describe("evaluación PCBM (TDC)", () => {
     expect((await det("clase=en_proceso&origen=cosecha")).rows.map((r) => r.niu)).toEqual(["9009"]);
     expect((await det("etapa=2EN%20DISTRIBUCION&estatus=SIN%20EMBOZO")).rows.map((r) => r.niu)).toEqual(["9003"]);
     expect((await call("GET", "/analisis/tdc/detalle?fuente=ventas&mes=2026-07&clase=otra")).status).toBe(400);
-    // Otras campañas no la tienen.
-    expect(((await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!.pcbm).toBe(null);
+    // Las demás campañas también traen el desglose por estatus (sin etapa primaria).
+    const up = ((await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!.pcbm!;
+    expect(up.etapas.every((e) => e.etapa === "(sin etapa)")).toBe(true);
+    expect(up.etapas.reduce((t, e) => t + e.ventas, 0)).toBe(up.total.ventas);
   });
 });

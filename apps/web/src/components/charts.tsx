@@ -212,6 +212,8 @@ export interface Figure {
   spark?: number[];
   /** Abre los clientes detrás de la cifra. */
   onOpen?: () => void;
+  /** Texto del enlace al pasar el mouse (por defecto, "Ver clientes"). */
+  openLabel?: string;
 }
 
 function Spark({ values }: { values: number[] }) {
@@ -260,7 +262,7 @@ function FigureCell({ f, className, children }: { f: Figure; className: string; 
     <button type="button" onClick={f.onOpen} className={`group relative flex flex-col items-stretch justify-start text-left transition-colors hover:bg-paper/60 focus-visible:bg-paper/60 dark:hover:bg-slate-800/40 ${className}`}>
       {children}
       <span className="pointer-events-none absolute right-5 bottom-4 inline-flex items-center gap-0.5 text-[12px] text-brand-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-        Ver clientes <ChevronRight className="size-3.5" aria-hidden />
+        {f.openLabel ?? "Ver clientes"} <ChevronRight className="size-3.5" aria-hidden />
       </span>
     </button>
   );

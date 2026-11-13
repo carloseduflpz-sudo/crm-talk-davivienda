@@ -116,7 +116,7 @@ export interface CampaignAnalysis {
     cosecha: { total: number; monto: number; porMes: { month: string; ventas: number; monto: number }[] };
     /** En qué proceso va cada venta, por separado las del mes (actual) y las de meses anteriores (cosecha). */
     procesos: { actual: ProcesoRow[]; cosecha: ProcesoRow[] };
-    /** Evaluación PCBM (solo TDC): del mes, de la cosecha y el total. */
+    /** Evaluadas, aprobadas, rechazadas y pendientes del mes, de la cosecha y total, con el desglose por estatus (y etapa primaria en TC). */
     pcbm: null | {
       mes: PcbmRow;
       cosecha: PcbmRow;

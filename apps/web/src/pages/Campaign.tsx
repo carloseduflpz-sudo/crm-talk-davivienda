@@ -3,7 +3,7 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type ProcesoRow } from "@crm/core";
+import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type ProcesoRow, type SaleClass } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Columns2, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -32,6 +32,7 @@ import {
   type Compare,
 } from "../components/charts";
 import { ClientDetail, type DetailSpec } from "../components/ClientDetail";
+import { Desglose, type DesgloseSpec } from "../components/Desglose";
 import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
@@ -96,6 +97,8 @@ interface Ctx {
   setMonth: (month: string) => void;
   /** Rango de días del mes (null = el mes completo). */
   setDias: (d: Dias) => void;
+  /** Cuántas hay en cada etapa y estatus (del mes, cosecha y total) detrás de una cifra de ventas. */
+  desglosar: (titulo: string, clases: SaleClass[] | null, mes?: string) => void;
 }
 
 function Missing({ campaign, what, month, icon }: { campaign: string; what: string; month: string | null; icon: LucideIcon }) {
@@ -125,7 +128,7 @@ function compareOf<T extends { date: string }>(prev: CampaignAnalysis | undefine
 
 /* ---------- Ventas ---------- */
 
-function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
+function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
   const v = a.ventas;
   if (!v) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={TrendingUp} />;
   const p = prev?.ventas;
@@ -161,6 +164,20 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
     color: SALE_COLORS[k]!,
   }));
   const ventasN = (n: number) => `${fmtInt.format(n)} ${n === 1 ? "venta" : "ventas"}`;
+  // Cifra del comparativo mensual: clic abre su desglose (sin cambiar de mes; clic en el resto de la fila sí cambia).
+  const cifraMes = (n: number, mes: string, titulo: string, clases: SaleClass[] | null) => (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        desglosar(titulo, clases, mes);
+      }}
+      title="Ver el desglose por etapa y estatus"
+      className="tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600"
+    >
+      {fmtInt.format(n)}
+    </button>
+  );
   return (
     <Stack>
       <FigureStrip
@@ -182,7 +199,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 foot: cosechaTxt ? `Toda la sábana del banco, con ${cosechaTxt}` : "Todas las de la sábana del banco",
                 delta: pDays ? deltaOf(cSum("ventas"), pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
                 spark: days.map((d) => d.ventas),
-                onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
+                onOpen: () => desglosar("Ventas del mes", null), openLabel: "Ver desglose",
               },
           // Todas las campañas: evaluadas → aprobadas → rechazadas → pendientes → % sobre las evaluadas, con sus estatus.
           {
@@ -191,7 +208,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: intOf,
             foot: `${ev.evaluadas} (${fmtPct(share(v.aprobadas + v.rechazadas, v.total))} de las ventas)`,
             delta: deltaOf(v.aprobadas + v.rechazadas, p ? p.aprobadas + p.rechazadas : undefined, vs),
-            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} evaluadas`, filters: { clase: ["aprobado", "rechazado"] } }),
+            onOpen: () => desglosar(`${ev.cosa} evaluadas`, ["aprobado", "rechazado"]), openLabel: "Ver desglose",
           },
           {
             label: "Aprobadas",
@@ -199,7 +216,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: intOf,
             foot: `${fmtPct(share(v.aprobadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.aprobado)}` : ""}`,
             delta: pDays ? deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay) : deltaOf(v.aprobadas, p?.aprobadas, vs),
-            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} aprobadas`, filters: { clase: "aprobado" } }),
+            onOpen: () => desglosar(`${ev.cosa} aprobadas`, ["aprobado"]), openLabel: "Ver desglose",
           },
           {
             label: "Rechazadas",
@@ -207,7 +224,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: intOf,
             foot: `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.rechazado)}` : ""}`,
             delta: deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
-            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} rechazadas`, filters: { clase: "rechazado" } }),
+            onOpen: () => desglosar(`${ev.cosa} rechazadas`, ["rechazado"]), openLabel: "Ver desglose",
           },
           {
             label: "Pendientes",
@@ -215,7 +232,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: intOf,
             foot: `${ev.pendientes} (${fmtPct(share(v.enProceso, v.total))} de las ventas)${money ? ` · ${fmtMoney(v.monto.enProceso)}` : ""}`,
             delta: deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
-            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} pendientes`, filters: { clase: "en_proceso" } }),
+            onOpen: () => desglosar(`${ev.cosa} pendientes`, ["en_proceso"]), openLabel: "Ver desglose",
           },
           {
             label: "% Aprobación",
@@ -241,7 +258,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         />
       </FigureStrip>
 
-      {v.pcbm && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} open={open} />}
+      {v.pcbm && a.campaign === "tdc" && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} open={open} desglosar={desglosar} />}
 
       <ChartCard
         title={money ? "Monto por día" : "Ventas por día"}
@@ -351,10 +368,11 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
               title: monthLabel(m.month),
               parts: [
                 { label: "Aprobadas", value: m.aprobadas, color: SALE_COLORS.aprobado! },
-                { label: "En proceso", value: m.enProceso, color: SALE_COLORS.en_proceso! },
+                { label: "Pendientes", value: m.enProceso, color: SALE_COLORS.en_proceso! },
                 { label: "Rechazadas", value: m.rechazadas, color: SALE_COLORS.rechazado! },
               ],
               extra: [
+                { label: "evaluadas", value: fmtInt.format(m.aprobadas + m.rechazadas) },
                 { label: "aprobación", value: fmtPct(m.aprobacion) },
                 { label: "rechazo", value: fmtPct(share(m.rechazadas, m.aprobadas + m.rechazadas)) },
               ],
@@ -368,17 +386,20 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
               isActive={(r) => r.month === a.month}
               cols={[
                 { key: "month", label: "Mes", render: (r) => <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span> },
-                { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas) },
-                { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas) },
-                { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas) },
-                { key: "enProceso", label: "En proceso", align: "right", render: (r) => fmtInt.format(r.enProceso) },
+                // Igual que arriba: ventas → evaluadas → aprobadas → rechazadas → pendientes → % sobre evaluadas.
+                // Clic en una cifra: su desglose por etapa y estatus (del mes, cosecha y total) de ese mes.
+                { key: "ventas", label: "Ventas", align: "right", render: (r) => cifraMes(r.ventas, r.month, "Ventas", null) },
+                { key: "evaluadas", label: "Evaluadas", align: "right", render: (r) => cifraMes(r.aprobadas + r.rechazadas, r.month, `${ev.cosa} evaluadas`, ["aprobado", "rechazado"]) },
+                { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => cifraMes(r.aprobadas, r.month, `${ev.cosa} aprobadas`, ["aprobado"]) },
+                { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => cifraMes(r.rechazadas, r.month, `${ev.cosa} rechazadas`, ["rechazado"]) },
+                { key: "enProceso", label: "Pendientes", align: "right", render: (r) => cifraMes(r.enProceso, r.month, `${ev.cosa} pendientes`, ["en_proceso"]) },
                 ...(money
                   ? [
                       { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.monto) },
                       { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.montoAprobado) },
                     ]
                   : []),
-                { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
+                { key: "aprobacion", label: "% Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
                 // % de rechazo sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
                 { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) },
               ]}
@@ -399,11 +420,13 @@ function EvaluacionPcbm({
   prev,
   prevMonth,
   open,
+  desglosar,
 }: {
   p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>;
   prev: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]> | null;
   prevMonth: string | null;
   open: Ctx["open"];
+  desglosar: Ctx["desglosar"];
 }) {
   const filas = [
     { nombre: "Vendidas en el mes", f: p.mes, origen: "mes" as const },
@@ -413,12 +436,8 @@ function EvaluacionPcbm({
   // Clic en una cifra: las ventas (TC) detrás de ella.
   const CLASES = { ventas: [], evaluadas: ["aprobado", "rechazado"], aprobadas: ["aprobado"], rechazadas: ["rechazado"], pendientes: ["en_proceso"] } as const;
   const NOMBRE = { ventas: "Ventas", evaluadas: "TC evaluadas por PCBM", aprobadas: "TC aprobadas", rechazadas: "TC rechazadas", pendientes: "TC pendientes de evaluar" } as const;
-  const ver = (que: keyof typeof CLASES, origen: "mes" | "cosecha" | null) =>
-    open({
-      fuente: "ventas",
-      title: `${NOMBRE[que]}${origen === "mes" ? " · vendidas en el mes" : origen === "cosecha" ? " · cosecha" : ""}`,
-      filters: { ...(CLASES[que].length ? { clase: [...CLASES[que]] } : {}), ...(origen ? { origen } : {}) },
-    });
+  // Clic en una cifra: cuántas hay en cada etapa y subetapa (del mes, cosecha y total).
+  const ver = (que: keyof typeof CLASES, _origen?: "mes" | "cosecha" | null) => desglosar(NOMBRE[que], CLASES[que].length ? [...CLASES[que]] : null);
   const cifra = (n: number, onClick: () => void, fuerte = false) =>
     n > 0 ? (
       <button type="button" onClick={onClick} title="Ver cuáles son" className={`tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600 ${fuerte ? "font-semibold text-ink" : ""}`}>
@@ -430,7 +449,6 @@ function EvaluacionPcbm({
   const pm = prevMonth ? monthLabel(prevMonth).split(" ")[0] : "";
   type F = (typeof filas)[number];
   const b = (x: { total?: boolean }, v: ReactNode) => (x.total ? <span className="font-semibold text-ink">{v}</span> : v);
-  const COMO: Record<string, string> = { aprobado: "Evaluada · aprobada", rechazado: "Evaluada · rechazada", en_proceso: "Pendiente" };
   type E = (typeof p.etapas)[number] & { total?: boolean; primera?: boolean };
   const etapas: E[] = [
     ...p.etapas.map((e, i) => ({ ...e, primera: i === 0 || p.etapas[i - 1]!.etapa !== e.etapa })),
@@ -485,7 +503,6 @@ function EvaluacionPcbm({
         cols={[
           { key: "etapa", label: "Etapa primaria", render: (e: E) => b(e, e.total || e.primera ? e.etapa : "") },
           { key: "estatus", label: "Subetapa", render: (e: E) => e.estatus },
-          { key: "como", label: "Cuenta como", render: (e: E) => (e.total ? "" : <span style={{ color: SALE_COLORS[e.clase] }}>{COMO[e.clase]}</span>) },
           { key: "ventas", label: "Total", align: "right", render: (e: E) => b(e, fmtInt.format(e.ventas)) },
           { key: "pct", label: "%", align: "right", render: (e: E) => b(e, fmtPct(share(e.ventas, p.total.ventas), 0)) },
           { key: "cosecha", label: "De ellas, cosecha", align: "right", render: (e: E) => b(e, e.cosecha ? fmtInt.format(e.cosecha) : "—") },
@@ -1626,7 +1643,7 @@ type Fila = { sec: string; label: string; a: number | null; b: number | null; ti
  * Un mes a la par del otro con los mismos días (el filtro de días): cómo íbamos contra cómo vamos. Si el mes va en
  * curso y no se eligieron días, se pone solo del 1 al último día con datos, para comparar a la misma fecha.
  */
-function ComparativoTab({ a, prev, setDias, open }: Ctx) {
+function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
   const ultimo = a.month ? new Date(Date.UTC(Number(a.month.slice(0, 4)), Number(a.month.slice(5, 7)), 0)).getUTCDate() : 31;
   const diaDatos = a.month && a.fechas.hasta?.startsWith(a.month) ? Number(a.fechas.hasta.slice(8, 10)) : null;
   const puesto = useRef(false);
@@ -1734,7 +1751,7 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
   };
 
   // El resumen de arriba: lo que más se mira, con clic para ver cuáles son (del mes que se está viendo).
-  const ventasDe = (titulo: string, clase?: string[]) => () => open({ fuente: "ventas", title: titulo, filters: clase ? { clase } : undefined });
+  const ventasDe = (titulo: string, clase?: SaleClass[]) => () => desglosar(titulo, clase ?? null);
   const resumen: (Fila & { abrir?: () => void })[] = [
     { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "toda la sábana, con cosecha", abrir: ventasDe("Ventas del mes") },
     { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas.toLowerCase(), abrir: ventasDe(`${eva.cosa} evaluadas`, ["aprobado", "rechazado"]) },
@@ -2046,6 +2063,7 @@ export function Campaign() {
   });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
   const [detail, setDetail] = useState<DetailSpec | null>(null);
+  const [desglose, setDesglose] = useState<DesgloseSpec | null>(null);
   // El histórico de esta campaña se deja listo cuando ya llegó lo de la pantalla (no antes: no se le pide todo junto a la base).
   const listo = Boolean(a) && !analysis.isFetching && !prev.isFetching;
   useEffect(() => {
@@ -2090,6 +2108,7 @@ export function Campaign() {
         setAgent: (x) => setQuery({ agente: x }),
         setMonth: (m) => setQuery({ mes: m }),
         setDias: (d) => setQuery({ dias: d }),
+        desglosar: (titulo, clases, mes) => setDesglose({ titulo, clases, mes: mes ?? a.month! }),
       }
     : null;
 
@@ -2177,6 +2196,23 @@ export function Campaign() {
       )}
 
       {detail && a?.month && <ClientDetail campaign={code} month={a.month} agent={agent} spec={detail} onClose={closeDetail} />}
+      {desglose && (
+        <Desglose
+          campaign={code}
+          agent={agent}
+          dias={dias}
+          spec={desglose}
+          onClose={() => setDesglose(null)}
+          onClientes={
+            desglose.mes === a?.month
+              ? () => {
+                  setDesglose(null);
+                  setDetail({ fuente: "ventas", title: desglose.titulo, filters: desglose.clases ? { clase: desglose.clases } : undefined });
+                }
+              : undefined
+          }
+        />
+      )}
     </>
   );
 }

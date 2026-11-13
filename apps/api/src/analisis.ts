@@ -421,7 +421,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                       COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS estatus, status_class AS clase, COUNT(*) AS n
                  FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2, 3, 4`,
             )
-            .bind(month, campaign === "tdc" ? id : null, ...fb),
+            .bind(month, id, ...fb),
         ]);
         type Pcbm = { origen: "mes" | "cosecha"; etapa: string; estatus: string; clase: SaleClass; n: number };
         const pcbmRows = pcbm!.results as Pcbm[];
@@ -432,7 +432,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           const evaluadas = aprobadas + rechazadas;
           return { ventas: rs.reduce((t, r) => t + n(r.n), 0), evaluadas, aprobadas, rechazadas, pendientes: de("en_proceso"), aprobacion: pct(aprobadas, evaluadas), rechazo: pct(rechazadas, evaluadas) };
         };
-        if (campaign === "tdc" && pcbmRows.length) {
+        // Todas las campañas (el desglose por estatus); la etapa primaria solo la trae la sábana de TC.
+        if (pcbmRows.length) {
           const etapas = new Map<string, { etapa: string; estatus: string; clase: SaleClass; ventas: number; cosecha: number }>();
           for (const r of pcbmRows) {
             const k = `${r.etapa}|${r.estatus}|${r.clase}`;
