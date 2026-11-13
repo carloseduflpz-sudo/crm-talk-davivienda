@@ -187,8 +187,8 @@ export function deltaOf(now: number | null | undefined, before: number | null | 
 export function DeltaBadge({ d }: { d: Delta }) {
   const tone = d.good === null ? "text-ink-soft" : d.good ? "text-[var(--st-good)]" : "text-[var(--st-critical)]";
   return (
-    <span className="inline-flex items-center gap-1 text-[12px] whitespace-nowrap tabular-nums" title={`${d.dir === "up" ? "Subió" : d.dir === "down" ? "Bajó" : "Igual"} ${d.text} ${d.against}`}>
-      <span className={tone}>
+    <span className="inline-flex flex-wrap items-baseline gap-x-1 text-[12px] tabular-nums" title={`${d.dir === "up" ? "Subió" : d.dir === "down" ? "Bajó" : "Igual"} ${d.text} ${d.against}`}>
+      <span className={`whitespace-nowrap ${tone}`}>
         <span aria-hidden>{d.dir === "up" ? "↑" : d.dir === "down" ? "↓" : "="}</span> {d.text}
       </span>
       <span className="text-ink-faint">{d.against}</span>
@@ -271,11 +271,16 @@ function FigureCell({ f, className, children }: { f: Figure; className: string; 
 /** Indicadores en una sola franja separada por líneas finas. El primero es el protagonista. */
 export function FigureStrip({ figures, children, actions }: { figures: Figure[]; children?: ReactNode; actions?: ReactNode }) {
   const [lead, ...rest] = figures;
+  // Con muchos indicadores, en una sola fila solo en pantallas anchas; si no, en dos o tres columnas.
+  const muchos = rest.length >= 5;
+  const fila = muchos ? "xl:grid-cols-[minmax(0,1.4fr)_repeat(var(--n),minmax(0,1fr))]" : "lg:grid-cols-[minmax(0,1.5fr)_repeat(var(--n),minmax(0,1fr))]";
+  const grupo = muchos ? "grid grid-cols-2 sm:grid-cols-3 border-t border-hair -ml-px -mb-px xl:contents" : "grid grid-cols-2 border-t border-hair -ml-px -mb-px lg:contents";
+  const celda = muchos ? "min-w-0 border-hair border-l border-b p-6 xl:border-b-0 xl:px-5 xl:py-8" : "min-w-0 border-hair border-l border-b p-7 lg:border-b-0 lg:px-7 lg:py-8";
   return (
     <Panel className="overflow-hidden">
-      <div className="grid lg:grid-cols-[1.5fr_repeat(var(--n),1fr)]" style={{ ["--n" as string]: rest.length }}>
+      <div className={`grid ${fila}`} style={{ ["--n" as string]: rest.length }}>
         {lead && (
-          <FigureCell f={lead} className="p-7 lg:p-8">
+          <FigureCell f={lead} className="min-w-0 p-7 lg:p-8">
             <span className="flex items-start justify-between gap-3">
               <span className="block text-[13.5px] text-ink-soft">{lead.label}</span>
               {actions && <span className="shrink-0 whitespace-nowrap">{actions}</span>}
@@ -291,9 +296,9 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
           </FigureCell>
         )}
         {rest.length > 0 && (
-          <div className="grid grid-cols-2 border-t border-hair lg:contents">
-            {rest.map((f, i) => (
-              <FigureCell key={f.label} f={f} className={`border-hair p-7 lg:border-t-0 lg:border-l lg:px-7 lg:py-8 ${i % 2 ? "border-l" : ""} ${i >= 2 ? "border-t" : ""}`}>
+          <div className={grupo}>
+            {rest.map((f) => (
+              <FigureCell key={f.label} f={f} className={celda}>
                 <span className="block text-[13.5px] text-ink-soft">{f.label}</span>
                 <FigureValue f={f} />
                 {f.foot && <span className="mt-2 block text-[12.5px] leading-relaxed text-ink-faint">{f.foot}</span>}
