@@ -212,10 +212,14 @@ export const api = {
   sabanaSummary: (id: string) => get<SabanaSummary>(`/cargas/${id}/resumen`),
   removeAddition: (id: string) => post(`/cargas/${id}/quitar`),
 
-  analysis: (campaign: string, month?: string | null, agent?: string | null) => {
+  analysis: (campaign: string, month?: string | null, agent?: string | null, dias?: { desde: number; hasta: number } | null) => {
     const q = new URLSearchParams();
     if (month) q.set("mes", month);
     if (agent) q.set("agente", agent);
+    if (dias) {
+      q.set("desde", String(dias.desde));
+      q.set("hasta", String(dias.hasta));
+    }
     const qs = q.toString();
     return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
   },

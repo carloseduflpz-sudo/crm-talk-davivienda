@@ -36,7 +36,7 @@ import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
-import { consultaAnalisis, consultaHistorico, mesAnterior } from "../lib/consultas";
+import { consultaAnalisis, consultaHistorico, mesAnterior, type Dias } from "../lib/consultas";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
@@ -78,7 +78,11 @@ const lower = (s: string) => (s === s.toUpperCase() ? s.toLowerCase() : s.charAt
 /** "vs agosto". */
 /** "vs septiembre"; si el mes que se ve va en curso, se aclara que el anterior está completo. */
 const vsLabel = (prev: CampaignAnalysis | undefined, a: CampaignAnalysis) =>
-  prev?.month ? `vs ${monthLabel(prev.month).split(" ")[0]}${a.month === currentMonth() ? " completo" : ""}` : "";
+  !prev?.month
+    ? ""
+    : prev.dias
+      ? `vs ${monthLabel(prev.month).split(" ")[0]} (${prev.dias.desde === prev.dias.hasta ? `día ${prev.dias.desde}` : `${prev.dias.desde} al ${prev.dias.hasta}`})`
+      : `vs ${monthLabel(prev.month).split(" ")[0]}${a.month === currentMonth() && !a.dias ? " completo" : ""}`;
 
 /** Lo que cada pestaña necesita para ser interactiva. */
 interface Ctx {
@@ -123,7 +127,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   const p = prev?.ventas;
   const vs = vsLabel(prev, a);
   // Mes en curso: el total y las aprobadas se comparan contra el mes anterior al mismo día.
-  const corte = a.month === currentMonth() && a.fechas.hasta ? dayNum(a.fechas.hasta) : null;
+  // (Con un rango de días elegido, el mes anterior ya viene con esos mismos días.)
+  const corte = !a.dias && a.month === currentMonth() && a.fechas.hasta ? dayNum(a.fechas.hasta) : null;
   // Por día solo cuentan las fechas del mes; las ventas de meses anteriores (cosecha) van aparte.
   const days = v.porDia.filter((d) => d.date.startsWith(a.month!));
   const pDays = p && corte && prev?.month ? p.porDia.filter((d) => d.date.startsWith(prev.month!) && dayNum(d.date) <= corte) : null;
@@ -191,7 +196,9 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             label: "Rechazadas",
             num: money ? v.monto.rechazado : v.rechazadas,
             format: money ? fmtMoney : intOf,
-            foot: money ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto` : `${fmtPct(share(v.rechazadas, v.total))} del total`,
+            foot: money
+              ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto`
+              : `${fmtPct(share(v.rechazadas, v.total))} de rechazo${p && prev?.month ? ` (${monthLabel(prev.month).split(" ")[0]}: ${fmtPct(share(p.rechazadas, p.total))})` : ""}`,
             delta: money ? deltaOf(v.monto.rechazado, p?.monto.rechazado, vs, { upIsGood: false }) : deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
             onOpen: () => open({ fuente: "ventas", title: "Ventas rechazadas", filters: { clase: "rechazado" } }),
           },
@@ -310,7 +317,10 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 { label: "En proceso", value: m.enProceso, color: SALE_COLORS.en_proceso! },
                 { label: "Rechazadas", value: m.rechazadas, color: SALE_COLORS.rechazado! },
               ],
-              extra: [{ label: "aprobación", value: fmtPct(m.aprobacion) }],
+              extra: [
+                { label: "aprobación", value: fmtPct(m.aprobacion) },
+                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.ventas)) },
+              ],
             }))}
           />
           <div className="mt-10">
@@ -332,6 +342,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                     ]
                   : []),
                 { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
+                // % de rechazo: rechazadas ÷ todas las ventas de la sábana del mes (incluye las que siguen en proceso).
+                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.ventas)) },
               ]}
             />
           </div>
@@ -1200,6 +1212,13 @@ function HistoricoTab({ a, setMonth }: Ctx) {
             { key: "ventas", label: sameDay ? `Ventas al día ${corte}` : "Ventas", align: "right", render: (r) => opt(ventasDe(r), (x) => fmtInt.format(x)), sort: (r) => ventasDe(r) ?? -1 },
             { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => opt(r.aprobadas, (x) => fmtInt.format(x)), sort: (r) => r.aprobadas ?? -1 },
             { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => opt(r.aprobacion, (x) => fmtPct(x)), sort: (r) => r.aprobacion ?? -1 },
+            {
+              key: "rechazo",
+              label: "% Rechazo",
+              align: "right",
+              render: (r) => (r.ventas && r.rechazadas !== null ? fmtPct(share(r.rechazadas, r.ventas)) : "—"),
+              sort: (r) => (r.ventas && r.rechazadas !== null ? share(r.rechazadas, r.ventas) : -1),
+            },
             ...(money
               ? [
                   { key: "monto", label: sameDay ? `Monto al día ${corte}` : "Monto", align: "right" as const, render: (r: R) => opt(montoDe(r), fmtMoney), sort: (r: R) => montoDe(r) ?? -1 },
@@ -1259,7 +1278,15 @@ function MonthStatus({ a }: { a: CampaignAnalysis }) {
     <p className="flex items-start gap-2 text-[13px] text-ink-soft">
       <span className={`mt-[7px] size-2 shrink-0 rounded-full ${a.month === today ? "bg-[var(--st-good)]" : "bg-ink-faint/50"}`} aria-hidden />
       <span>
-        Estás viendo <span className="font-medium text-ink">{monthLabel(a.month)}</span>, {state}
+        Estás viendo <span className="font-medium text-ink">{monthLabel(a.month)}</span>
+        {a.dias ? (
+          <>
+            , <span className="font-medium text-ink">{a.dias.desde === a.dias.hasta ? `solo el día ${a.dias.desde}` : `del día ${a.dias.desde} al ${a.dias.hasta}`}</span>
+            {a.dias.desde === 1 && " (con la cosecha de meses anteriores)"}
+          </>
+        ) : (
+          <>, {state}</>
+        )}
         {a.fechas.hasta && <> · datos hasta el {dayLabel(a.fechas.hasta)}</>}
       </span>
     </p>
@@ -1294,6 +1321,64 @@ function OtherMonthsWarning({ a, code }: { a: CampaignAnalysis; code: string }) 
   );
 }
 
+/* ---------- rango de días ---------- */
+
+function leerDias(params: URLSearchParams): Dias {
+  const d = Number(params.get("desde"));
+  const h = Number(params.get("hasta"));
+  if (!params.get("desde") && !params.get("hasta")) return null;
+  const desde = Number.isInteger(d) && d >= 1 && d <= 31 ? d : 1;
+  const hasta = Number.isInteger(h) && h >= desde && h <= 31 ? h : 31;
+  return desde === 1 && hasta === 31 ? null : { desde, hasta };
+}
+
+/**
+ * Días del mes a mirar: "Todo el mes" o del día X al día Y. Con un rango, ventas, llamadas, CRM y cumplimiento
+ * se cuentan solo con fecha en esos días, y el mes anterior con los mismos días (para comparar al mismo corte).
+ */
+function DiasPicker({ month, value, hastaDatos, onChange }: { month: string; value: Dias; hastaDatos: string | null; onChange: (d: Dias) => void }) {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const desde = Math.min(value?.desde ?? 1, ultimo);
+  const hasta = Math.min(value?.hasta ?? ultimo, ultimo);
+  const dia = hastaDatos?.startsWith(month) ? Number(hastaDatos.slice(8, 10)) : null;
+  const poner = (d: number, h: number) => onChange(d === 1 && h >= ultimo ? null : { desde: d, hasta: Math.max(d, h) });
+  const opciones = Array.from({ length: ultimo }, (_, i) => i + 1);
+  const sel = "rounded-full border border-hair bg-white px-2.5 py-1 text-[13px] text-ink tabular-nums dark:bg-slate-900";
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-soft" role="group" aria-label="Días del mes">
+      <span>Días</span>
+      <select aria-label="Desde el día" className={sel} value={desde} onChange={(e) => poner(Number(e.target.value), Math.max(Number(e.target.value), hasta))}>
+        {opciones.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+      <span>al</span>
+      <select aria-label="Hasta el día" className={sel} value={hasta} onChange={(e) => poner(Math.min(desde, Number(e.target.value)), Number(e.target.value))}>
+        {opciones.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+      {value ? (
+        <button type="button" onClick={() => onChange(null)} className="font-medium text-brand-600 hover:underline">
+          Todo el mes
+        </button>
+      ) : (
+        dia &&
+        dia < ultimo && (
+          <button type="button" onClick={() => poner(1, dia)} className="font-medium text-brand-600 hover:underline" title="Este mes y el anterior, del día 1 al último día con datos">
+            Comparar al día {dia}
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
 /* ---------- página ---------- */
 
 export function Campaign() {
@@ -1302,9 +1387,11 @@ export function Campaign() {
   const qc = useQueryClient();
   const requested = params.get("mes");
   const agent = params.get("agente") || null;
+  // Rango de días (?desde=1&hasta=12): todo se calcula con esos días y el mes anterior con los mismos, para comparar.
+  const dias = leerDias(params);
   const valid = isCampaignCode(code);
   const analysis = useQuery({
-    ...consultaAnalisis(code, requested, agent),
+    ...consultaAnalisis(code, requested, agent, dias),
     enabled: valid,
     // Al cambiar de mes o de agente se queda lo anterior en pantalla hasta que llega lo nuevo
     // (pero nunca las cifras de otra campaña).
@@ -1313,7 +1400,7 @@ export function Campaign() {
   const a = analysis.data;
   const prevMonth = mesAnterior(a);
   const prev = useQuery({
-    ...consultaAnalisis(code, prevMonth ?? null, agent),
+    ...consultaAnalisis(code, prevMonth ?? null, agent, dias),
     enabled: valid && Boolean(prevMonth),
   });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 5 * 60_000 });
@@ -1325,15 +1412,20 @@ export function Campaign() {
   }, [valid, listo, agent, code, qc]);
 
   const setQuery = useCallback(
-    (next: { mes?: string | null; agente?: string | null }) => {
+    (next: { mes?: string | null; agente?: string | null; dias?: Dias }) => {
       const mes = next.mes === undefined ? (a?.month ?? requested) : next.mes;
       const agente = next.agente === undefined ? agent : next.agente;
+      const rango = next.dias === undefined ? dias : next.dias;
       const q: Record<string, string> = {};
       if (mes) q.mes = mes;
       if (agente) q.agente = agente;
+      if (rango) {
+        q.desde = String(rango.desde);
+        q.hasta = String(rango.hasta);
+      }
       setParams(q);
     },
-    [a?.month, requested, agent, setParams],
+    [a?.month, requested, agent, dias, setParams],
   );
   const closeDetail = useCallback(() => setDetail(null), []);
 
@@ -1344,6 +1436,10 @@ export function Campaign() {
   const qsParams = new URLSearchParams();
   if (a?.month) qsParams.set("mes", a.month);
   if (agent) qsParams.set("agente", agent);
+  if (dias) {
+    qsParams.set("desde", String(dias.desde));
+    qsParams.set("hasta", String(dias.hasta));
+  }
   const qs = qsParams.toString() ? `?${qsParams}` : "";
   const ctx: Ctx | null = a
     ? {
@@ -1392,6 +1488,7 @@ export function Campaign() {
         <div className="-mt-2 mb-10 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             <AgentPicker agents={a.agentes} merged={a.agentesUnidos} value={agent} onChange={(x) => setQuery({ agente: x })} />
+            {a.month && <DiasPicker month={a.month} value={dias} hastaDatos={a.fechas.hasta} onChange={(x) => setQuery({ dias: x })} />}
             <MonthStatus a={a} />
           </div>
           <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Mes">

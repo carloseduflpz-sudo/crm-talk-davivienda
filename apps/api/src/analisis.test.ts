@@ -288,6 +288,46 @@ describe("detalle de clientes", () => {
   });
 });
 
+describe("rango de días del mes (comparar meses al mismo corte)", () => {
+  const get = async (q: string) => {
+    const r = await call("GET", `/analisis/tdc?mes=2026-09${q}`);
+    expect(r.status, String(r.data.error)).toBe(200);
+    return r.data.analysis as CampaignAnalysis;
+  };
+  it("del 1 al 30 es el mes completo", async () => {
+    const t = await get("&desde=1&hasta=30");
+    expect(t.dias).toBe(null);
+    expect(t.ventas!.total).toBe(a.ventas!.total);
+    expect(t.llamadas!.total).toBe(a.llamadas!.total);
+  });
+  it("del 1 al 5: ventas, llamadas, CRM y cumplimiento solo con fecha hasta el día 5", async () => {
+    const t = await get("&desde=1&hasta=5");
+    expect(t.dias).toEqual({ desde: 1, hasta: 5, d1: "2026-09-01", d2: "2026-09-05" });
+    const sab = sabanaSep.filter((r) => r.saleDate <= "2026-09-05");
+    expect(t.ventas!.total).toBe(sab.length);
+    expect(t.ventas!.porDia.every((d) => d.date <= "2026-09-05")).toBe(true);
+    expect(t.llamadas!.total).toBe(calls.filter((c) => !c.calledAt || c.calledAt.slice(0, 10) <= "2026-09-05").length);
+    expect(t.crm!.total).toBe(crm.filter((c) => c.enteredAt.slice(0, 10) <= "2026-09-05").length);
+    expect(t.cumplimiento.fechaCorte! <= "2026-09-05").toBe(true);
+    expect(t.cumplimiento.ventas <= a.cumplimiento.ventas).toBe(true);
+    expect(t.fechas.hasta).toBe("2026-09-05");
+    // La base no tiene fecha: no cambia.
+    expect(t.base!.total).toBe(a.base!.total);
+  });
+  it("del 3 al 4: solo esos días; agosto con los mismos días para comparar", async () => {
+    const t = await get("&desde=3&hasta=4");
+    expect(t.ventas!.total).toBe(sabanaSep.filter((r) => r.saleDate >= "2026-09-03" && r.saleDate <= "2026-09-04").length);
+    const ago = await call("GET", "/analisis/tdc?mes=2026-08&desde=15&hasta=15");
+    expect((ago.data.analysis as CampaignAnalysis).ventas!.total).toBe(sabanaAgo.length);
+    const ago2 = (await call("GET", "/analisis/tdc?mes=2026-08&desde=16&hasta=20")).data.analysis as CampaignAnalysis;
+    expect(ago2.ventas!.total).toBe(0);
+  });
+  it("días inválidos se rechazan", async () => {
+    expect((await call("GET", "/analisis/tdc?mes=2026-09&desde=10&hasta=2")).status).toBe(400);
+    expect((await call("GET", "/analisis/tdc?mes=2026-09&desde=x")).status).toBe(400);
+  });
+});
+
 describe("recorrido de la base y promedio de toques", () => {
   it("cuadran con las llamadas de la tipificación (también por agente)", async () => {
     for (const q of ["", "&agente=Ana"]) {

@@ -6,9 +6,12 @@ import { api, escribiendoHace } from "./api";
 /** Un análisis se reutiliza 2 minutos sin volver a pedirlo (cualquier cambio que se guarde lo renueva al momento). */
 export const FRESCO = 2 * 60_000;
 
-export const consultaAnalisis = (code: string, mes: string | null = null, agente: string | null = null) => ({
-  queryKey: ["analysis", code, mes, agente] as const,
-  queryFn: () => api.analysis(code, mes, agente),
+/** Rango de días del mes (null = el mes completo). */
+export type Dias = { desde: number; hasta: number } | null;
+
+export const consultaAnalisis = (code: string, mes: string | null = null, agente: string | null = null, dias: Dias = null) => ({
+  queryKey: ["analysis", code, mes, agente, dias ? `${dias.desde}-${dias.hasta}` : ""] as const,
+  queryFn: () => api.analysis(code, mes, agente, dias),
   staleTime: FRESCO,
 });
 

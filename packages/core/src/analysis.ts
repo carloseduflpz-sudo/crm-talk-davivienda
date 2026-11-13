@@ -58,6 +58,8 @@ export interface CampaignAnalysis {
   /** Agente por el que está filtrado el análisis (null = todos). La base no depende del agente. */
   agente: string | null;
   /** Agentes que aparecen en la sábana, VICI o el CRM del mes (para el filtro). */
+  /** Rango de días del mes que se está viendo (null = el mes completo). */
+  dias: null | { desde: number; hasta: number; d1: string; d2: string };
   agentes: string[];
   /** Agentes cuyo nombre viene escrito de varias formas y la herramienta unió solo. */
   agentesUnidos: { nombre: string; variantes: string[] }[];

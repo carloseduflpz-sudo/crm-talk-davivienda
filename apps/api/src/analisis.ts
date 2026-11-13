@@ -86,6 +86,23 @@ function acumulado(month: string, porDia: { date: string; ventas: number; monto:
   return { ventas: v, monto: m.map((x) => Math.round(x * 100) / 100) };
 }
 
+/** Días de un mes (del día desde al día hasta) para comparar meses al mismo corte. */
+export interface Dias {
+  desde: number;
+  hasta: number;
+}
+
+/** Fechas del rango en ese mes; null si es el mes completo (del 1 al último día). */
+export function rangoDelMes(month: string, dias: Dias): { desde: number; hasta: number; d1: string; d2: string } | null {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const desde = Math.min(Math.max(1, Math.trunc(dias.desde)), ultimo);
+  const hasta = Math.min(Math.max(desde, Math.trunc(dias.hasta)), ultimo);
+  if (desde === 1 && hasta === ultimo) return null;
+  const dia = (d: number) => `${month}-${String(d).padStart(2, "0")}`;
+  return { desde, hasta, d1: dia(desde), d2: dia(hasta) };
+}
+
 /** Análisis de la campaña; si ya se calculó con los mismos archivos y la misma configuración, sale de lo guardado. */
 export function analyzeCampaign(
   env: Env,
@@ -93,14 +110,16 @@ export function analyzeCampaign(
   requestedMonth: string | null,
   agente: string | null = null,
   resultados: Resultados = new Resultados(env),
+  dias: Dias | null = null,
 ): Promise<CampaignAnalysis> {
-  return resultados.obtener(`analisis/${campaign}/${requestedMonth ?? "ultimo"}/${parteClave(agente)}.json`, () =>
-    calcularAnalisis(env, campaign, requestedMonth, agente),
+  const rango = dias ? `-d${dias.desde}-${dias.hasta}` : "";
+  return resultados.obtener(`analisis/${campaign}/${requestedMonth ?? "ultimo"}${rango}/${parteClave(agente)}.json`, () =>
+    calcularAnalisis(env, campaign, requestedMonth, agente, dias),
     campaign,
   );
 }
 
-async function calcularAnalisis(env: Env, campaign: string, requestedMonth: string | null, agente: string | null): Promise<CampaignAnalysis> {
+async function calcularAnalisis(env: Env, campaign: string, requestedMonth: string | null, agente: string | null, dias: Dias | null = null): Promise<CampaignAnalysis> {
   const db = env.DB;
   /* Velocidad: cada consulta es un viaje del Worker a la base. Lo que no depende de nada se pide junto
      (nombres de agentes, archivos vigentes, regla de contacto y metas) y después cada sección va en paralelo. */
@@ -126,6 +145,21 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   const crm = ofMonth.find((u) => u.kind === "ventas");
   const bases = ofMonth.filter((u) => u.kind === "base");
 
+  /* Rango de días dentro del mes (para comparar meses al mismo corte): ventas, llamadas y CRM solo con fecha en el
+     rango. Desde el día 1 también entra lo que trae fecha anterior al mes o no trae fecha (la cosecha de la
+     sábana), así "del 1 al 31" es igual a todo el mes. Las fechas van escritas en la consulta: son números ya validados. */
+  const rango = month && dias ? rangoDelMes(month, dias) : null;
+  const enRango = (col: string) =>
+    rango ? ` AND (substr(COALESCE(${col}, ''), 1, 10) BETWEEN '${rango.d1}' AND '${rango.d2}'${rango.desde === 1 ? ` OR COALESCE(${col}, '') < '${month}-01'` : ""})` : "";
+  /** Lo mismo, en cada mes (u.month) con los mismos días: para las gráficas que comparan meses. */
+  const porMesEnRango = (col: string) =>
+    rango
+      ? ` AND ((substr(${col}, 1, 7) = u.month AND CAST(substr(${col}, 9, 2) AS INTEGER) BETWEEN ${rango.desde} AND ${rango.hasta})${rango.desde === 1 ? ` OR COALESCE(${col}, '') < u.month || '-01'` : ""})`
+      : "";
+  const fs = (p: string) => fa(`${p}executive`) + enRango(`${p}sale_date`);
+  const fl = (p: string) => fa(`${p}agent`) + enRango(`${p}called_at`);
+  const fc = (p: string) => fa(`${p}agent`) + enRango(`${p}entered_at`);
+
   const rule = ruleRow?.contact_rule === "sin_no_efectivo" ? "sin_no_efectivo" : "con_no_efectivo";
   const efectivoSql = rule === "con_no_efectivo" ? "call_class IN ('venta','negativo','no_efectivo')" : "call_class IN ('venta','negativo')";
 
@@ -134,6 +168,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
     month,
     months,
     agente,
+    dias: rango ? { desde: rango.desde, hasta: rango.hasta, d1: rango.d1, d2: rango.d2 } : null,
     agentes: [],
     agentesUnidos: [],
     loaded: ofMonth.map((u) => ({ dataset: u.dataset, kind: u.kind, rows: u.rows_valid, version: u.version, createdAt: u.created_at, createdBy: u.created_by })),
@@ -204,7 +239,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           // La sábana trae ventas de meses anteriores a propósito (cosecha): no es un error.
           if (n(row?.fuera) > 0 && dated[i]![0] !== "sabana") out.fechas.fuera.push({ kind: dated[i]![0], filas: n(row!.fuera), meses: (row!.meses ?? "").split(",").filter(Boolean).sort() });
         });
-        out.fechas.hasta = hasta;
+        const h = hasta as string | null;
+        out.fechas.hasta = rango && h && h > rango.d2 ? rango.d2 : h;
       }
     }
 
@@ -215,10 +251,10 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
     if (sabana) {
       const id = sabana.id;
       const [totals, estatus, ejecutivos, motivos, dias, procesos, mensual] = await db.batch([
-        db.prepare(`SELECT status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY status_class`).bind(id, ...fb),
+        db.prepare(`SELECT status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY status_class`).bind(id, ...fb),
         db
           .prepare(
-            `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
+            `SELECT COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS label, status_class AS c, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 25`,
           )
           .bind(id, ...fb),
         db
@@ -226,28 +262,28 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
             `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS ventas,
                     SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
                     COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
-               FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY ventas DESC`,
+               FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1 ORDER BY ventas DESC`,
           )
           .bind(id, ...fb),
         db
           .prepare(
-            `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fa("executive")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
+            `SELECT COALESCE(NULLIF(TRIM(reason), ''), 'Sin motivo especificado') AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM bank_sales WHERE upload_id = ?${fs("")} AND status_class = 'rechazado' GROUP BY 1 ORDER BY n DESC LIMIT 15`,
           )
           .bind(id, ...fb),
         db
           .prepare(
             `SELECT sale_date AS d, COUNT(*) AS ventas, SUM(status_class = 'aprobado') AS aprobadas, COALESCE(SUM(amount), 0) AS monto,
-                    COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
+                    COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado FROM bank_sales WHERE upload_id = ?${fs("")} AND sale_date IS NOT NULL GROUP BY sale_date ORDER BY sale_date`,
           )
           .bind(id, ...fb),
-        db.prepare(`SELECT process AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fa("executive")} AND process IS NOT NULL GROUP BY process ORDER BY n DESC`).bind(id, ...fb),
+        db.prepare(`SELECT process AS label, COUNT(*) AS n FROM bank_sales WHERE upload_id = ?${fs("")} AND process IS NOT NULL GROUP BY process ORDER BY n DESC`).bind(id, ...fb),
         db
           .prepare(
             `SELECT u.month AS month, COUNT(*) AS ventas, SUM(b.status_class = 'aprobado') AS aprobadas,
                     SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso,
                     COALESCE(SUM(b.amount), 0) AS monto, COALESCE(SUM(CASE WHEN b.status_class = 'aprobado' THEN b.amount END), 0) AS monto_aprobado
                FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
-              WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}
+              WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}${porMesEnRango("b.sale_date")}
               GROUP BY u.month ORDER BY u.month`,
           )
           .bind(campaign, ...fb),
@@ -306,7 +342,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         const { results: prevRows } = await db
           .prepare(
             `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
-              WHERE upload_id = ?${fa("executive")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
+              WHERE upload_id = ?${fs("")} AND sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ? GROUP BY 1 ORDER BY 1 DESC`,
           )
           .bind(id, ...fb, month)
           .all<{ m: string; n: number; monto: number }>();
@@ -343,7 +379,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           ? db
               .prepare(
                 `WITH b AS (SELECT niu, MAX(COALESCE(NULLIF(TRIM(profile), ''), 'N/D')) AS profile FROM base_records WHERE upload_id IN (${inIds}) GROUP BY niu),
-                      s AS (SELECT niu, MAX(status_class = 'aprobado') AS apr, MAX(status_class = 'rechazado') AS rech FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY niu)
+                      s AS (SELECT niu, MAX(status_class = 'aprobado') AS apr, MAX(status_class = 'rechazado') AS rech FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY niu)
                  SELECT b.profile AS profile, COUNT(*) AS base, COUNT(s.niu) AS con_venta, SUM(COALESCE(s.apr, 0)) AS aprobadas, SUM(COALESCE(s.rech, 0)) AS rechazadas
                    FROM b LEFT JOIN s ON s.niu = b.niu GROUP BY b.profile ORDER BY base DESC LIMIT 30`,
               )
@@ -369,11 +405,11 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
              SELECT (SELECT COUNT(*) FROM base_records WHERE upload_id = ?) AS registros,
                     (SELECT COUNT(DISTINCT niu) FROM base_records WHERE upload_id = ?) AS unicos,
                     (SELECT COUNT(*) FROM b) AS nuevos,
-                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS llamados,
-                    (SELECT COUNT(*) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}) AS toques,
-                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")} AND ${effSql}) AS contactados,
-                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")}) AS ventas,
-                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fa("s.executive")} AND s.status_class = 'aprobado') AS aprobadas`,
+                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fl("c.")}) AS llamados,
+                    (SELECT COUNT(*) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fl("c.")}) AS toques,
+                    (SELECT COUNT(DISTINCT c.niu) FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fl("c.")} AND ${effSql}) AS contactados,
+                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fs("s.")}) AS ventas,
+                    (SELECT COUNT(DISTINCT s.niu) FROM bank_sales s JOIN b ON b.niu = s.niu WHERE s.upload_id = ?${fs("s.")} AND s.status_class = 'aprobado') AS aprobadas`,
           )
           .bind(u.id, ...earlier, u.id, u.id, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, tipif?.id ?? null, ...fb, sabana?.id ?? null, ...fb, sabana?.id ?? null, ...fb);
       });
@@ -388,7 +424,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                       SUM(COALESCE(c.niu, '') = '') AS sin_niu,
                       SUM(COALESCE(c.niu, '') <> '' AND b.niu IS NULL) AS fuera,
                       COUNT(DISTINCT CASE WHEN COALESCE(c.niu, '') <> '' AND b.niu IS NULL THEN c.niu END) AS clientes_fuera
-                 FROM calls c LEFT JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa("c.agent")}`,
+                 FROM calls c LEFT JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fl("c.")}`,
             )
             .bind(JSON.stringify(baseIds), tipif.id, ...fb),
         );
@@ -448,44 +484,44 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
     if (tipif) {
       const id = tipif.id;
       const [clases, unicos, agentes, tipologias, dias, intentos, estructura, ventasSeq] = await db.batch([
-        db.prepare(`SELECT call_class AS label, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY call_class ORDER BY n DESC`).bind(id, ...fb),
-        db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''`).bind(id, ...fb),
+        db.prepare(`SELECT call_class AS label, COUNT(*) AS n FROM calls WHERE upload_id = ?${fl("")} GROUP BY call_class ORDER BY n DESC`).bind(id, ...fb),
+        db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fl("")} AND niu <> ''`).bind(id, ...fb),
         db
           .prepare(
             `SELECT ${agentLabel("agent")} AS agent, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS registros,
                     SUM(${efectivoSql}) AS efectivos, SUM(call_class = 'venta') AS ventas, SUM(call_class = 'no_contacto') AS no_contacto
-               FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY llamadas DESC`,
+               FROM calls WHERE upload_id = ?${fl("")} GROUP BY 1 ORDER BY llamadas DESC`,
           )
           .bind(id, ...fb),
         db
           .prepare(
-            `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS label, call_class AS c, COUNT(*) AS n FROM calls WHERE upload_id = ?${fa("agent")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 20`,
+            `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS label, call_class AS c, COUNT(*) AS n FROM calls WHERE upload_id = ?${fl("")} GROUP BY 1, 2 ORDER BY n DESC LIMIT 20`,
           )
           .bind(id, ...fb),
         db
           .prepare(
             `SELECT substr(called_at, 1, 10) AS d, COUNT(*) AS llamadas, SUM(${efectivoSql}) AS efectivos
-               FROM calls WHERE upload_id = ?${fa("agent")} AND called_at IS NOT NULL GROUP BY 1 ORDER BY 1`,
+               FROM calls WHERE upload_id = ?${fl("")} AND called_at IS NOT NULL GROUP BY 1 ORDER BY 1`,
           )
           .bind(id, ...fb),
         db
           .prepare(
             `SELECT CASE WHEN k >= 6 THEN '6+' ELSE CAST(k AS TEXT) END AS intentos, COUNT(*) AS clientes
-               FROM (SELECT niu, COUNT(*) AS k FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '' GROUP BY niu)
+               FROM (SELECT niu, COUNT(*) AS k FROM calls WHERE upload_id = ?${fl("")} AND niu <> '' GROUP BY niu)
               GROUP BY 1 ORDER BY MIN(k)`,
           )
           .bind(id, ...fb),
         db
           .prepare(
             `SELECT SUM(seq = 1) AS primeros, SUM(seq > 1) AS seguimientos
-               FROM (SELECT ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> '')`,
+               FROM (SELECT ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fl("")} AND niu <> '')`,
           )
           .bind(id, ...fb),
         db
           .prepare(
             `SELECT SUM(first_sale = 1) AS primero, SUM(first_sale > 1) AS rellamado FROM (
                SELECT niu, MIN(seq) AS first_sale FROM (
-                 SELECT niu, call_class, ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fa("agent")} AND niu <> ''
+                 SELECT niu, call_class, ROW_NUMBER() OVER (PARTITION BY niu ORDER BY called_at) AS seq FROM calls WHERE upload_id = ?${fl("")} AND niu <> ''
                ) WHERE call_class = 'venta' GROUP BY niu)`,
           )
           .bind(id, ...fb),
@@ -533,11 +569,11 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   const crmP = (async () => {
     if (crm) {
       const [tot, agentes, dias, match] = await db.batch([
-        db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")}`).bind(crm.id, ...fb),
-        db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
-        db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fa("agent")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
+        db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")}`).bind(crm.id, ...fb),
+        db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
+        db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
         sabana
-          ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fa("c.agent")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
+          ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fc("c.")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
           : db.prepare("SELECT NULL AS n"),
       ]);
       out.crm = {
@@ -594,7 +630,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
       if (sabana) {
         const label = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
         const { results: estatus } = await db
-          .prepare(`SELECT ${label} AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales WHERE upload_id = ?${fa("executive")} GROUP BY 1 ORDER BY n DESC`)
+          .prepare(`SELECT ${label} AS label, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1 ORDER BY n DESC`)
           .bind(sabana.id, ...fb)
           .all<{ label: string; n: number; monto: number }>();
         const cuenta = (l: string) => (savedStatuses ? savedStatuses.includes(l) : countsForGoal(campaign as CampaignCode, l));
@@ -621,7 +657,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         const prevBinds = counted.length ? [campaign, month, lista] : [];
         const rowsCte = `s AS (SELECT ${agentLabel("executive")} AS agent, ${measure} AS m, status_class, sale_date,
                CASE WHEN ${inList} THEN (CASE WHEN (bank_sales.niu || '|' || COALESCE(bank_sales.sale_date, '')) IN (SELECT niu || '|' || d FROM prev) THEN 2 ELSE 1 END) ELSE 0 END AS k
-             FROM bank_sales WHERE upload_id = ?${fa("executive")})`;
+             FROM bank_sales WHERE upload_id = ?${fs("")})`;
         const cteBinds = [...prevBinds, ...(counted.length ? [lista] : []), sabana.id, ...fb];
         const [porAgente, porDia, origen] = await db.batch([
           db
@@ -637,7 +673,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           db
             .prepare(
               `SELECT MAX(CASE WHEN sale_date <= ? THEN sale_date END) AS corte, SUM(sale_date > ?) AS posteriores, MAX(sale_date) AS maxima
-                 FROM bank_sales WHERE upload_id = ?${fa("executive")} AND sale_date LIKE ?`,
+                 FROM bank_sales WHERE upload_id = ?${fs("")} AND sale_date LIKE ?`,
             )
             .bind(diaCarga(sabana.created_at), diaCarga(sabana.created_at), sabana.id, ...fb, `${month}%`),
           db
@@ -951,7 +987,18 @@ export function registerAnalisis(r: Router): void {
     if (mes && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(mes)) throw new HttpError(400, "Mes inválido.");
     const agente = url.searchParams.get("agente")?.trim() || null;
     if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
-    return json({ ok: true, analysis: await analyzeCampaign(env, campaign, mes, agente) });
+    // Rango de días del mes (?desde=1&hasta=12), para comparar meses al mismo corte.
+    const dia = (k: string) => {
+      const v = url.searchParams.get(k);
+      if (v === null || v === "") return null;
+      if (!/^\d{1,2}$/.test(v) || Number(v) < 1 || Number(v) > 31) throw new HttpError(400, "Día inválido.");
+      return Number(v);
+    };
+    const desde = dia("desde");
+    const hasta = dia("hasta");
+    const dias = desde !== null || hasta !== null ? { desde: desde ?? 1, hasta: hasta ?? 31 } : null;
+    if (dias && dias.desde > dias.hasta) throw new HttpError(400, "El día inicial no puede ser después del final.");
+    return json({ ok: true, analysis: await analyzeCampaign(env, campaign, mes, agente, undefined, dias) });
   });
 
   /** Histórico: un resumen por mes con los archivos vigentes de cada mes (mismo cálculo que cada pestaña). */
