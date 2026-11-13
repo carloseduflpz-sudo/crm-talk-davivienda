@@ -1761,6 +1761,27 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
     return f.tipo === "pct" ? `${d > 0 ? "+" : "−"}${fmtNum(Math.abs(d), 1)} pts` : `${d > 0 ? "+" : "−"}${fmt(f.tipo, Math.abs(d))}`;
   };
 
+  // El resumen de arriba: lo que más se mira, con clic para ver cuáles son (del mes que se está viendo).
+  const ventasDe = (titulo: string, clase?: string[]) => () => open({ fuente: "ventas", title: titulo, filters: clase ? { clase } : undefined });
+  const resumen: (Fila & { abrir?: () => void })[] = tc
+    ? [
+        { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "toda la sábana, con cosecha", abrir: ventasDe("Ventas del mes") },
+        { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: "ya pasaron por PCBM", abrir: ventasDe("TC evaluadas por PCBM", ["aprobado", "rechazado"]) },
+        { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("TC aprobadas", ["aprobado"]) },
+        { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, abrir: ventasDe("TC rechazadas", ["rechazado"]) },
+        { sec: "", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: "aún no pasan por PCBM", abrir: ventasDe("TC pendientes de evaluar", ["en_proceso"]) },
+        { sec: "", label: "% Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "aprobadas ÷ evaluadas" },
+        { sec: "", label: "% Rechazo", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false, nota: "rechazadas ÷ evaluadas" },
+      ]
+    : [
+        { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("Ventas del mes") },
+        { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("Ventas aprobadas", ["aprobado"]) },
+        { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, abrir: ventasDe("Ventas rechazadas", ["rechazado"]) },
+        { sec: "", label: "En proceso", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, abrir: ventasDe("Ventas en proceso", ["en_proceso"]) },
+        { sec: "", label: "Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "sobre las ya resueltas" },
+        { sec: "", label: "% Rechazo", a: sh(v(a)?.rechazadas, v(a)?.total), b: sh(v(b)?.rechazadas, v(b)?.total), tipo: "pct", upIsGood: false, nota: "sobre todas las ventas" },
+      ];
+
   return (
     <Stack>
       {/* Los dos meses frente a frente y contra cuál se compara. */}
@@ -1791,6 +1812,60 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
       {!mesB && <Aside>Para comparar hace falta otro mes con archivos.</Aside>}
       {qb.isError && <ErrorMessage>{qb.error.message}</ErrorMessage>}
       {mesB && !b && qb.isFetching && <p className="text-sm text-ink-soft">Calculando {nombreB}…</p>}
+
+      {/* Lo principal, un mes a la par del otro: evaluadas, aprobadas, rechazadas, pendientes y los %. */}
+      {v(a) && (
+        <div className="overflow-hidden rounded-2xl border border-hair bg-white dark:bg-slate-900">
+          <div className="grid grid-cols-[minmax(9rem,1.4fr)_1fr_1fr_1fr] items-end gap-x-4 border-b border-hair px-6 pt-5 pb-3 text-[12px] text-ink-soft">
+            <span className="text-[15px] font-semibold text-ink">{tc ? "Evaluación PCBM" : "Resultado del banco"}</span>
+            <span className="text-right">
+              <span className="block font-medium text-[var(--viz-1)] first-letter:uppercase">{nombreA}</span>
+              {rango(a)}
+            </span>
+            <span className="text-right">
+              <span className="block font-medium text-ink first-letter:uppercase">{nombreB || "—"}</span>
+              {b ? rango(b) : rango(a)}
+            </span>
+            <span className="text-right">Cambio</span>
+          </div>
+          <ul className="divide-y divide-hair">
+            {resumen.map((f) => {
+              const d = deltaOf(f.a, f.b, "", { rate: f.tipo === "pct", upIsGood: f.upIsGood ?? null });
+              const tono = !d || d.good === null ? "text-ink-soft" : d.good ? "text-[var(--st-good)]" : "text-[var(--st-critical)]";
+              const contenido = (
+                <>
+                  <span className="text-[14px] text-ink">
+                    {f.label}
+                    {f.nota && <span className="block text-[12px] text-ink-soft">{f.nota}</span>}
+                  </span>
+                  <span className="text-right text-[24px] leading-none font-semibold tabular-nums text-ink">{fmt(f.tipo, f.a)}</span>
+                  <span className="text-right text-[20px] leading-none tabular-nums text-ink-soft">{fmt(f.tipo, f.b)}</span>
+                  <span className={`text-right text-[13px] tabular-nums ${tono}`}>
+                    {diferencia(f) ?? "—"}
+                    {d && f.tipo !== "pct" && (
+                      <span className="block text-[12px]">
+                        {d.dir === "up" ? "↑" : d.dir === "down" ? "↓" : "="} {d.text}
+                      </span>
+                    )}
+                  </span>
+                </>
+              );
+              const clase = "grid w-full grid-cols-[minmax(9rem,1.4fr)_1fr_1fr_1fr] items-center gap-x-4 px-6 py-3.5 text-left";
+              return (
+                <li key={f.label}>
+                  {f.abrir ? (
+                    <button type="button" onClick={f.abrir} title={`Ver cuáles son (${nombreA})`} className={`${clase} transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40`}>
+                      {contenido}
+                    </button>
+                  ) : (
+                    <div className={clase}>{contenido}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {secciones.map((sec) => (
         <section key={sec} aria-labelledby={`cmp-${sec}`}>
