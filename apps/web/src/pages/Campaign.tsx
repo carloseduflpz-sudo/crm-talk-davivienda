@@ -141,7 +141,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
     key: k,
-    label: SALE_LABEL[k]!,
+    label: k === "en_proceso" && !money ? "Pendientes de evaluar" : SALE_LABEL[k]!,
     value: money
       ? k === "aprobado"
         ? v.monto.aprobado
@@ -179,11 +179,22 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 spark: days.map((d) => d.ventas),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               },
+          // Monto (CDC, Extra): como estaba. Por ventas: evaluadas → aprobadas → rechazadas → % sobre las evaluadas.
+          ...(money ? [] : [
+            {
+              label: "Evaluadas",
+              num: v.aprobadas + v.rechazadas,
+              format: intOf,
+              foot: `${a.campaign === "tdc" ? "Ya pasaron por PCBM" : "Ya resueltas por el banco"}; ${fmtInt.format(v.enProceso)} ${v.enProceso === 1 ? "pendiente" : "pendientes"} de evaluar`,
+              delta: deltaOf(v.aprobadas + v.rechazadas, p ? p.aprobadas + p.rechazadas : undefined, vs),
+              onOpen: () => open({ fuente: "ventas", title: a.campaign === "tdc" ? "TC evaluadas por PCBM" : "Ventas evaluadas", filters: { clase: ["aprobado", "rechazado"] } }),
+            },
+          ]),
           {
             label: "Aprobadas",
             num: money ? v.monto.aprobado : v.aprobadas,
             format: money ? fmtMoney : intOf,
-            foot: money ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto` : `${fmtPct(share(v.aprobadas, v.total))} del total`,
+            foot: money ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto` : `${fmtPct(share(v.aprobadas, v.aprobadas + v.rechazadas))} de las evaluadas`,
             delta: pDays
               ? money
                 ? deltaOf(cSum("montoAprobado"), pSum("montoAprobado"), vsDay)
@@ -199,19 +210,41 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: money ? fmtMoney : intOf,
             foot: money
               ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto`
-              : `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de rechazo sobre evaluadas${p && prev?.month ? ` (${monthLabel(prev.month).split(" ")[0]}: ${fmtPct(share(p.rechazadas, p.aprobadas + p.rechazadas))})` : ""}`,
+              : `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de las evaluadas`,
             delta: money ? deltaOf(v.monto.rechazado, p?.monto.rechazado, vs, { upIsGood: false }) : deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
             onOpen: () => open({ fuente: "ventas", title: "Ventas rechazadas", filters: { clase: "rechazado" } }),
           },
+          // Las pendientes (en proceso) van en el pie de "Evaluadas" y en la barra; en monto, su propia cifra.
+          ...(money
+            ? [
+                {
+                  label: "En proceso",
+                  num: v.monto.enProceso,
+                  format: fmtMoney,
+                  foot: `${ventasN(v.enProceso)} sin resolución del banco`,
+                  delta: deltaOf(v.monto.enProceso, p?.monto.enProceso, vs, { upIsGood: null }),
+                  onOpen: () => open({ fuente: "ventas", title: "Ventas en proceso", filters: { clase: "en_proceso" } }),
+                },
+              ]
+            : []),
           {
-            label: "En proceso",
-            num: money ? v.monto.enProceso : v.enProceso,
-            format: money ? fmtMoney : intOf,
-            foot: money ? `${ventasN(v.enProceso)} sin resolución del banco` : "Sin resolución del banco",
-            delta: money ? deltaOf(v.monto.enProceso, p?.monto.enProceso, vs, { upIsGood: null }) : deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
-            onOpen: () => open({ fuente: "ventas", title: "Ventas en proceso", filters: { clase: "en_proceso" } }),
+            label: money ? "Aprobación" : "% Aprobación",
+            num: v.aprobacion,
+            format: pct1,
+            foot: money ? "Sobre las ya resueltas" : `${fmtInt.format(v.aprobadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas`,
+            delta: deltaOf(v.aprobacion, p?.aprobacion, vs, { rate: true }),
           },
-          { label: "Aprobación", num: v.aprobacion, format: pct1, foot: "Sobre las ya resueltas", delta: deltaOf(v.aprobacion, p?.aprobacion, vs, { rate: true }) },
+          ...(money
+            ? []
+            : [
+                {
+                  label: "% Rechazo",
+                  num: share(v.rechazadas, v.aprobadas + v.rechazadas),
+                  format: pct1,
+                  foot: `${fmtInt.format(v.rechazadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas`,
+                  delta: deltaOf(share(v.rechazadas, v.aprobadas + v.rechazadas), p ? share(p.rechazadas, p.aprobadas + p.rechazadas) : undefined, vs, { rate: true, upIsGood: false }),
+                },
+              ]),
         ]}
       >
         <ShareBar
