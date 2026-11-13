@@ -199,7 +199,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
             format: money ? fmtMoney : intOf,
             foot: money
               ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto`
-              : `${fmtPct(share(v.rechazadas, v.total))} de rechazo${p && prev?.month ? ` (${monthLabel(prev.month).split(" ")[0]}: ${fmtPct(share(p.rechazadas, p.total))})` : ""}`,
+              : `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de rechazo sobre evaluadas${p && prev?.month ? ` (${monthLabel(prev.month).split(" ")[0]}: ${fmtPct(share(p.rechazadas, p.aprobadas + p.rechazadas))})` : ""}`,
             delta: money ? deltaOf(v.monto.rechazado, p?.monto.rechazado, vs, { upIsGood: false }) : deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
             onOpen: () => open({ fuente: "ventas", title: "Ventas rechazadas", filters: { clase: "rechazado" } }),
           },
@@ -221,6 +221,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
           onSelect={(x) => open({ fuente: "ventas", title: `Ventas ${x.label.toLowerCase()}`, filters: { clase: parts.find((q) => q.label === x.label)!.key } })}
         />
       </FigureStrip>
+
+      {v.pcbm && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} />}
 
       <ChartCard
         title={money ? "Monto por día" : "Ventas por día"}
@@ -335,7 +337,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
               ],
               extra: [
                 { label: "aprobación", value: fmtPct(m.aprobacion) },
-                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.ventas)) },
+                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.aprobadas + m.rechazadas)) },
               ],
             }))}
           />
@@ -358,14 +360,82 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                     ]
                   : []),
                 { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
-                // % de rechazo: rechazadas ÷ todas las ventas de la sábana del mes (incluye las que siguen en proceso).
-                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.ventas)) },
+                // % de rechazo sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
+                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) },
               ]}
             />
           </div>
         </ChartCard>
       )}
     </Stack>
+  );
+}
+
+/**
+ * Evaluación PCBM (TDC): evaluadas = ya pasaron por PCBM (aprobadas + rechazadas); los % de aprobación y de rechazo
+ * se sacan sobre las evaluadas. Del mes, de la cosecha y total; y la tabla por etapa como la dinámica de la sábana.
+ */
+function EvaluacionPcbm({ p, prev, prevMonth }: { p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>; prev: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]> | null; prevMonth: string | null }) {
+  const filas = [
+    { nombre: "Vendidas en el mes", f: p.mes },
+    { nombre: "Cosecha (meses anteriores)", f: p.cosecha },
+    { nombre: "Total de la sábana", f: p.total, total: true },
+  ].filter((x) => x.total || x.f.ventas > 0);
+  const pm = prevMonth ? monthLabel(prevMonth).split(" ")[0] : "";
+  type F = (typeof filas)[number];
+  const b = (x: { total?: boolean }, v: ReactNode) => (x.total ? <span className="font-semibold text-ink">{v}</span> : v);
+  const COMO: Record<string, string> = { aprobado: "Evaluada · aprobada", rechazado: "Evaluada · rechazada", en_proceso: "Pendiente" };
+  type E = (typeof p.etapas)[number] & { total?: boolean; primera?: boolean };
+  const etapas: E[] = [
+    ...p.etapas.map((e, i) => ({ ...e, primera: i === 0 || p.etapas[i - 1]!.etapa !== e.etapa })),
+    { etapa: "Total general", estatus: "", clase: "en_proceso" as const, ventas: p.total.ventas, cosecha: p.total.ventas - p.mes.ventas, total: true },
+  ];
+  return (
+    <ChartCard title="Evaluación PCBM" note="Evaluadas: ventas que ya pasaron por PCBM, aprobadas (entregada, en distribución, sin embozo, devolución…) o rechazadas. Los % de aprobación y de rechazo se sacan sobre las evaluadas. Pendientes: las que siguen en PCBM o en apoyo Talk.">
+      <div className="mb-6 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
+        {[
+          { label: "Evaluadas por PCBM", v: fmtInt.format(p.total.evaluadas), foot: `de ${fmtInt.format(p.total.ventas)} ventas` },
+          { label: "% Aprobación", v: fmtPct(p.total.aprobacion), foot: `${fmtInt.format(p.total.aprobadas)} aprobadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.aprobacion)}` : ""}` },
+          { label: "% Rechazo", v: fmtPct(p.total.rechazo), foot: `${fmtInt.format(p.total.rechazadas)} rechazadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.rechazo)}` : ""}` },
+          { label: "Pendientes", v: fmtInt.format(p.total.pendientes), foot: "aún sin evaluar" },
+        ].map((k) => (
+          <div key={k.label}>
+            <p className="text-[13px] text-ink-soft">{k.label}</p>
+            <p className="mt-1 text-[26px] font-semibold tabular-nums text-ink">{k.v}</p>
+            <p className="text-[12px] text-ink-soft">{k.foot}</p>
+          </div>
+        ))}
+      </div>
+      <DataTable
+        rows={filas}
+        cols={[
+          { key: "nombre", label: "", render: (x: F) => b(x, x.nombre) },
+          { key: "ventas", label: "Ventas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.ventas)) },
+          { key: "evaluadas", label: "Evaluadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.evaluadas)) },
+          { key: "aprobadas", label: "Aprobadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.aprobadas)) },
+          { key: "rechazadas", label: "Rechazadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.rechazadas)) },
+          { key: "aprobacion", label: "% Aprobación", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.aprobacion) : "—") },
+          { key: "rechazo", label: "% Rechazo", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.rechazo) : "—") },
+          { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.pendientes)) },
+        ]}
+      />
+      <h3 className="mt-8 mb-2 text-[14px] font-semibold text-ink">Por etapa (como la tabla dinámica de la sábana)</h3>
+      <DataTable
+        rows={etapas}
+        cols={[
+          { key: "etapa", label: "Etapa primaria", render: (e: E) => b(e, e.total || e.primera ? e.etapa : "") },
+          { key: "estatus", label: "Subetapa", render: (e: E) => e.estatus },
+          { key: "como", label: "Cuenta como", render: (e: E) => (e.total ? "" : <span style={{ color: SALE_COLORS[e.clase] }}>{COMO[e.clase]}</span>) },
+          { key: "ventas", label: "Total", align: "right", render: (e: E) => b(e, fmtInt.format(e.ventas)) },
+          { key: "pct", label: "%", align: "right", render: (e: E) => b(e, fmtPct(share(e.ventas, p.total.ventas), 0)) },
+          { key: "cosecha", label: "De ellas, cosecha", align: "right", render: (e: E) => b(e, e.cosecha ? fmtInt.format(e.cosecha) : "—") },
+        ]}
+      />
+      <p className="mt-3 text-[13px] text-ink-soft">
+        Cuadre: {fmtInt.format(p.total.aprobadas)} aprobadas + {fmtInt.format(p.total.rechazadas)} rechazadas = {fmtInt.format(p.total.evaluadas)} evaluadas; + {fmtInt.format(p.total.pendientes)} pendientes ={" "}
+        {fmtInt.format(p.total.ventas)} ventas.
+      </p>
+    </ChartCard>
   );
 }
 
@@ -1384,8 +1454,9 @@ function HistoricoTab({ a, setMonth }: Ctx) {
               key: "rechazo",
               label: "% Rechazo",
               align: "right",
-              render: (r) => (r.ventas && r.rechazadas !== null ? fmtPct(share(r.rechazadas, r.ventas)) : "—"),
-              sort: (r) => (r.ventas && r.rechazadas !== null ? share(r.rechazadas, r.ventas) : -1),
+              // Sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
+              render: (r) => (r.rechazadas !== null && r.aprobadas !== null && r.aprobadas + r.rechazadas > 0 ? fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) : "—"),
+              sort: (r) => (r.rechazadas !== null && r.aprobadas !== null && r.aprobadas + r.rechazadas > 0 ? share(r.rechazadas, r.aprobadas + r.rechazadas) : -1),
             },
             ...(money
               ? [

@@ -1,4 +1,5 @@
 /* Forma de la respuesta de /api/analisis: compartida por la API y las pantallas. */
+import type { SaleClass } from "./classify";
 
 export interface Count {
   label: string;
@@ -15,6 +16,20 @@ export interface SalesAgentRow {
   /** Suma del monto de la sábana (CDC, Extra, UPIN traen monto) y de lo aprobado. */
   monto: number;
   montoAprobado: number;
+}
+
+/**
+ * Evaluación PCBM: evaluadas = ya pasaron por PCBM (aprobadas + rechazadas); pendientes = aún sin resolver.
+ * % de aprobación y de rechazo sobre las evaluadas. Cuadre: ventas = evaluadas + pendientes.
+ */
+export interface PcbmRow {
+  ventas: number;
+  evaluadas: number;
+  aprobadas: number;
+  rechazadas: number;
+  pendientes: number;
+  aprobacion: number;
+  rechazo: number;
 }
 
 /** Ventas en un proceso del banco: evaluadas = aprobadas + rechazadas; pendientes = siguen en proceso. */
@@ -101,6 +116,14 @@ export interface CampaignAnalysis {
     cosecha: { total: number; monto: number; porMes: { month: string; ventas: number; monto: number }[] };
     /** En qué proceso va cada venta, por separado las del mes (actual) y las de meses anteriores (cosecha). */
     procesos: { actual: ProcesoRow[]; cosecha: ProcesoRow[] };
+    /** Evaluación PCBM (solo TDC): del mes, de la cosecha y el total. */
+    pcbm: null | {
+      mes: PcbmRow;
+      cosecha: PcbmRow;
+      total: PcbmRow;
+      /** Como la tabla dinámica de la sábana: etapa primaria, subetapa, cómo cuenta y cuántas (y de ellas, cosecha). */
+      etapas: { etapa: string; estatus: string; clase: SaleClass; ventas: number; cosecha: number }[];
+    };
     /** Ventas pendientes por requisito: qué documento se le pide a cada cliente (null si no hay). */
     requisitos: null | {
       /** Ventas pendientes por combinación de documentos (cada una cuenta una sola vez: suma el total). */

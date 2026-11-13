@@ -621,3 +621,41 @@ describe("seguimiento del cliente", () => {
     expect((await call("GET", "/clientes/buscar?q=jo")).status).toBe(400);
   });
 });
+
+describe("evaluación PCBM (TDC)", () => {
+  it("evaluadas = aprobadas + rechazadas; % sobre evaluadas; por etapa como la tabla dinámica; cuadra con las ventas", async () => {
+    const E = "ETAPA PRIMARIA";
+    const fila = (niu: string, d: string, st: string, etapa: string) => ({ niu, saleDate: d, executive: "Ana", statusRaw: st, extra: { [E]: etapa } });
+    // La tabla dinámica de noviembre de Carlos (113 ventas), en pequeño.
+    await load("tdc:sabana", "2026-07", [
+      fila("9001", "2026-07-02", "ENTREGADA", "1ENTREGADA"),
+      fila("9002", "2026-07-03", "EN DISTRIBUCION", "2EN DISTRIBUCION"),
+      fila("9003", "2026-07-03", "SIN EMBOZO", "2EN DISTRIBUCION"),
+      fila("9004", "2026-07-04", "DEVOLUCION TALK AMERICA", "2EN DISTRIBUCION"),
+      fila("9005", "2026-07-04", "RECHAZADA", "3EN PCBM"),
+      fila("9006", "2026-07-05", "PENDIENTE DE EVALUACION POR PCBM", "3EN PCBM"),
+      fila("9007", "2026-07-05", "IMPASE EN GESTOR", "3EN PCBM"),
+      fila("9008", "2026-07-06", "PENDIENTE POR REQUISITO", "6APOYO TALK AMERICAS"),
+      fila("9009", "2026-06-20", "EXTRAREQUISITO", "6APOYO TALK AMERICAS"), // cosecha
+    ]);
+    const t = ((await call("GET", "/analisis/tdc?mes=2026-07")).data.analysis as CampaignAnalysis).ventas!.pcbm!;
+    expect(t.total).toMatchObject({ ventas: 9, evaluadas: 5, aprobadas: 4, rechazadas: 1, pendientes: 4, aprobacion: 80, rechazo: 20 });
+    expect(t.mes).toMatchObject({ ventas: 8, evaluadas: 5 });
+    expect(t.cosecha).toMatchObject({ ventas: 1, evaluadas: 0, pendientes: 1 });
+    expect(t.etapas.map((e) => [e.etapa, e.estatus, e.clase])).toEqual([
+      ["1ENTREGADA", "ENTREGADA", "aprobado"],
+      ["2EN DISTRIBUCION", "DEVOLUCION TALK AMERICA", "aprobado"],
+      ["2EN DISTRIBUCION", "EN DISTRIBUCION", "aprobado"],
+      ["2EN DISTRIBUCION", "SIN EMBOZO", "aprobado"],
+      ["3EN PCBM", "IMPASE EN GESTOR", "en_proceso"],
+      ["3EN PCBM", "PENDIENTE DE EVALUACION POR PCBM", "en_proceso"],
+      ["3EN PCBM", "RECHAZADA", "rechazado"],
+      ["6APOYO TALK AMERICAS", "EXTRAREQUISITO", "en_proceso"],
+      ["6APOYO TALK AMERICAS", "PENDIENTE POR REQUISITO", "en_proceso"],
+    ]);
+    expect(t.etapas.reduce((a, e) => a + e.ventas, 0)).toBe(t.total.ventas);
+    expect(t.total.evaluadas + t.total.pendientes).toBe(t.total.ventas);
+    // Otras campañas no la tienen.
+    expect(((await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!.pcbm).toBe(null);
+  });
+});

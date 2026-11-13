@@ -19,6 +19,7 @@ import {
   type CampaignCode,
   type Count,
   type MonthSummary,
+  type SaleClass,
 } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
@@ -365,10 +366,11 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         cosecha: { total: 0, monto: 0, porMes: [] },
         procesos: { actual: [], cosecha: [] },
         requisitos: null,
+        pcbm: null,
       };
       // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
       if (month) {
-        const [cos, proc, req] = await db.batch([
+        const [cos, proc, req, pcbm] = await db.batch([
           db
             .prepare(
               `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
@@ -409,7 +411,46 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                 ORDER BY sale_date, niu LIMIT 3000`,
             )
             .bind(month, campaign, id, ...fb),
+          /* Evaluación PCBM (TDC): evaluada = ya pasó por PCBM, o sea, ya tiene resolución: aprobada (entregada, en
+             distribución, sin embozo, devolución…) o rechazada. Lo demás (en PCBM sin resolver, apoyo Talk) está
+             pendiente. Por etapa primaria y subetapa, como la tabla dinámica de la sábana. */
+          db
+            .prepare(
+              `SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen,
+                      COALESCE(NULLIF(TRIM(json_extract(extra, '$."ETAPA PRIMARIA"')), ''), '(sin etapa)') AS etapa,
+                      COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS estatus, status_class AS clase, COUNT(*) AS n
+                 FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2, 3, 4`,
+            )
+            .bind(month, campaign === "tdc" ? id : null, ...fb),
         ]);
+        type Pcbm = { origen: "mes" | "cosecha"; etapa: string; estatus: string; clase: SaleClass; n: number };
+        const pcbmRows = pcbm!.results as Pcbm[];
+        const filaPcbm = (rs: Pcbm[]) => {
+          const de = (c: SaleClass) => rs.filter((r) => r.clase === c).reduce((t, r) => t + n(r.n), 0);
+          const aprobadas = de("aprobado");
+          const rechazadas = de("rechazado");
+          const evaluadas = aprobadas + rechazadas;
+          return { ventas: rs.reduce((t, r) => t + n(r.n), 0), evaluadas, aprobadas, rechazadas, pendientes: de("en_proceso"), aprobacion: pct(aprobadas, evaluadas), rechazo: pct(rechazadas, evaluadas) };
+        };
+        if (campaign === "tdc" && pcbmRows.length) {
+          const etapas = new Map<string, { etapa: string; estatus: string; clase: SaleClass; ventas: number; cosecha: number }>();
+          for (const r of pcbmRows) {
+            const k = `${r.etapa}|${r.estatus}|${r.clase}`;
+            const e = etapas.get(k) ?? { etapa: r.etapa, estatus: r.estatus, clase: r.clase, ventas: 0, cosecha: 0 };
+            e.ventas += n(r.n);
+            if (r.origen === "cosecha") e.cosecha += n(r.n);
+            etapas.set(k, e);
+          }
+          out.ventas.pcbm = {
+            mes: filaPcbm(pcbmRows.filter((r) => r.origen === "mes")),
+            cosecha: filaPcbm(pcbmRows.filter((r) => r.origen === "cosecha")),
+            total: filaPcbm(pcbmRows),
+            // Ordenadas como la tabla dinámica: por etapa ("1ENTREGADA", "2EN DISTRIBUCION"…) y, dentro, de mayor a menor.
+            etapas: [...etapas.values()].sort(
+              (x, y) => Number(x.etapa === "(sin etapa)") - Number(y.etapa === "(sin etapa)") || x.etapa.localeCompare(y.etapa, "es", { numeric: true }) || y.ventas - x.ventas,
+            ),
+          };
+        }
         type Req = {
           niu: string;
           fecha: string | null;
