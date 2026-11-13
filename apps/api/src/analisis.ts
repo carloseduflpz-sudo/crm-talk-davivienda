@@ -87,10 +87,11 @@ function acumulado(month: string, porDia: { date: string; ventas: number; monto:
 }
 
 /**
- * Cuántos clientes piden cada documento. Un cliente puede deber varios ("DUI, constancia de salario"): cuenta en
- * cada uno. Se juntan los que vienen escritos distinto solo por mayúsculas, tildes o espacios.
+ * Documentos pedidos, unificados: cada venta pendiente cuenta UNA sola vez, en la combinación exacta de documentos
+ * que debe ("Boleta + Recibo" es su propio grupo, distinto de "Boleta" sola). Así la suma da el total de pendientes.
+ * Los documentos escritos distinto solo por mayúsculas, tildes, espacios o el orden ("recibo y boleta") se juntan.
  */
-export function contarDocumentos(textos: (string | null)[]): { label: string; clientes: number }[] {
+export function agruparDocumentos(textos: (string | null)[]): { grupos: string[]; porDocumento: { label: string; clientes: number }[] } {
   const clave = (s: string) =>
     s
       .normalize("NFD")
@@ -98,18 +99,18 @@ export function contarDocumentos(textos: (string | null)[]): { label: string; cl
       .replace(/\s+/g, " ")
       .trim()
       .toUpperCase();
-  const m = new Map<string, { label: string; clientes: number }>();
-  for (const t of textos) {
-    const partes = t ? t.split(/\s*(?:[,;\/+\n]|\s-\s|\sy\s)\s*/i).map((x) => x.trim()).filter((x) => x.length > 1) : [];
-    for (const p of partes.length ? [...new Set(partes.map(clave))].map((k) => partes.find((x) => clave(x) === k)!) : ["Sin documento especificado"]) {
-      const k = clave(p);
-      // Se muestra como viene escrito la primera vez.
-      const e = m.get(k) ?? { label: p.replace(/\s+/g, " "), clientes: 0 };
-      e.clientes++;
-      m.set(k, e);
-    }
-  }
-  return [...m.values()].sort((a, b) => b.clientes - a.clientes || a.label.localeCompare(b.label, "es"));
+  const partesDe = (t: string | null) => (t ? t.split(/\s*(?:[,;\/+\n]|\s-\s|\sy\s)\s*/i).map((x) => x.trim()).filter((x) => x.length > 1) : []);
+  // Cada documento se muestra como viene escrito la primera vez.
+  const escrito = new Map<string, string>();
+  for (const t of textos) for (const p of partesDe(t)) if (!escrito.has(clave(p))) escrito.set(clave(p), p.replace(/\s+/g, " "));
+  const grupos = textos.map((t) => {
+    const claves = [...new Set(partesDe(t).map(clave))].sort((x, y) => x.localeCompare(y, "es"));
+    return claves.length ? claves.map((k) => escrito.get(k)!).join(" + ") : "Sin documento especificado";
+  });
+  const m = new Map<string, number>();
+  for (const g of grupos) m.set(g, (m.get(g) ?? 0) + 1);
+  const porDocumento = [...m.entries()].map(([label, clientes]) => ({ label, clientes })).sort((x, y) => y.clientes - x.clientes || x.label.localeCompare(y.label, "es"));
+  return { grupos, porDocumento };
 }
 
 /** Días de un mes (del día desde al día hasta) para comparar meses al mismo corte. */
@@ -435,7 +436,10 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           pendienteDesde: r.visto && r.fecha && /^\d{4}-\d{2}-\d{2}/.test(r.fecha) && r.fecha.slice(0, 10) > r.visto ? r.fecha.slice(0, 10) : r.visto,
           diasBanco: r.dias_banco === null || r.dias_banco === undefined ? null : n(r.dias_banco),
         }));
-        out.ventas.requisitos = pendientes.length ? { clientes: pendientes, porDocumento: contarDocumentos(pendientes.map((x) => x.documento)) } : null;
+        const unificado = agruparDocumentos(pendientes.map((x) => x.documento));
+        out.ventas.requisitos = pendientes.length
+          ? { clientes: pendientes.map((x, i) => ({ ...x, grupo: unificado.grupos[i]! })), porDocumento: unificado.porDocumento }
+          : null;
         const prevRows = cos!.results as { m: string; n: number; monto: number }[];
         out.ventas.cosecha = {
           total: prevRows.reduce((t, r) => t + n(r.n), 0),

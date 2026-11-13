@@ -2,6 +2,7 @@
 import type { CampaignAnalysis } from "@crm/core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { memoryD1 } from "../test/d1";
+import { agruparDocumentos } from "./analisis";
 import { createApp } from "./app";
 import { SESSION_COOKIE } from "./auth";
 import type { Env } from "./env";
@@ -289,6 +290,16 @@ describe("detalle de clientes", () => {
 });
 
 describe("pendientes por requisito: qué documento se pide", () => {
+  it("unifica: cada cliente en una sola combinación, sin importar orden ni forma de escribir", () => {
+    const u = agruparDocumentos(["Boleta y recibo", "RECIBO, boleta", "Boleta", null, "recibo"]);
+    expect(u.grupos).toEqual(["Boleta + recibo", "Boleta + recibo", "Boleta", "Sin documento especificado", "recibo"]);
+    expect(u.porDocumento).toEqual([
+      { label: "Boleta + recibo", clientes: 2 },
+      { label: "Boleta", clientes: 1 },
+      { label: "recibo", clientes: 1 },
+      { label: "Sin documento especificado", clientes: 1 },
+    ]);
+  });
   it("lista cada cliente con su documento y cuenta por documento", async () => {
     const R = "PENDIENTE POR REQUISITO";
     await load("upin:sabana", "2026-09", [
@@ -304,11 +315,14 @@ describe("pendientes por requisito: qué documento se pide", () => {
       ["1", "DUI, Constancia de salario", "mes"],
       ["2", "constancia de  salario", "mes"],
     ]);
+    // Unificado: cada venta en un solo grupo (la combinación que debe); la suma da el total.
     expect(r.porDocumento).toEqual([
-      { label: "Constancia de salario", clientes: 2 },
-      { label: "DUI", clientes: 1 },
+      { label: "Constancia de salario", clientes: 1 },
+      { label: "Constancia de salario + DUI", clientes: 1 },
       { label: "Recibo de luz", clientes: 1 },
     ]);
+    expect(r.porDocumento.reduce((t, d) => t + d.clientes, 0)).toBe(r.clientes.length);
+    expect(r.clientes.find((c) => c.niu === "1")!.grupo).toBe("Constancia de salario + DUI");
     // Desde cuándo: la primera sábana en que venía pendiente (cargada hoy → el último día de su mes, septiembre).
     expect(r.clientes.find((c) => c.niu === "1")!.pendienteDesde).toBe("2026-09-30");
     // Si una versión anterior (cargada el 10 de septiembre) ya lo traía pendiente, desde ese día.

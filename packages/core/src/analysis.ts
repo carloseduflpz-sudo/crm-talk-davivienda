@@ -103,6 +103,7 @@ export interface CampaignAnalysis {
     procesos: { actual: ProcesoRow[]; cosecha: ProcesoRow[] };
     /** Ventas pendientes por requisito: qué documento se le pide a cada cliente (null si no hay). */
     requisitos: null | {
+      /** Ventas pendientes por combinación de documentos (cada una cuenta una sola vez: suma el total). */
       porDocumento: { label: string; clientes: number }[];
       clientes: {
         niu: string;
@@ -119,6 +120,8 @@ export interface CampaignAnalysis {
         pendienteDesde: string | null;
         /** "CONTADOR DIAS" de la sábana (días en proceso según el banco), si viene. */
         diasBanco: number | null;
+        /** Combinación de documentos que debe (p. ej. "Boleta + Recibo"): el grupo en que cuenta, una sola vez. */
+        grupo: string;
       }[];
     };
   };

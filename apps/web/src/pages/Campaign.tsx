@@ -372,18 +372,11 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
 /** Pendientes por requisito: qué documento se le está pidiendo a cada cliente, con la lista para descargar. */
 function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>; campana: string; mes: string }) {
   const [doc, setDoc] = useState<string | null>(null);
-  const clave = (x: string) =>
-    x
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toUpperCase();
   // Días pendiente: desde la primera sábana en que ya venía pendiente por requisito hasta hoy.
   const hoy = new Date();
   const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
   const dias = (iso: string | null) => (iso ? Math.max(0, Math.round((hoyUTC - Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)))) / 86_400_000)) : null);
-  const filas = doc ? r.clientes.filter((c) => (doc === "Sin documento especificado" ? !c.documento : clave(c.documento ?? "").includes(clave(doc)))) : r.clientes;
+  const filas = doc ? r.clientes.filter((c) => c.grupo === doc) : r.clientes;
   const columnas = [
     { key: "niu", label: "NIU" },
     { key: "nombre", label: "Cliente" },
@@ -393,7 +386,8 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
     { key: "pendienteDesde", label: "Pendiente desde" },
     { key: "dias", label: "Días pendiente" },
     { key: "diasBanco", label: "Días en proceso (banco)" },
-    { key: "documento", label: "Documento pedido" },
+    { key: "grupo", label: "Documentos (unificado)" },
+    { key: "documento", label: "Documento pedido (como viene)" },
     { key: "documentacion", label: "Documentación" },
     { key: "observacion", label: "Observación" },
     { key: "origen", label: "Venta" },
@@ -401,12 +395,19 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
   const descargar = () =>
     void downloadWorkbook(`Pendientes por requisito ${campana.toUpperCase()} ${mes}.xlsx`, [
       { name: "Pendientes", columns: columnas, rows: filas.map((c) => ({ ...c, dias: dias(c.pendienteDesde), origen: c.origen === "mes" ? "Del mes" : "Cosecha" })) },
-      { name: "Por documento", columns: [{ key: "label", label: "Documento" }, { key: "clientes", label: "Clientes" }], rows: r.porDocumento },
+      {
+        name: "Por documento",
+        columns: [
+          { key: "label", label: "Documentos" },
+          { key: "clientes", label: "Ventas pendientes" },
+        ],
+        rows: [...r.porDocumento, { label: "Total", clientes: r.clientes.length }],
+      },
     ]);
   return (
     <ChartCard
       title="Pendientes por requisito: qué documento se pide"
-      note={`${fmtInt.format(r.clientes.length)} ${r.clientes.length === 1 ? "venta pendiente" : "ventas pendientes"} por requisito en la sábana (del mes y de la cosecha). Un cliente que debe varios documentos cuenta en cada uno. Clic en un documento para ver solo esos clientes. "Pendiente desde" es la primera sábana cargada en que ya venía pendiente; los días se cuentan hasta hoy.`}
+      note={`${fmtInt.format(r.clientes.length)} ${r.clientes.length === 1 ? "venta pendiente" : "ventas pendientes"} por requisito en la sábana (del mes y de la cosecha). Cada una cuenta una sola vez, en la combinación de documentos que debe (por ejemplo, "Boleta + Recibo"): la suma da el total. Clic en un grupo para ver solo esos clientes. "Pendiente desde" es la primera sábana cargada en que ya venía pendiente; los días se cuentan hasta hoy.`}
       actions={
         <button type="button" onClick={descargar} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
           Descargar {doc ? "estos clientes" : "la lista"}
@@ -447,7 +448,7 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
               },
               sort: (c) => dias(c.pendienteDesde) ?? -1,
             },
-            { key: "documento", label: "Documento pedido", render: (c) => c.documento ?? "—" },
+            { key: "grupo", label: "Documentos que debe", render: (c) => <span title={c.documento ? `En la sábana: ${c.documento}` : undefined}>{c.grupo}</span>, sort: (c) => c.grupo },
             { key: "observacion", label: "Observación", render: (c) => c.observacion ?? "—" },
           ]}
           initialSort="dias"
