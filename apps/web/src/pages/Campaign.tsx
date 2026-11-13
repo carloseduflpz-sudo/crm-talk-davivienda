@@ -142,11 +142,11 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
   const cosechaTxt = v.cosecha.total ? `${fmtInt.format(v.cosecha.total)} de meses anteriores (cosecha)` : "";
   // CDC y Extra: los indicadores van en dólares (con la cantidad de ventas como referencia).
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
-  // TC: evaluadas (ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre las evaluadas. Las demás campañas, como antes.
-  const tc = a.campaign === "tdc";
+  // Evaluadas (ya resueltas: en TC, ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre las evaluadas.
+  const ev = evaluacionDe(a.campaign);
   const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
     key: k,
-    label: k === "en_proceso" && tc ? "Pendientes de evaluar" : SALE_LABEL[k]!,
+    label: k === "en_proceso" ? "Pendientes" : SALE_LABEL[k]!,
     value: money
       ? k === "aprobado"
         ? v.monto.aprobado
@@ -184,81 +184,53 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                 spark: days.map((d) => d.ventas),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               },
-          ...(!tc ? [] : [
-            {
-              label: "Evaluadas",
-              num: v.aprobadas + v.rechazadas,
-              format: intOf,
-              foot: `Ya pasaron por PCBM (${fmtPct(share(v.aprobadas + v.rechazadas, v.total))} de las ventas)`,
-              delta: deltaOf(v.aprobadas + v.rechazadas, p ? p.aprobadas + p.rechazadas : undefined, vs),
-              onOpen: () => open({ fuente: "ventas", title: "TC evaluadas por PCBM", filters: { clase: ["aprobado", "rechazado"] } }),
-            },
-          ]),
+          // Todas las campañas: evaluadas → aprobadas → rechazadas → pendientes → % sobre las evaluadas, con sus estatus.
+          {
+            label: "Evaluadas",
+            num: v.aprobadas + v.rechazadas,
+            format: intOf,
+            foot: `${ev.evaluadas} (${fmtPct(share(v.aprobadas + v.rechazadas, v.total))} de las ventas)`,
+            delta: deltaOf(v.aprobadas + v.rechazadas, p ? p.aprobadas + p.rechazadas : undefined, vs),
+            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} evaluadas`, filters: { clase: ["aprobado", "rechazado"] } }),
+          },
           {
             label: "Aprobadas",
-            num: money ? v.monto.aprobado : v.aprobadas,
-            format: money ? fmtMoney : intOf,
-            foot: money
-              ? `${ventasN(v.aprobadas)}, ${fmtPct(share(v.monto.aprobado, v.monto.total))} del monto`
-              : tc
-                ? `${fmtPct(share(v.aprobadas, v.aprobadas + v.rechazadas))} de las evaluadas`
-                : `${fmtPct(share(v.aprobadas, v.total))} del total`,
-            delta: pDays
-              ? money
-                ? deltaOf(cSum("montoAprobado"), pSum("montoAprobado"), vsDay)
-                : deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay)
-              : money
-                ? deltaOf(v.monto.aprobado, p?.monto.aprobado, vs)
-                : deltaOf(v.aprobadas, p?.aprobadas, vs),
-            onOpen: () => open({ fuente: "ventas", title: "Ventas aprobadas", filters: { clase: "aprobado" } }),
+            num: v.aprobadas,
+            format: intOf,
+            foot: `${fmtPct(share(v.aprobadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.aprobado)}` : ""}`,
+            delta: pDays ? deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay) : deltaOf(v.aprobadas, p?.aprobadas, vs),
+            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} aprobadas`, filters: { clase: "aprobado" } }),
           },
           {
             label: "Rechazadas",
-            num: money ? v.monto.rechazado : v.rechazadas,
-            format: money ? fmtMoney : intOf,
-            foot: money
-              ? `${ventasN(v.rechazadas)}, ${fmtPct(share(v.monto.rechazado, v.monto.total))} del monto`
-              : tc
-                ? `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de las evaluadas`
-                : `${fmtPct(share(v.rechazadas, v.total))} de rechazo${p && prev?.month ? ` (${monthLabel(prev.month).split(" ")[0]}: ${fmtPct(share(p.rechazadas, p.total))})` : ""}`,
-            delta: money ? deltaOf(v.monto.rechazado, p?.monto.rechazado, vs, { upIsGood: false }) : deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
-            onOpen: () => open({ fuente: "ventas", title: "Ventas rechazadas", filters: { clase: "rechazado" } }),
+            num: v.rechazadas,
+            format: intOf,
+            foot: `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.rechazado)}` : ""}`,
+            delta: deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
+            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} rechazadas`, filters: { clase: "rechazado" } }),
           },
-          tc
-            ? {
-                label: "Pendientes",
-                num: v.enProceso,
-                format: intOf,
-                foot: `Aún no pasan por PCBM (${fmtPct(share(v.enProceso, v.total))} de las ventas)`,
-                delta: deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
-                onOpen: () => open({ fuente: "ventas", title: "TC pendientes de evaluar", filters: { clase: "en_proceso" } }),
-              }
-            : {
-                label: "En proceso",
-                num: money ? v.monto.enProceso : v.enProceso,
-                format: money ? fmtMoney : intOf,
-                foot: money ? `${ventasN(v.enProceso)} sin resolución del banco` : "Sin resolución del banco",
-                delta: money ? deltaOf(v.monto.enProceso, p?.monto.enProceso, vs, { upIsGood: null }) : deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
-                onOpen: () => open({ fuente: "ventas", title: "Ventas en proceso", filters: { clase: "en_proceso" } }),
-              },
           {
-            label: tc ? "% Aprobación" : "Aprobación",
+            label: "Pendientes",
+            num: v.enProceso,
+            format: intOf,
+            foot: `${ev.pendientes} (${fmtPct(share(v.enProceso, v.total))} de las ventas)${money ? ` · ${fmtMoney(v.monto.enProceso)}` : ""}`,
+            delta: deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
+            onOpen: () => open({ fuente: "ventas", title: `${ev.cosa} pendientes`, filters: { clase: "en_proceso" } }),
+          },
+          {
+            label: "% Aprobación",
             num: v.aprobacion,
             format: pct1,
-            foot: tc ? `${fmtInt.format(v.aprobadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas` : "Sobre las ya resueltas",
+            foot: `${fmtInt.format(v.aprobadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas`,
             delta: deltaOf(v.aprobacion, p?.aprobacion, vs, { rate: true }),
           },
-          ...(!tc
-            ? []
-            : [
-                {
-                  label: "% Rechazo",
-                  num: share(v.rechazadas, v.aprobadas + v.rechazadas),
-                  format: pct1,
-                  foot: `${fmtInt.format(v.rechazadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas`,
-                  delta: deltaOf(share(v.rechazadas, v.aprobadas + v.rechazadas), p ? share(p.rechazadas, p.aprobadas + p.rechazadas) : undefined, vs, { rate: true, upIsGood: false }),
-                },
-              ]),
+          {
+            label: "% Rechazo",
+            num: share(v.rechazadas, v.aprobadas + v.rechazadas),
+            format: pct1,
+            foot: `${fmtInt.format(v.rechazadas)} ÷ ${fmtInt.format(v.aprobadas + v.rechazadas)} evaluadas`,
+            delta: deltaOf(share(v.rechazadas, v.aprobadas + v.rechazadas), p ? share(p.rechazadas, p.aprobadas + p.rechazadas) : undefined, vs, { rate: true, upIsGood: false }),
+          },
         ]}
       >
         <ShareBar
@@ -384,7 +356,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
               ],
               extra: [
                 { label: "aprobación", value: fmtPct(m.aprobacion) },
-                { label: "rechazo", value: fmtPct(share(m.rechazadas, tc ? m.aprobadas + m.rechazadas : m.ventas)) },
+                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.aprobadas + m.rechazadas)) },
               ],
             }))}
           />
@@ -407,8 +379,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
                     ]
                   : []),
                 { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
-                // % de rechazo: en TC sobre las evaluadas (aprobadas + rechazadas); en las demás, sobre todas las ventas del mes.
-                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, tc ? r.aprobadas + r.rechazadas : r.ventas)) },
+                // % de rechazo sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
+                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) },
               ]}
             />
           </div>
@@ -1460,21 +1432,17 @@ function HistoricoTab({ a, setMonth }: Ctx) {
     money
       ? { key: "monto", title: `Monto de ventas${alDia}`, value: montoDe, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true, note: sameDay ? `Cada mes sumado del 1 al ${corte}` : undefined }
       : { key: "ventas", title: sameDay ? `Ventas al día ${corte}` : "Ventas de la sábana", value: ventasDe, format: intOf, upIsGood: true, note: sameDay ? `Cada mes contado del 1 al ${corte}` : undefined },
-    { key: "aprobacion", title: a.campaign === "tdc" ? "% Aprobación" : "Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: a.campaign === "tdc" ? "Aprobadas sobre las evaluadas (ya pasaron por PCBM)" : "Aprobadas sobre las ya resueltas por el banco" },
-    ...(a.campaign === "tdc"
-      ? [
-          {
-            key: "rechazo",
-            title: "% Rechazo",
-            value: (m: MonthSummary) => (m.aprobadas !== null && m.rechazadas !== null && m.aprobadas + m.rechazadas > 0 ? share(m.rechazadas, m.aprobadas + m.rechazadas) : null),
-            format: pct1,
-            axis: pctAxis,
-            rate: true,
-            upIsGood: false,
-            note: "Rechazadas sobre las evaluadas (ya pasaron por PCBM)",
-          } as Trend,
-        ]
-      : []),
+    { key: "aprobacion", title: "% Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: `Aprobadas sobre las evaluadas (${evaluacionDe(a.campaign).evaluadas.toLowerCase()})` },
+    {
+      key: "rechazo",
+      title: "% Rechazo",
+      value: (m: MonthSummary) => (m.aprobadas !== null && m.rechazadas !== null && m.aprobadas + m.rechazadas > 0 ? share(m.rechazadas, m.aprobadas + m.rechazadas) : null),
+      format: pct1,
+      axis: pctAxis,
+      rate: true,
+      upIsGood: false,
+      note: `Rechazadas sobre las evaluadas (${evaluacionDe(a.campaign).evaluadas.toLowerCase()})`,
+    },
     {
       key: "cumplimiento",
       title: "Cumplimiento de la meta",
@@ -1492,8 +1460,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
   ];
   type R = MonthSummary;
   const opt = <T,>(v: T | null, f: (x: T) => string) => (v === null ? "—" : f(v));
-  // TC: evaluadas = ya pasaron por PCBM (aprobadas + rechazadas).
-  const tc = a.campaign === "tdc";
+  // Evaluadas = aprobadas + rechazadas (en TC, ya pasaron por PCBM).
   const evaluadasDe = (r: R) => (r.aprobadas === null || r.rechazadas === null ? null : r.aprobadas + r.rechazadas);
   return (
     <Stack>
@@ -1552,9 +1519,8 @@ function HistoricoTab({ a, setMonth }: Ctx) {
               ),
               sort: (r) => r.month,
             },
-            ...(tc
-              ? // TC: ventas del mes completo → evaluadas (ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre evaluadas.
-                [
+            // Ventas del mes completo → evaluadas (ya resueltas; en TC, ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre evaluadas.
+            ...[
                   { key: "ventas", label: "Ventas", align: "right" as const, render: (r: R) => opt(r.ventas, (x) => fmtInt.format(x)), sort: (r: R) => r.ventas ?? -1 },
                   { key: "evaluadas", label: "Evaluadas", align: "right" as const, render: (r: R) => opt(evaluadasDe(r), (x) => fmtInt.format(x)), sort: (r: R) => evaluadasDe(r) ?? -1 },
                   { key: "aprobadas", label: "Aprobadas", align: "right" as const, render: (r: R) => opt(r.aprobadas, (x) => fmtInt.format(x)), sort: (r: R) => r.aprobadas ?? -1 },
@@ -1574,20 +1540,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
                     render: (r: R) => (evaluadasDe(r) ? fmtPct(share(r.rechazadas!, evaluadasDe(r)!)) : "—"),
                     sort: (r: R) => (evaluadasDe(r) ? share(r.rechazadas!, evaluadasDe(r)!) : -1),
                   },
-                ]
-              : [
-                  { key: "ventas", label: sameDay ? `Ventas al día ${corte}` : "Ventas", align: "right" as const, render: (r: R) => opt(ventasDe(r), (x) => fmtInt.format(x)), sort: (r: R) => ventasDe(r) ?? -1 },
-                  { key: "aprobadas", label: "Aprobadas", align: "right" as const, render: (r: R) => opt(r.aprobadas, (x) => fmtInt.format(x)), sort: (r: R) => r.aprobadas ?? -1 },
-                  { key: "aprobacion", label: "Aprobación", align: "right" as const, render: (r: R) => opt(r.aprobacion, (x) => fmtPct(x)), sort: (r: R) => r.aprobacion ?? -1 },
-                  {
-                    key: "rechazo",
-                    label: "% Rechazo",
-                    align: "right" as const,
-                    // Rechazadas sobre todas las ventas de la sábana del mes.
-                    render: (r: R) => (r.ventas && r.rechazadas !== null ? fmtPct(share(r.rechazadas, r.ventas)) : "—"),
-                    sort: (r: R) => (r.ventas && r.rechazadas !== null ? share(r.rechazadas, r.ventas) : -1),
-                  },
-                ]),
+                ],
             ...(money
               ? [
                   { key: "monto", label: sameDay ? `Monto al día ${corte}` : "Monto", align: "right" as const, render: (r: R) => opt(montoDe(r), fmtMoney), sort: (r: R) => montoDe(r) ?? -1 },
@@ -1636,6 +1589,35 @@ function HistoricoTab({ a, setMonth }: Ctx) {
   );
 }
 
+/* ---------- evaluadas, por campaña ---------- */
+
+/**
+ * Cómo se lee "evaluada" en cada campaña: ya tiene resolución del banco (aprobada o rechazada) según sus estatus.
+ * En TC, la resolución es PCBM. Pendientes: todo lo demás.
+ */
+function evaluacionDe(code: string): { titulo: string; cosa: string; evaluadas: string; pendientes: string; aprobadas: string; rechazadas: string } {
+  if (!isCampaignCode(code)) return { titulo: "Evaluación del banco", cosa: "Ventas", evaluadas: "Ya resueltas por el banco", pendientes: "Aún sin resolución del banco", aprobadas: "", rechazadas: "" };
+  const c = getCampaign(code as CampaignCode);
+  const lista = (xs: readonly string[]) => xs.map((x) => x.charAt(0) + x.slice(1).toLowerCase()).join(", ");
+  if (code === "tdc")
+    return {
+      titulo: "Evaluación PCBM",
+      cosa: "TC",
+      evaluadas: "Ya pasaron por PCBM",
+      pendientes: "Aún no pasan por PCBM",
+      aprobadas: "entregada, en distribución, sin embozo, devolución…",
+      rechazadas: "rechazada",
+    };
+  return {
+    titulo: "Evaluación del banco",
+    cosa: "Ventas",
+    evaluadas: "Ya resueltas por el banco",
+    pendientes: "Aún sin resolución del banco",
+    aprobadas: lista(c.approved).toLowerCase(),
+    rechazadas: lista(c.rejected).toLowerCase(),
+  };
+}
+
 /* ---------- Comparativo ---------- */
 
 type Fila = { sec: string; label: string; a: number | null; b: number | null; tipo: "n" | "pct" | "money" | "dec"; upIsGood?: boolean | null; nota?: string };
@@ -1661,7 +1643,7 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
   const qb = useQuery({ ...consultaAnalisis(a.campaign, mesB, a.agente, dias), enabled: Boolean(mesB) });
   const b = qb.data?.month === mesB ? qb.data : undefined;
 
-  const tc = a.campaign === "tdc";
+  const eva = evaluacionDe(a.campaign);
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const nombreA = a.month ? monthLabel(a.month) : "";
   const nombreB = mesB ? monthLabel(mesB) : "";
@@ -1674,22 +1656,12 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
     { sec: "Ventas", label: "Ventas (toda la sábana)", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true },
     { sec: "Ventas", label: "Vendidas en el mes", a: v(a) ? v(a)!.total - v(a)!.cosecha.total : null, b: v(b) ? v(b)!.total - v(b)!.cosecha.total : null, tipo: "n", upIsGood: true },
     { sec: "Ventas", label: "Cosecha (meses anteriores)", a: v(a)?.cosecha.total ?? null, b: v(b)?.cosecha.total ?? null, tipo: "n", upIsGood: null },
-    ...(tc
-      ? ([
-          { sec: "Ventas", label: "Evaluadas (pasaron por PCBM)", a: ev(a), b: ev(b), tipo: "n", upIsGood: true },
-          { sec: "Ventas", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true },
-          { sec: "Ventas", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false },
-          { sec: "Ventas", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null },
-          { sec: "Ventas", label: "% Aprobación (sobre evaluadas)", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
-          { sec: "Ventas", label: "% Rechazo (sobre evaluadas)", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false },
-        ] as Fila[])
-      : ([
-          { sec: "Ventas", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true },
-          { sec: "Ventas", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false },
-          { sec: "Ventas", label: "En proceso", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null },
-          { sec: "Ventas", label: "Aprobación (sobre las resueltas)", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
-          { sec: "Ventas", label: "% Rechazo (sobre las ventas)", a: sh(v(a)?.rechazadas, v(a)?.total), b: sh(v(b)?.rechazadas, v(b)?.total), tipo: "pct", upIsGood: false },
-        ] as Fila[])),
+    { sec: "Ventas", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas },
+    { sec: "Ventas", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, nota: eva.aprobadas },
+    { sec: "Ventas", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, nota: eva.rechazadas },
+    { sec: "Ventas", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: eva.pendientes },
+    { sec: "Ventas", label: "% Aprobación (sobre evaluadas)", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
+    { sec: "Ventas", label: "% Rechazo (sobre evaluadas)", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false },
     ...(money
       ? ([
           { sec: "Ventas", label: "Monto", a: v(a)?.monto.total ?? null, b: v(b)?.monto.total ?? null, tipo: "money", upIsGood: true },
@@ -1763,24 +1735,20 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
 
   // El resumen de arriba: lo que más se mira, con clic para ver cuáles son (del mes que se está viendo).
   const ventasDe = (titulo: string, clase?: string[]) => () => open({ fuente: "ventas", title: titulo, filters: clase ? { clase } : undefined });
-  const resumen: (Fila & { abrir?: () => void })[] = tc
-    ? [
-        { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "toda la sábana, con cosecha", abrir: ventasDe("Ventas del mes") },
-        { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: "ya pasaron por PCBM", abrir: ventasDe("TC evaluadas por PCBM", ["aprobado", "rechazado"]) },
-        { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("TC aprobadas", ["aprobado"]) },
-        { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, abrir: ventasDe("TC rechazadas", ["rechazado"]) },
-        { sec: "", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: "aún no pasan por PCBM", abrir: ventasDe("TC pendientes de evaluar", ["en_proceso"]) },
-        { sec: "", label: "% Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "aprobadas ÷ evaluadas" },
-        { sec: "", label: "% Rechazo", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false, nota: "rechazadas ÷ evaluadas" },
-      ]
-    : [
-        { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("Ventas del mes") },
-        { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, abrir: ventasDe("Ventas aprobadas", ["aprobado"]) },
-        { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, abrir: ventasDe("Ventas rechazadas", ["rechazado"]) },
-        { sec: "", label: "En proceso", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, abrir: ventasDe("Ventas en proceso", ["en_proceso"]) },
-        { sec: "", label: "Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "sobre las ya resueltas" },
-        { sec: "", label: "% Rechazo", a: sh(v(a)?.rechazadas, v(a)?.total), b: sh(v(b)?.rechazadas, v(b)?.total), tipo: "pct", upIsGood: false, nota: "sobre todas las ventas" },
-      ];
+  const resumen: (Fila & { abrir?: () => void })[] = [
+    { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "toda la sábana, con cosecha", abrir: ventasDe("Ventas del mes") },
+    { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas.toLowerCase(), abrir: ventasDe(`${eva.cosa} evaluadas`, ["aprobado", "rechazado"]) },
+    { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, nota: eva.aprobadas, abrir: ventasDe(`${eva.cosa} aprobadas`, ["aprobado"]) },
+    { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, nota: eva.rechazadas, abrir: ventasDe(`${eva.cosa} rechazadas`, ["rechazado"]) },
+    { sec: "", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: eva.pendientes.toLowerCase(), abrir: ventasDe(`${eva.cosa} pendientes`, ["en_proceso"]) },
+    ...(money
+      ? ([
+          { sec: "", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true, abrir: ventasDe(`${eva.cosa} aprobadas`, ["aprobado"]) },
+        ] as (Fila & { abrir?: () => void })[])
+      : []),
+    { sec: "", label: "% Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "aprobadas ÷ evaluadas" },
+    { sec: "", label: "% Rechazo", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false, nota: "rechazadas ÷ evaluadas" },
+  ];
 
   return (
     <Stack>
@@ -1817,7 +1785,7 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
       {v(a) && (
         <div className="overflow-hidden rounded-2xl border border-hair bg-white dark:bg-slate-900">
           <div className="grid grid-cols-[minmax(9rem,1.4fr)_1fr_1fr_1fr] items-end gap-x-4 border-b border-hair px-6 pt-5 pb-3 text-[12px] text-ink-soft">
-            <span className="text-[15px] font-semibold text-ink">{tc ? "Evaluación PCBM" : "Resultado del banco"}</span>
+            <span className="text-[15px] font-semibold text-ink">{eva.titulo}</span>
             <span className="text-right">
               <span className="block font-medium text-[var(--viz-1)] first-letter:uppercase">{nombreA}</span>
               {rango(a)}
@@ -1873,7 +1841,11 @@ function ComparativoTab({ a, prev, setDias, open }: Ctx) {
             <h2 id={`cmp-${sec}`} className="text-[15px] font-semibold text-ink">
               {sec}
             </h2>
-            {sec === "Ventas" && tc && <p className="text-[12px] text-ink-soft">Evaluadas: ya pasaron por PCBM. Los % son sobre las evaluadas.</p>}
+            {sec === "Ventas" && (
+              <p className="text-[12px] text-ink-soft">
+                Evaluadas: {eva.evaluadas.toLowerCase()} (aprobadas: {eva.aprobadas}; rechazadas: {eva.rechazadas}). Los % son sobre las evaluadas.
+              </p>
+            )}
             {sec === "Base" && <p className="text-[12px] text-ink-soft">La base no tiene fecha: es la del mes completo.</p>}
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
