@@ -184,3 +184,73 @@ export function TablaDesglose({ etapas, vacio = "Sin ventas." }: { etapas: FilaE
     </div>
   );
 }
+
+/** Dos meses frente a frente por etapa y subetapa: cantidad y % de cada mes, y el cambio. */
+export function DesgloseComparado({ a, b, nombreA, nombreB }: { a: FilaEtapa[]; b: FilaEtapa[] | null; nombreA: string; nombreB: string }) {
+  const clave = (e: FilaEtapa) => `${e.etapa}|${e.estatus}`;
+  const filas = new Map<string, { etapa: string; estatus: string; clase: SaleClass; a: number; b: number }>();
+  for (const [lista, lado] of [[a, "a"], [b ?? [], "b"]] as const)
+    for (const e of lista) {
+      const f = filas.get(clave(e)) ?? { etapa: e.etapa, estatus: e.estatus, clase: e.clase, a: 0, b: 0 };
+      f[lado] += e.ventas;
+      filas.set(clave(e), f);
+    }
+  const todas = [...filas.values()];
+  const totA = todas.reduce((t, f) => t + f.a, 0);
+  const totB = todas.reduce((t, f) => t + f.b, 0);
+  if (!totA && !totB) return <p className="text-sm text-ink-soft">Sin ventas.</p>;
+  const conEtapa = todas.some((f) => f.etapa !== "(sin etapa)");
+  const grupos = [...new Set(todas.map((f) => f.etapa))]
+    .sort((x, y) => Number(x === "(sin etapa)") - Number(y === "(sin etapa)") || x.localeCompare(y, "es", { numeric: true }))
+    .map((etapa) => ({ etapa, filas: todas.filter((f) => f.etapa === etapa).sort((x, y) => y.a + y.b - (x.a + x.b)) }));
+  const pct = (n: number, t: number) => (t ? fmtPct((n / t) * 100) : "—");
+  const cambio = (x: number, y: number) => (b === null ? "—" : x === y ? "0" : `${x > y ? "+" : "−"}${fmtInt.format(Math.abs(x - y))}`);
+  const num = "px-3 py-2.5 text-right tabular-nums";
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] table-fixed text-[13.5px]">
+        <thead>
+          <tr className="border-b border-hair text-left text-[12px] text-ink-soft">
+            {conEtapa && <th className="w-[22%] py-2 pr-3 font-normal">Etapa primaria</th>}
+            <th className={`${conEtapa ? "w-[28%]" : "w-[50%]"} py-2 pr-3 font-normal`}>{conEtapa ? "Subetapa" : "Estatus"}</th>
+            <th className="w-[10%] px-3 py-2 text-right font-medium text-[var(--viz-1)] first-letter:uppercase">{nombreA}</th>
+            <th className="w-[10%] px-3 py-2 text-right font-normal">%</th>
+            <th className="w-[10%] px-3 py-2 text-right font-normal first-letter:uppercase">{nombreB || "—"}</th>
+            <th className="w-[10%] px-3 py-2 text-right font-normal">%</th>
+            <th className="w-[10%] py-2 pl-3 text-right font-normal">Cambio</th>
+          </tr>
+        </thead>
+        <tbody>
+          {grupos.map((g) =>
+            g.filas.map((f, i) => (
+              <tr key={`${g.etapa}|${f.estatus}`} className="border-b border-hair">
+                {conEtapa && <td className="py-2.5 pr-3 align-top text-ink">{i === 0 ? (g.etapa === "(sin etapa)" ? "Sin etapa" : g.etapa) : ""}</td>}
+                <td className="py-2.5 pr-3">
+                  <span className="inline-flex items-center gap-2 text-ink">
+                    <span className="size-2 shrink-0 rounded-full" style={{ background: COLOR[f.clase] }} aria-hidden />
+                    {f.estatus}
+                  </span>
+                </td>
+                <td className={`${num} font-medium text-ink`}>{fmtInt.format(f.a)}</td>
+                <td className={`${num} text-ink-soft`}>{pct(f.a, totA)}</td>
+                <td className={num}>{b === null ? "—" : fmtInt.format(f.b)}</td>
+                <td className={`${num} text-ink-soft`}>{b === null ? "—" : pct(f.b, totB)}</td>
+                <td className="py-2.5 pl-3 text-right tabular-nums text-ink-soft">{cambio(f.a, f.b)}</td>
+              </tr>
+            )),
+          )}
+          <tr className="font-semibold text-ink">
+            <td className="py-3 pr-3" colSpan={conEtapa ? 2 : 1}>
+              Total
+            </td>
+            <td className={num}>{fmtInt.format(totA)}</td>
+            <td className={num}>100%</td>
+            <td className={num}>{b === null ? "—" : fmtInt.format(totB)}</td>
+            <td className={num}>{b === null ? "—" : "100%"}</td>
+            <td className="py-3 pl-3 text-right tabular-nums">{cambio(totA, totB)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}

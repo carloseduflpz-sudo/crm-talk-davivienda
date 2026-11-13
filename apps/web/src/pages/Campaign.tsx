@@ -32,7 +32,7 @@ import {
   type Compare,
 } from "../components/charts";
 import { ClientDetail, type DetailSpec } from "../components/ClientDetail";
-import { Desglose, TablaDesglose, type DesgloseSpec } from "../components/Desglose";
+import { Desglose, DesgloseComparado, TablaDesglose, type DesgloseSpec } from "../components/Desglose";
 import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
@@ -158,7 +158,6 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
                 foot: `${ventasN(v.total)} en sábana${cosechaTxt ? `, ${cosechaTxt}` : ""}`,
                 delta: pDays ? deltaOf(cSum("monto"), pSum("monto"), vsDay) : deltaOf(v.monto.total, p?.monto.total, vs),
                 spark: days.map((d) => d.monto),
-                onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
               }
             : {
                 label: `Ventas de ${monthLabel(a.month!)}`,
@@ -167,7 +166,6 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
                 foot: cosechaTxt ? `Sábana del banco, incluye ${cosechaTxt}` : "Sábana del banco",
                 delta: pDays ? deltaOf(cSum("ventas"), pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
                 spark: days.map((d) => d.ventas),
-                onOpen: () => desglosar("Ventas del mes", null), openLabel: "Ver desglose",
               },
           // Todas las campañas: evaluadas → aprobadas → rechazadas → pendientes → % sobre las evaluadas, con sus estatus.
           {
@@ -184,7 +182,6 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
             format: intOf,
             foot: `${fmtPct(share(v.aprobadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.aprobado)}` : ""}`,
             delta: pDays ? deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay) : deltaOf(v.aprobadas, p?.aprobadas, vs),
-            onOpen: () => desglosar(`${ev.cosa} aprobadas`, ["aprobado"]), openLabel: "Ver desglose",
           },
           {
             label: "Rechazadas",
@@ -192,7 +189,6 @@ function VentasTab({ a, prev, open, desglosar }: Ctx) {
             format: intOf,
             foot: `${fmtPct(share(v.rechazadas, v.aprobadas + v.rechazadas))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.rechazado)}` : ""}`,
             delta: deltaOf(v.rechazadas, p?.rechazadas, vs, { upIsGood: false }),
-            onOpen: () => desglosar(`${ev.cosa} rechazadas`, ["rechazado"]), openLabel: "Ver desglose",
           },
           {
             label: "Pendientes",
@@ -1310,15 +1306,16 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
 
   // El resumen de arriba: lo que más se mira, con clic para ver cuáles son (del mes que se está viendo).
   const ventasDe = (titulo: string, clase?: SaleClass[]) => () => desglosar(titulo, clase ?? null);
+  const etapasDe = (x: CampaignAnalysis, clases: SaleClass[]) => (x.ventas?.pcbm?.etapas ?? []).filter((e) => clases.includes(e.clase));
   const resumen: (Fila & { abrir?: () => void })[] = [
-    { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "incluye cosecha", abrir: ventasDe("Ventas del mes") },
+    { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "incluye cosecha" },
     { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas.toLowerCase(), abrir: ventasDe(`${eva.cosa} evaluadas`, ["aprobado", "rechazado"]) },
-    { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, nota: eva.aprobadas, abrir: ventasDe(`${eva.cosa} aprobadas`, ["aprobado"]) },
-    { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, nota: eva.rechazadas, abrir: ventasDe(`${eva.cosa} rechazadas`, ["rechazado"]) },
+    { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true },
+    { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false },
     { sec: "", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: eva.pendientes.toLowerCase(), abrir: ventasDe(`${eva.cosa} pendientes`, ["en_proceso"]) },
     ...(money
       ? ([
-          { sec: "", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true, abrir: ventasDe(`${eva.cosa} aprobadas`, ["aprobado"]) },
+          { sec: "", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true },
         ] as (Fila & { abrir?: () => void })[])
       : []),
     { sec: "", label: "% Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: "aprobadas ÷ evaluadas" },
@@ -1408,6 +1405,17 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
             })}
           </ul>
         </div>
+      )}
+
+      {v(a) && (
+        <>
+          <ChartCard title={eva.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note="Aprobadas y rechazadas, por etapa y subetapa">
+            <DesgloseComparado a={etapasDe(a, ["aprobado", "rechazado"])} b={b ? etapasDe(b, ["aprobado", "rechazado"]) : null} nombreA={nombreA} nombreB={nombreB} />
+          </ChartCard>
+          <ChartCard title={eva.cosa === "TC" ? "Pendientes de PCBM" : "Pendientes"} note="Por etapa y subetapa">
+            <DesgloseComparado a={etapasDe(a, ["en_proceso"])} b={b ? etapasDe(b, ["en_proceso"]) : null} nombreA={nombreA} nombreB={nombreB} />
+          </ChartCard>
+        </>
       )}
 
       {secciones.map((sec) => (
