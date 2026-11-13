@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Search, ShieldAlert, Sparkles } from "lucide-react";
+import { Search, ShieldAlert } from "lucide-react";
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
@@ -13,7 +13,6 @@ import { ChangePassword } from "./pages/ChangePassword";
 import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
-import { Placeholder } from "./pages/Placeholder";
 import { Presentation } from "./pages/Presentation";
 import { Settings } from "./pages/Settings";
 import { Upload } from "./pages/Upload";
@@ -94,14 +93,6 @@ const router = createBrowserRouter([
       { path: "carga/metas", element: <Metas /> },
       { path: "presentacion", element: <Presentation /> },
       { path: "reportes", element: <Presentation /> },
-      {
-        path: "preguntar",
-        element: (
-          <Placeholder title="Preguntar" subtitle="Preguntas en lenguaje natural sobre los resultados." icon={Sparkles} phase="Fase 5">
-            Respuestas con números y gráficas a partir de métricas agregadas, nunca de datos de clientes.
-          </Placeholder>
-        ),
-      },
       { path: "configuracion", element: <Settings /> },
       { path: "configuracion/usuarios", element: <Users /> },
       { path: "cuenta/clave", element: <ChangePassword /> },

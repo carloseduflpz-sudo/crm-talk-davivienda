@@ -32,27 +32,24 @@ import {
   type Compare,
 } from "../components/charts";
 import { ClientDetail, type DetailSpec } from "../components/ClientDetail";
-import { Desglose, type DesgloseSpec } from "../components/Desglose";
+import { Desglose, TablaDesglose, type DesgloseSpec } from "../components/Desglose";
 import { GoalForm, joinY, workDaysText } from "../components/GoalForm";
 import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { consultaAnalisis, consultaHistorico, mesAnterior, type Dias } from "../lib/consultas";
-import { downloadWorkbook } from "../lib/export";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
-  { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Estatus del banco, rechazo por motivo, ejecutivos y comparativo mensual." },
+  { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Evaluadas, aprobadas, rechazadas y pendientes por etapa y subetapa." },
   { slug: "base", label: "Base", icon: Database, needs: "base", about: "Clientes de la base, perfiles y penetración contra la sábana." },
   { slug: "efectividad", label: "Efectividad", icon: BarChart3, needs: "tipif", about: "Contactabilidad, registros y penetración, general y por agente." },
   { slug: "llamadas", label: "Llamadas", icon: PhoneCall, needs: "tipif", about: "Tipificaciones, intentos por cliente y ventas capturadas en el CRM." },
   { slug: "cumplimiento", label: "Cumplimiento", icon: Target, needs: "sabana", about: "Meta, avance, ritmo, proyección y gap por agente." },
-  { slug: "historico", label: "Histórico", icon: History, needs: "sabana", about: "Comparativo mes a mes: ventas, base, contactabilidad, penetración y cumplimiento." },
-  { slug: "comparativo", label: "Comparativo", icon: Columns2, needs: "sabana", about: "Un mes a la par del otro, con los mismos días: cómo íbamos contra cómo vamos." },
+  { slug: "historico", label: "Histórico", icon: History, needs: "sabana", about: "Mes a mes: ventas, base, contactabilidad, penetración y cumplimiento." },
+  { slug: "comparativo", label: "Comparativo", icon: Columns2, needs: "sabana", about: "Mes contra mes al mismo corte de días." },
 ] as const;
 
-const SALE_COLORS = { aprobado: "var(--st-good)", en_proceso: "var(--st-warning)", rechazado: "var(--st-critical)" } as Record<string, string>;
-const SALE_LABEL = { aprobado: "Aprobadas", en_proceso: "En proceso", rechazado: "Rechazadas" } as Record<string, string>;
 const CALL_ORDER = ["venta", "negativo", "no_efectivo", "no_contacto", "sin_tipificar"] as const;
 const CALL_COLORS: Record<string, string> = {
   venta: "var(--viz-1)",
@@ -128,7 +125,7 @@ function compareOf<T extends { date: string }>(prev: CampaignAnalysis | undefine
 
 /* ---------- Ventas ---------- */
 
-function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
+function VentasTab({ a, prev, open, desglosar }: Ctx) {
   const v = a.ventas;
   if (!v) return <Missing campaign={a.campaign} what="la sábana" month={a.month} icon={TrendingUp} />;
   const p = prev?.ventas;
@@ -141,43 +138,14 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
   const pDays = p && corte && prev?.month ? p.porDia.filter((d) => d.date.startsWith(prev.month!) && dayNum(d.date) <= corte) : null;
   const pSum = (k: "ventas" | "aprobadas" | "monto" | "montoAprobado") => (pDays ? pDays.reduce((t, d) => t + d[k], 0) : undefined);
   const cSum = (k: "ventas" | "aprobadas" | "monto" | "montoAprobado") => days.reduce((t, d) => t + d[k], 0);
-  const vsDay = pDays && prev?.month ? `vendidas en el mes vs ${monthLabel(prev.month).split(" ")[0]} al día ${corte}` : vs;
-  const cosechaTxt = v.cosecha.total ? `${fmtInt.format(v.cosecha.total)} de meses anteriores (cosecha)` : "";
+  const vsDay = pDays && prev?.month ? `ventas del mes vs ${monthLabel(prev.month).split(" ")[0]} al día ${corte}` : vs;
+  const cosechaTxt = v.cosecha.total ? `${fmtInt.format(v.cosecha.total)} de cosecha` : "";
   // CDC y Extra: los indicadores van en dólares (con la cantidad de ventas como referencia).
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   // Evaluadas (ya resueltas: en TC, ya pasaron por PCBM) → aprobadas → rechazadas → pendientes → % sobre las evaluadas.
   const ev = evaluacionDe(a.campaign);
-  const parts = (["aprobado", "en_proceso", "rechazado"] as const).map((k) => ({
-    key: k,
-    label: k === "en_proceso" ? "Pendientes" : SALE_LABEL[k]!,
-    value: money
-      ? k === "aprobado"
-        ? v.monto.aprobado
-        : k === "rechazado"
-          ? v.monto.rechazado
-          : v.monto.enProceso
-      : k === "aprobado"
-        ? v.aprobadas
-        : k === "rechazado"
-          ? v.rechazadas
-          : v.enProceso,
-    color: SALE_COLORS[k]!,
-  }));
   const ventasN = (n: number) => `${fmtInt.format(n)} ${n === 1 ? "venta" : "ventas"}`;
-  // Cifra del comparativo mensual: clic abre su desglose (sin cambiar de mes; clic en el resto de la fila sí cambia).
-  const cifraMes = (n: number, mes: string, titulo: string, clases: SaleClass[] | null) => (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        desglosar(titulo, clases, mes);
-      }}
-      title="Ver el desglose por etapa y estatus"
-      className="tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600"
-    >
-      {fmtInt.format(n)}
-    </button>
-  );
+  const etapasDe = (clases: SaleClass[]) => (v.pcbm?.etapas ?? []).filter((e) => clases.includes(e.clase));
   return (
     <Stack>
       <FigureStrip
@@ -187,7 +155,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
                 label: `Monto de ${monthLabel(a.month!)}`,
                 num: v.monto.total,
                 format: fmtMoney,
-                foot: `${ventasN(v.total)} en la sábana del banco${cosechaTxt ? `; ${cosechaTxt}` : ""}`,
+                foot: `${ventasN(v.total)} en sábana${cosechaTxt ? `, ${cosechaTxt}` : ""}`,
                 delta: pDays ? deltaOf(cSum("monto"), pSum("monto"), vsDay) : deltaOf(v.monto.total, p?.monto.total, vs),
                 spark: days.map((d) => d.monto),
                 onOpen: () => open({ fuente: "ventas", title: "Todas las ventas del mes" }),
@@ -196,7 +164,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
                 label: `Ventas de ${monthLabel(a.month!)}`,
                 num: v.total,
                 format: intOf,
-                foot: cosechaTxt ? `Toda la sábana del banco, con ${cosechaTxt}` : "Todas las de la sábana del banco",
+                foot: cosechaTxt ? `Sábana del banco, incluye ${cosechaTxt}` : "Sábana del banco",
                 delta: pDays ? deltaOf(cSum("ventas"), pSum("ventas"), vsDay) : deltaOf(v.total, p?.total, vs),
                 spark: days.map((d) => d.ventas),
                 onOpen: () => desglosar("Ventas del mes", null), openLabel: "Ver desglose",
@@ -206,7 +174,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
             label: "Evaluadas",
             num: v.aprobadas + v.rechazadas,
             format: intOf,
-            foot: `${ev.evaluadas} (${fmtPct(share(v.aprobadas + v.rechazadas, v.total))} de las ventas)`,
+            foot: `${fmtPct(share(v.aprobadas + v.rechazadas, v.total))} de las ventas`,
             delta: deltaOf(v.aprobadas + v.rechazadas, p ? p.aprobadas + p.rechazadas : undefined, vs),
             onOpen: () => desglosar(`${ev.cosa} evaluadas`, ["aprobado", "rechazado"]), openLabel: "Ver desglose",
           },
@@ -230,7 +198,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
             label: "Pendientes",
             num: v.enProceso,
             format: intOf,
-            foot: `${ev.pendientes} (${fmtPct(share(v.enProceso, v.total))} de las ventas)${money ? ` · ${fmtMoney(v.monto.enProceso)}` : ""}`,
+            foot: `${fmtPct(share(v.enProceso, v.total))} de las ventas${money ? ` · ${fmtMoney(v.monto.enProceso)}` : ""}`,
             delta: deltaOf(v.enProceso, p?.enProceso, vs, { upIsGood: null }),
             onOpen: () => desglosar(`${ev.cosa} pendientes`, ["en_proceso"]), openLabel: "Ver desglose",
           },
@@ -249,440 +217,16 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
             delta: deltaOf(share(v.rechazadas, v.aprobadas + v.rechazadas), p ? share(p.rechazadas, p.aprobadas + p.rechazadas) : undefined, vs, { rate: true, upIsGood: false }),
           },
         ]}
-      >
-        <ShareBar
-          parts={parts}
-          format={money ? fmtMoney : intOf}
-          label={money ? "Composición del monto por estatus del banco" : "Composición de las ventas por estatus del banco"}
-          onSelect={(x) => open({ fuente: "ventas", title: `Ventas ${x.label.toLowerCase()}`, filters: { clase: parts.find((q) => q.label === x.label)!.key } })}
-        />
-      </FigureStrip>
+      />
 
-      {v.pcbm && a.campaign === "tdc" && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} open={open} desglosar={desglosar} />}
-
-      <ChartCard
-        title={money ? "Monto por día" : "Ventas por día"}
-        note={`Fecha de venta según la sábana${cosechaTxt ? `; no incluye ${cosechaTxt}` : ""}. Haz clic en un día para ver sus ventas o arrastra para elegir varios.`}
-      >
-        <AreaChart
-          seriesLabel={money ? "Monto" : "Ventas"}
-          unit={money ? "monto" : "ventas"}
-          format={money ? fmtMoney : undefined}
-          tickPrefix={money ? "$" : ""}
-          compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
-          data={days.map((d) => ({
-            key: d.date,
-            day: dayNum(d.date),
-            label: String(dayNum(d.date)),
-            title: dayLabel(d.date),
-            value: money ? d.monto : d.ventas,
-            extra: money
-              ? [
-                  { label: "aprobado", value: fmtMoney(d.montoAprobado) },
-                  { label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) },
-                ]
-              : [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }],
-          }))}
-          onOpenDay={(d) => open({ fuente: "ventas", title: `Ventas del ${d.title}`, filters: { dia: d.key } })}
-          onOpenRange={(f, t) => open({ fuente: "ventas", title: `Ventas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
-        />
+      <ChartCard title={ev.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note="Aprobadas y rechazadas, por etapa y subetapa">
+        <TablaDesglose etapas={etapasDe(["aprobado", "rechazado"])} vacio="Sin ventas evaluadas." />
       </ChartCard>
 
-      <Pair>
-        <ChartCard title="Estatus del banco" note="Tal como viene en la sábana. Clic para ver las ventas.">
-          <BarList
-            rows={v.porEstatus.map((s) =>
-              money
-                ? { label: s.label, value: s.monto, display: fmtMoney(s.monto), note: ventasN(s.value), color: SALE_COLORS[s.class] }
-                : { label: s.label, value: s.value, color: SALE_COLORS[s.class] },
-            )}
-            total={money ? v.monto.total : v.total}
-            onSelect={(r) => open({ fuente: "ventas", title: `Estatus ${lower(r.label)}`, filters: { estatus: r.label } })}
-          />
-        </ChartCard>
-        <ChartCard title="Motivos de rechazo" note={`${fmtInt.format(v.rechazadas)} ventas rechazadas. Clic para ver cuáles.`}>
-          <BarList
-            rows={v.rechazoPorMotivo.map((m) =>
-              money ? { label: m.label, value: m.monto, display: fmtMoney(m.monto), note: ventasN(m.value), color: "var(--st-critical)" } : { label: m.label, value: m.value, color: "var(--st-critical)" },
-            )}
-            total={money ? v.monto.rechazado : v.rechazadas}
-            onSelect={(r) => open({ fuente: "ventas", title: `Rechazadas por ${lower(r.label)}`, filters: { motivo: r.label } })}
-          />
-        </ChartCard>
-      </Pair>
-
-      {v.requisitos && <PendientesRequisito r={v.requisitos} campana={a.campaign} mes={a.month!} />}
-
-      {v.porProceso.length > 1 && !v.procesos.actual.length && !v.procesos.cosecha.length && (
-        <ChartCard title="Por proceso">
-          <BarList rows={v.porProceso.map((x) => ({ label: x.label, value: x.value }))} total={v.total} onSelect={(r) => open({ fuente: "ventas", title: `Proceso ${r.label}`, filters: { proceso: r.label } })} />
-        </ChartCard>
-      )}
-
-      <ChartCard title="Ejecutivos" note={a.agente ? "Clic en el ejecutivo para volver a ver a todos" : "Clic en un ejecutivo para ver toda la campaña solo con sus números"}>
-        <DataTable
-          rows={v.porEjecutivo}
-          initialSort="ventas"
-          onRowClick={(r) => setAgent(a.agente === r.agent ? null : r.agent)}
-          rowHint="Filtrar la campaña por este ejecutivo"
-          isActive={(r) => r.agent === a.agente}
-          cols={[
-            { key: "agent", label: "Ejecutivo", render: (r) => r.agent, sort: (r) => r.agent },
-            { key: "ventas", label: "Ventas", align: "right", render: (r) => fmtInt.format(r.ventas), sort: (r) => r.ventas },
-            { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => fmtInt.format(r.aprobadas), sort: (r) => r.aprobadas },
-            { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => fmtInt.format(r.rechazadas), sort: (r) => r.rechazadas },
-            ...(money
-              ? [
-                  { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.monto), sort: (r: (typeof v.porEjecutivo)[number]) => r.monto },
-                  { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.porEjecutivo)[number]) => fmtMoney(r.montoAprobado), sort: (r: (typeof v.porEjecutivo)[number]) => r.montoAprobado },
-                ]
-              : []),
-            { key: "aprobacion", label: "Aprobación", align: "right", render: (r) => <PctCell value={r.aprobacion} />, sort: (r) => r.aprobacion },
-          ]}
-        />
+      <ChartCard title={ev.cosa === "TC" ? "Pendientes de PCBM" : "Pendientes"} note="Por etapa y subetapa">
+        <TablaDesglose etapas={etapasDe(["en_proceso"])} vacio="Sin ventas pendientes." />
       </ChartCard>
-
-      {v.mensual.length > 1 && (
-        <ChartCard title="Comparativo mensual" note="Cada mes con su sábana vigente. Clic en un mes para verlo; en la leyenda puedes ocultar estatus.">
-          <Columns
-            legend
-            active={a.month}
-            onSelect={(d) => setMonth(d.key)}
-            selectHint="Clic para ver este mes"
-            data={v.mensual.map((m) => ({
-              key: m.month,
-              label: monthShort(m.month),
-              title: monthLabel(m.month),
-              parts: [
-                { label: "Aprobadas", value: m.aprobadas, color: SALE_COLORS.aprobado! },
-                { label: "Pendientes", value: m.enProceso, color: SALE_COLORS.en_proceso! },
-                { label: "Rechazadas", value: m.rechazadas, color: SALE_COLORS.rechazado! },
-              ],
-              extra: [
-                { label: "evaluadas", value: fmtInt.format(m.aprobadas + m.rechazadas) },
-                { label: "aprobación", value: fmtPct(m.aprobacion) },
-                { label: "rechazo", value: fmtPct(share(m.rechazadas, m.aprobadas + m.rechazadas)) },
-              ],
-            }))}
-          />
-          <div className="mt-10">
-            <DataTable
-              rows={[...v.mensual].reverse()}
-              onRowClick={(r) => setMonth(r.month)}
-              rowHint="Ver este mes"
-              isActive={(r) => r.month === a.month}
-              cols={[
-                { key: "month", label: "Mes", render: (r) => <span className="inline-block first-letter:uppercase">{monthLabel(r.month)}</span> },
-                // Igual que arriba: ventas → evaluadas → aprobadas → rechazadas → pendientes → % sobre evaluadas.
-                // Clic en una cifra: su desglose por etapa y estatus (del mes, cosecha y total) de ese mes.
-                { key: "ventas", label: "Ventas", align: "right", render: (r) => cifraMes(r.ventas, r.month, "Ventas", null) },
-                { key: "evaluadas", label: "Evaluadas", align: "right", render: (r) => cifraMes(r.aprobadas + r.rechazadas, r.month, `${ev.cosa} evaluadas`, ["aprobado", "rechazado"]) },
-                { key: "aprobadas", label: "Aprobadas", align: "right", render: (r) => cifraMes(r.aprobadas, r.month, `${ev.cosa} aprobadas`, ["aprobado"]) },
-                { key: "rechazadas", label: "Rechazadas", align: "right", render: (r) => cifraMes(r.rechazadas, r.month, `${ev.cosa} rechazadas`, ["rechazado"]) },
-                { key: "enProceso", label: "Pendientes", align: "right", render: (r) => cifraMes(r.enProceso, r.month, `${ev.cosa} pendientes`, ["en_proceso"]) },
-                ...(money
-                  ? [
-                      { key: "monto", label: "Monto", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.monto) },
-                      { key: "montoAprobado", label: "Monto aprobado", align: "right" as const, render: (r: (typeof v.mensual)[number]) => fmtMoney(r.montoAprobado) },
-                    ]
-                  : []),
-                { key: "aprobacion", label: "% Aprobación", align: "right", render: (r) => fmtPct(r.aprobacion) },
-                // % de rechazo sobre las evaluadas (aprobadas + rechazadas), igual que la aprobación.
-                { key: "rechazo", label: "% Rechazo", align: "right", render: (r) => fmtPct(share(r.rechazadas, r.aprobadas + r.rechazadas)) },
-              ]}
-            />
-          </div>
-        </ChartCard>
-      )}
     </Stack>
-  );
-}
-
-/**
- * Evaluación PCBM (TDC): evaluadas = ya pasaron por PCBM (aprobadas + rechazadas); los % de aprobación y de rechazo
- * se sacan sobre las evaluadas. Del mes, de la cosecha y total; y la tabla por etapa como la dinámica de la sábana.
- */
-function EvaluacionPcbm({
-  p,
-  prev,
-  prevMonth,
-  open,
-  desglosar,
-}: {
-  p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>;
-  prev: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]> | null;
-  prevMonth: string | null;
-  open: Ctx["open"];
-  desglosar: Ctx["desglosar"];
-}) {
-  const filas = [
-    { nombre: "Vendidas en el mes", f: p.mes, origen: "mes" as const },
-    { nombre: "Cosecha (meses anteriores)", f: p.cosecha, origen: "cosecha" as const },
-    { nombre: "Total de la sábana", f: p.total, origen: null, total: true },
-  ].filter((x) => x.total || x.f.ventas > 0);
-  // Clic en una cifra: las ventas (TC) detrás de ella.
-  const CLASES = { ventas: [], evaluadas: ["aprobado", "rechazado"], aprobadas: ["aprobado"], rechazadas: ["rechazado"], pendientes: ["en_proceso"] } as const;
-  const NOMBRE = { ventas: "Ventas", evaluadas: "TC evaluadas por PCBM", aprobadas: "TC aprobadas", rechazadas: "TC rechazadas", pendientes: "TC pendientes de evaluar" } as const;
-  // Clic en una cifra: cuántas hay en cada etapa y subetapa (del mes, cosecha y total).
-  const ver = (que: keyof typeof CLASES, _origen?: "mes" | "cosecha" | null) => desglosar(NOMBRE[que], CLASES[que].length ? [...CLASES[que]] : null);
-  const cifra = (n: number, onClick: () => void, fuerte = false) =>
-    n > 0 ? (
-      <button type="button" onClick={onClick} title="Ver cuáles son" className={`tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600 ${fuerte ? "font-semibold text-ink" : ""}`}>
-        {fmtInt.format(n)}
-      </button>
-    ) : (
-      <span className={fuerte ? "font-semibold text-ink" : ""}>0</span>
-    );
-  const pm = prevMonth ? monthLabel(prevMonth).split(" ")[0] : "";
-  type F = (typeof filas)[number];
-  const b = (x: { total?: boolean }, v: ReactNode) => (x.total ? <span className="font-semibold text-ink">{v}</span> : v);
-  type E = (typeof p.etapas)[number] & { total?: boolean; primera?: boolean };
-  const etapas: E[] = [
-    ...p.etapas.map((e, i) => ({ ...e, primera: i === 0 || p.etapas[i - 1]!.etapa !== e.etapa })),
-    { etapa: "Total general", estatus: "", clase: "en_proceso" as const, ventas: p.total.ventas, cosecha: p.total.ventas - p.mes.ventas, total: true },
-  ];
-  return (
-    <ChartCard title="Evaluación PCBM" note="Evaluadas: ventas que ya pasaron por PCBM, aprobadas (entregada, en distribución, sin embozo, devolución…) o rechazadas. Los % de aprobación y de rechazo se sacan sobre las evaluadas. Pendientes: las que siguen en PCBM o en apoyo Talk. Clic en cualquier cifra o fila para ver cuáles TC son.">
-      <div className="mb-6 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
-        {[
-          { label: "Evaluadas por PCBM", v: fmtInt.format(p.total.evaluadas), foot: `de ${fmtInt.format(p.total.ventas)} ventas`, que: "evaluadas" as const },
-          { label: "% Aprobación", v: fmtPct(p.total.aprobacion), foot: `${fmtInt.format(p.total.aprobadas)} aprobadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.aprobacion)}` : ""}`, que: "aprobadas" as const },
-          { label: "% Rechazo", v: fmtPct(p.total.rechazo), foot: `${fmtInt.format(p.total.rechazadas)} rechazadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.rechazo)}` : ""}`, que: "rechazadas" as const },
-          { label: "Pendientes", v: fmtInt.format(p.total.pendientes), foot: "aún sin evaluar", que: "pendientes" as const },
-        ].map((k) => (
-          <button
-            key={k.label}
-            type="button"
-            onClick={() => ver(k.que, null)}
-            title="Ver cuáles son"
-            className="-m-2 rounded-xl p-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
-          >
-            <p className="text-[13px] text-ink-soft">{k.label}</p>
-            <p className="mt-1 text-[26px] font-semibold tabular-nums text-ink">{k.v}</p>
-            <p className="text-[12px] text-ink-soft">{k.foot}</p>
-          </button>
-        ))}
-      </div>
-      <DataTable
-        rows={filas}
-        cols={[
-          { key: "nombre", label: "", render: (x: F) => b(x, x.nombre) },
-          { key: "ventas", label: "Ventas", align: "right", render: (x: F) => cifra(x.f.ventas, () => ver("ventas", x.origen), x.total) },
-          { key: "evaluadas", label: "Evaluadas", align: "right", render: (x: F) => cifra(x.f.evaluadas, () => ver("evaluadas", x.origen), x.total) },
-          { key: "aprobadas", label: "Aprobadas", align: "right", render: (x: F) => cifra(x.f.aprobadas, () => ver("aprobadas", x.origen), x.total) },
-          { key: "rechazadas", label: "Rechazadas", align: "right", render: (x: F) => cifra(x.f.rechazadas, () => ver("rechazadas", x.origen), x.total) },
-          { key: "aprobacion", label: "% Aprobación", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.aprobacion) : "—") },
-          { key: "rechazo", label: "% Rechazo", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.rechazo) : "—") },
-          { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => cifra(x.f.pendientes, () => ver("pendientes", x.origen), x.total) },
-        ]}
-      />
-      <h3 className="mt-8 mb-2 text-[14px] font-semibold text-ink">Por etapa (como la tabla dinámica de la sábana)</h3>
-      <DataTable
-        rows={etapas}
-        onRowClick={(e) =>
-          open(
-            e.total
-              ? { fuente: "ventas", title: "Todas las ventas de la sábana" }
-              : { fuente: "ventas", title: `${e.etapa} · ${e.estatus}`, filters: { etapa: e.etapa, estatus: e.estatus } },
-          )
-        }
-        rowHint="Ver cuáles son"
-        cols={[
-          { key: "etapa", label: "Etapa primaria", render: (e: E) => b(e, e.total || e.primera ? e.etapa : "") },
-          { key: "estatus", label: "Subetapa", render: (e: E) => e.estatus },
-          { key: "ventas", label: "Total", align: "right", render: (e: E) => b(e, fmtInt.format(e.ventas)) },
-          { key: "pct", label: "%", align: "right", render: (e: E) => b(e, fmtPct(share(e.ventas, p.total.ventas), 0)) },
-          { key: "cosecha", label: "De ellas, cosecha", align: "right", render: (e: E) => b(e, e.cosecha ? fmtInt.format(e.cosecha) : "—") },
-        ]}
-      />
-      <p className="mt-3 text-[13px] text-ink-soft">
-        Cuadre: {fmtInt.format(p.total.aprobadas)} aprobadas + {fmtInt.format(p.total.rechazadas)} rechazadas = {fmtInt.format(p.total.evaluadas)} evaluadas; + {fmtInt.format(p.total.pendientes)} pendientes ={" "}
-        {fmtInt.format(p.total.ventas)} ventas.
-      </p>
-    </ChartCard>
-  );
-}
-
-/** Pendientes por requisito: qué documento se le está pidiendo a cada cliente, con la lista para descargar. */
-function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>; campana: string; mes: string }) {
-  // La lista de clientes va aparte (panel lateral); aquí solo las cantidades.
-  const [lista, setLista] = useState<{ titulo: string; filtro: (c: (typeof r.clientes)[number]) => boolean } | null>(null);
-  // Días pendiente: desde la primera sábana en que ya venía pendiente por requisito hasta hoy.
-  const hoy = new Date();
-  const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-  const dias = (iso: string | null) => (iso ? Math.max(0, Math.round((hoyUTC - Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)))) / 86_400_000)) : null);
-  const total = r.clientes.length;
-  const cosecha = r.clientes.filter((c) => c.origen === "cosecha").length;
-  const conDias = r.clientes.map((c) => dias(c.pendienteDesde)).filter((d): d is number => d !== null);
-  const promedio = conDias.length ? conDias.reduce((t, d) => t + d, 0) / conDias.length : null;
-  const TRAMOS = [
-    { label: "0 a 7 días", de: 0, a: 7 },
-    { label: "8 a 15 días", de: 8, a: 15 },
-    { label: "16 a 30 días", de: 16, a: 30 },
-    { label: "Más de 30 días", de: 31, a: Infinity },
-  ];
-  const enTramo = (t: (typeof TRAMOS)[number]) => (c: (typeof r.clientes)[number]) => {
-    const d = dias(c.pendienteDesde);
-    return d !== null && d >= t.de && d <= t.a;
-  };
-  const mas15 = r.clientes.filter((c) => (dias(c.pendienteDesde) ?? 0) > 15).length;
-
-  const columnas = [
-    { key: "niu", label: "NIU" },
-    { key: "nombre", label: "Cliente" },
-    { key: "agente", label: "Ejecutivo" },
-    { key: "fecha", label: "Fecha de venta" },
-    { key: "estatus", label: "Estatus" },
-    { key: "pendienteDesde", label: "Pendiente desde" },
-    { key: "dias", label: "Días pendiente" },
-    { key: "diasBanco", label: "Días en proceso (banco)" },
-    { key: "grupo", label: "Documentos (unificado)" },
-    { key: "documento", label: "Documento pedido (como viene)" },
-    { key: "documentacion", label: "Documentación" },
-    { key: "observacion", label: "Observación" },
-    { key: "origen", label: "Venta" },
-  ];
-  const descargar = (filas: typeof r.clientes) =>
-    void downloadWorkbook(`Pendientes por requisito ${campana.toUpperCase()} ${mes}.xlsx`, [
-      { name: "Pendientes", columns: columnas, rows: filas.map((c) => ({ ...c, dias: dias(c.pendienteDesde), origen: c.origen === "mes" ? "Del mes" : "Cosecha" })) },
-      {
-        name: "Por documento",
-        columns: [
-          { key: "label", label: "Documentos" },
-          { key: "clientes", label: "Ventas pendientes" },
-        ],
-        rows: [...r.porDocumento, { label: "Total", clientes: total }],
-      },
-    ]);
-  const kpis = [
-    { label: "Pendientes por requisito", v: fmtInt.format(total), foot: `${fmtInt.format(total - cosecha)} del mes · ${fmtInt.format(cosecha)} de cosecha` },
-    { label: "Promedio de días pendiente", v: promedio === null ? "—" : fmtNum(promedio, 1), foot: "desde la primera sábana en que venía pendiente" },
-    { label: "Más de 15 días", v: fmtInt.format(mas15), foot: `${fmtPct(share(mas15, total))} de los pendientes`, alerta: mas15 > 0 },
-  ];
-  return (
-    <ChartCard
-      title="Pendientes por requisito"
-      note="Cuántas ventas esperan documentos, qué se les pide y cuánto tiempo llevan. Cada venta cuenta una sola vez, en la combinación de documentos que debe (por ejemplo, Boleta + Recibo). Clic en una barra para ver esos clientes."
-      actions={
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => setLista({ titulo: "Todos los pendientes por requisito", filtro: () => true })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
-            Ver lista de clientes
-          </button>
-          <button type="button" onClick={() => descargar(r.clientes)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
-            Descargar
-          </button>
-        </div>
-      }
-    >
-      <div className="mb-8 grid gap-4 sm:grid-cols-3">
-        {kpis.map((k) => (
-          <div key={k.label} className="rounded-xl border border-hair px-4 py-3">
-            <p className="text-[12.5px] text-ink-soft">{k.label}</p>
-            <p className={`mt-0.5 text-[26px] font-semibold tabular-nums ${k.alerta ? "text-[var(--st-critical)]" : "text-ink"}`}>{k.v}</p>
-            <p className="text-[12px] text-ink-soft">{k.foot}</p>
-          </div>
-        ))}
-      </div>
-      <div className="grid gap-10 xl:grid-cols-2">
-        <div>
-          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Qué documento se pide</h3>
-          <BarList
-            rows={r.porDocumento.map((d) => ({ label: d.label, value: d.clientes }))}
-            total={total}
-            onSelect={(x) => setLista({ titulo: `Deben: ${x.label}`, filtro: (c) => c.grupo === x.label })}
-            selectHint="Ver estos clientes"
-          />
-        </div>
-        <div>
-          <h3 className="mb-3 text-[13.5px] font-semibold text-ink">Cuánto tiempo llevan pendientes</h3>
-          <BarList
-            rows={TRAMOS.map((t) => ({
-              label: t.label,
-              value: r.clientes.filter(enTramo(t)).length,
-              color: t.de > 15 ? "var(--st-critical)" : t.de > 7 ? "var(--st-warning)" : "var(--st-good)",
-            }))}
-            total={total}
-            onSelect={(x) => {
-              const t = TRAMOS.find((y) => y.label === x.label)!;
-              setLista({ titulo: `Pendientes ${t.label.toLowerCase()}`, filtro: enTramo(t) });
-            }}
-            selectHint="Ver estos clientes"
-          />
-        </div>
-      </div>
-      {lista && <ListaPendientes titulo={lista.titulo} filas={r.clientes.filter(lista.filtro)} dias={dias} onClose={() => setLista(null)} onDescargar={descargar} />}
-    </ChartCard>
-  );
-}
-
-/** Lista de clientes pendientes por requisito, en un panel lateral (para no saturar la pantalla). */
-function ListaPendientes({
-  titulo,
-  filas,
-  dias,
-  onClose,
-  onDescargar,
-}: {
-  titulo: string;
-  filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"];
-  dias: (iso: string | null) => number | null;
-  onClose: () => void;
-  onDescargar: (filas: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>["clientes"]) => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = overflow;
-    };
-  }, [onClose]);
-  return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={titulo}>
-      <div className="fade-in absolute inset-0 bg-[#0e1b3d]/20 backdrop-blur-[2px] dark:bg-black/50" onClick={onClose} aria-hidden />
-      <div className="drawer-in absolute inset-y-0 right-0 flex w-full max-w-[920px] flex-col border-l border-hair bg-white shadow-[-24px_0_48px_rgba(14,27,61,0.10)] dark:bg-slate-900">
-        <div className="flex items-start justify-between gap-4 border-b border-hair px-6 pt-6 pb-5">
-          <div className="min-w-0">
-            <h2 className="text-[20px] leading-tight font-semibold text-ink">{titulo}</h2>
-            <p className="mt-1 text-[13px] text-ink-soft">
-              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta" : "ventas"} · ordenadas por días pendiente
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => onDescargar(filas)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
-              Descargar
-            </button>
-            <button type="button" onClick={onClose} className="rounded-full p-2 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800" aria-label="Cerrar">
-              ✕
-            </button>
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto px-6 pb-6">
-          <DataTable
-            rows={filas}
-            maxRows={5000}
-            cols={[
-              { key: "niu", label: "NIU", render: (c) => c.niu },
-              { key: "nombre", label: "Cliente", render: (c) => <span title={`${c.agente} · venta ${c.fecha ?? "sin fecha"}${c.origen === "cosecha" ? " (cosecha)" : ""}`}>{c.nombre ?? "—"}</span> },
-              {
-                key: "dias",
-                label: "Días",
-                align: "right",
-                render: (c) => {
-                  const d = dias(c.pendienteDesde);
-                  return d === null ? "—" : <span className={d > 15 ? "font-semibold text-[var(--st-critical)]" : d > 7 ? "font-medium text-amber-700 dark:text-amber-300" : ""}>{fmtInt.format(d)}</span>;
-                },
-                sort: (c) => dias(c.pendienteDesde) ?? -1,
-              },
-              { key: "grupo", label: "Documentos que debe", render: (c) => c.grupo, sort: (c) => c.grupo },
-            ]}
-            initialSort="dias"
-          />
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -765,7 +309,7 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
           title={b.porCarga.length > 1 ? "Bases del mes" : "Recorrido de la base"}
           note={
             b.porCarga.length > 1
-              ? "La original y las adicionales, en orden de llegada. Un cliente que viene en varias se cuenta en la primera que lo trajo; recorrido, toques, contacto y ventas son de sus clientes nuevos. Clic para ver los clientes de cada base."
+              ? "Base original y adicionales, en orden de llegada. Cada cliente se asigna a la primera base en que llegó."
               : "Recorrido: clientes de la base llamados al menos una vez. Toques: llamadas de la tipificación a esos clientes; el promedio es toques ÷ clientes recorridos."
           }
         >
@@ -846,7 +390,7 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
 
       {b.cuadre && <CuadreTipificacion c={b.cuadre} bases={b.porCarga.map((x) => ({ nombre: x.adicional ? x.nombre || "Base adicional" : label(x.dataset), toques: x.toques }))} />}
 
-      <ChartCard title="Perfiles de la base" note={a.ventas ? "Cruce por NIU contra la sábana del mismo mes. Clic en un perfil para ver sus clientes." : "Carga la sábana del mes para ver el cruce contra ventas"}>
+      <ChartCard title="Perfiles de la base" note={a.ventas ? "Cruce por NIU contra la sábana del mes" : "Falta la sábana del mes"}>
         <DataTable
           rows={b.porPerfil}
           initialSort="base"
@@ -864,7 +408,7 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
       </ChartCard>
 
       {months.length > 1 && (
-        <ChartCard title="Tamaño de la base por mes" note="Clientes únicos de cada archivo de base vigente. Clic en un mes para verlo.">
+        <ChartCard title="Tamaño de la base por mes" note="Clientes únicos por mes">
           <Columns
             legend
             active={a.month}
@@ -889,11 +433,11 @@ function CuadreTipificacion({ c, bases }: { c: NonNullable<NonNullable<CampaignA
   const cuadra = suma === c.llamadas;
   const filas: { label: string; n: number; nota?: string }[] = [
     ...bases.map((x) => ({ label: `A clientes de ${x.nombre}`, n: x.toques })),
-    { label: "A clientes que no vienen en ninguna base del mes", n: c.fueraDeBase, nota: c.clientesFuera ? `${fmtInt.format(c.clientesFuera)} clientes` : undefined },
+    { label: "Fuera de base", n: c.fueraDeBase, nota: c.clientesFuera ? `${fmtInt.format(c.clientesFuera)} clientes` : undefined },
     { label: "Sin NIU", n: c.sinNiu },
   ];
   return (
-    <ChartCard title="Cuadre con la tipificación" note="Cada llamada del archivo de tipificaciones del mes se cuenta una sola vez: en la base de su cliente, fuera de base o sin NIU.">
+    <ChartCard title="Cuadre con la tipificación" note="Llamadas de la tipificación del mes por base, fuera de base y sin NIU">
       <dl className="divide-y divide-hair text-[14px]">
         {filas.map((f) => (
           <div key={f.label} className="flex items-baseline justify-between gap-4 py-2">
@@ -910,7 +454,7 @@ function CuadreTipificacion({ c, bases }: { c: NonNullable<NonNullable<CampaignA
         </div>
       </dl>
       <p className={`mt-3 text-[13px] font-medium ${cuadra ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
-        {cuadra ? "Cuadra: la suma de los toques da el total de llamadas del archivo." : `No cuadra: la suma da ${fmtInt.format(suma)} y el archivo tiene ${fmtInt.format(c.llamadas)} llamadas.`}
+        {cuadra ? `Cuadra con la tipificación: ${fmtInt.format(c.llamadas)} llamadas.` : `Diferencia: ${fmtInt.format(suma)} toques contra ${fmtInt.format(c.llamadas)} llamadas en la tipificación.`}
       </p>
     </ChartCard>
   );
@@ -959,7 +503,7 @@ function EfectividadTab({ a, prev, open, setAgent }: Ctx) {
       />
       <Aside>Contacto efectivo es venta, contacto negativo{l.reglaContacto === "con_no_efectivo" ? " y contacto no efectivo" : ""}, con la misma regla de la versión anterior.</Aside>
 
-      <ChartCard title="Contactabilidad por agente" note="Llamadas con contacto efectivo sobre el total de llamadas de cada agente. Clic en un agente para filtrar la campaña.">
+      <ChartCard title="Contactabilidad por agente" note="Contacto efectivo sobre llamadas, por agente">
         <BarList
           rows={ranked.map((r) => ({ label: r.agent, value: r.contactabilidad, display: fmtPct(r.contactabilidad), note: `${fmtInt.format(r.efectivos)} de ${fmtInt.format(r.llamadas)}` }))}
           max={12}
@@ -1047,7 +591,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
             />
           </FigureStrip>
 
-          <ChartCard title="Llamadas por día" note="Haz clic en un día para ver sus llamadas o arrastra para elegir varios.">
+          <ChartCard title="Llamadas por día" note={undefined}>
             <AreaChart
               seriesLabel="Llamadas"
               compare={compareOf(prev, p?.porDia, (d) => d.llamadas)}
@@ -1068,14 +612,14 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
           </ChartCard>
 
           <Pair>
-            <ChartCard title="Tipificaciones más frecuentes" note="Clic para ver las llamadas">
+            <ChartCard title="Tipificaciones más frecuentes" note={undefined}>
               <BarList
                 rows={l.tipologias.map((t) => ({ label: t.label, value: t.value, color: CALL_COLORS[t.class] }))}
                 total={l.total}
                 onSelect={(r) => open({ fuente: "llamadas", title: `Tipificación ${lower(r.label)}`, filters: { tipologia: r.label } })}
               />
             </ChartCard>
-            <ChartCard title="Intentos por cliente" note="Cuántas veces se llamó a cada cliente en el mes">
+            <ChartCard title="Intentos por cliente" note="Llamadas por cliente en el mes">
               <Columns
 
                 data={l.intentos.map((i) => ({
@@ -1089,7 +633,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
           </Pair>
 
           <Pair>
-            <ChartCard title="Primer contacto o seguimiento" note="Cada llamada, según si era la primera a ese cliente">
+            <ChartCard title="Primer contacto o seguimiento" note={undefined}>
               <ShareBar
                 parts={[
                   { label: "Primer contacto", value: l.primerContacto, color: "var(--viz-1)" },
@@ -1112,7 +656,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
       {c ? (
         <ChartCard
           title="Ventas capturadas en el CRM"
-          note={c.conEstatusBanco === null ? "Carga la sábana para ver cuántas ya tienen estatus del banco" : `${fmtInt.format(c.conEstatusBanco)} de ${fmtInt.format(c.total)} ya aparecen en la sábana del banco`}
+          note={c.conEstatusBanco === null ? "Falta la sábana del mes" : `${fmtInt.format(c.conEstatusBanco)} de ${fmtInt.format(c.total)} con estatus del banco`}
           actions={
             <button type="button" onClick={() => open({ fuente: "crm", title: "Ventas capturadas en el CRM" })} className="group text-right" title="Ver las ventas capturadas">
               <span className="block text-[26px] leading-none font-light tracking-[-0.02em] text-ink tabular-nums transition-colors group-hover:text-brand-600">{fmtInt.format(c.total)}</span>
@@ -1152,7 +696,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   };
   const contados = joinY(c.config.estatus.map((x) => x.toLowerCase()));
   const feriados = joinY(c.config.feriados.map((d) => String(Number(d.slice(8)))));
-  const reglas = `${contados ? `Cuentan los estatus ${contados}.` : "No hay estatus elegidos para la meta."} Se trabaja de ${workDaysText(c.config.diasSemana)}${feriados ? `, sin el ${feriados}` : ""}: ${c.diasDelMes} días hábiles en el mes.`;
+  const reglas = `${contados ? `Estatus para la meta: ${contados}.` : "Sin estatus definidos para la meta."} Días hábiles: ${workDaysText(c.config.diasSemana)}${feriados ? `, sin el ${feriados}` : ""} (${c.diasDelMes} en el mes).`;
 
   if (c.meta === null || editing) {
     return (
@@ -1161,9 +705,9 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
           title={c.meta === null ? `Meta de ${mes}` : `Editar la meta de ${mes}`}
           note={
             a.agente
-              ? `Para ver la meta individual de ${a.agente}, registra la meta del mes y el HC (agentes autorizados) con el filtro quitado.`
+              ? `Registra la meta del mes y el HC sin filtro de agente.`
               : c.meta === null
-                ? "Todavía no hay meta para este mes. Con la meta se calculan el avance, el ritmo en días hábiles y el gap por agente."
+                ? "Sin meta registrada para este mes."
                 : undefined
           }
         >
@@ -1196,7 +740,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   const today = new Date();
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   const stale = Boolean(a.month === currentMonth() && c.fechaCorte && (Date.parse(todayIso) - Date.parse(c.fechaCorte)) / 86_400_000 >= 3);
-  const openCounted = () => open({ fuente: "ventas", title: "Ventas que cuentan para la meta", filters: { estatus: c.config.estatus } });
+  const openCounted = () => open({ fuente: "ventas", title: "Logrado del mes", filters: { estatus: c.config.estatus } });
   const mtdTone = c.avanceMTD === null ? undefined : c.avanceMTD >= 100 ? ("good" as const) : c.avanceMTD >= 90 ? ("warn" as const) : ("bad" as const);
   type Row = (typeof c.porAgente)[number] & { ingresadas: number | null };
   // Lo que llevan ingresado los agentes: las ventas que capturaron en el CRM (si se cargó el archivo del CRM del mes).
@@ -1229,7 +773,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
   const enSabana = c.operacionesTotales;
   // Lo que cuenta, separado por mes de venta: el mes actual y la cosecha de meses anteriores.
   const origenParts = [
-    { key: a.month, label: `Vendido en ${mes.split(" ")[0]}`, value: Math.max(0, c.ventas - c.cosecha.valor), color: "var(--viz-1)" },
+    { key: a.month, label: `Ventas de ${mes.split(" ")[0]}`, value: Math.max(0, c.ventas - c.cosecha.valor), color: "var(--viz-1)" },
     ...c.cosecha.porMes.map((m, i) => ({ key: m.month, label: `Cosecha de ${monthLabel(m.month).split(" ")[0]}`, value: m.valor, color: `var(--viz-${(i % 3) + 2})` })),
   ];
   return (
@@ -1261,8 +805,8 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             label: a.agente ? "Ingresadas" : "Ingresadas por los agentes",
             ...(crm ? { num: crm.total, format: intOf } : { value: "—" }),
             foot: crm
-              ? `En el CRM. ${fmtInt.format(enSabana)} en la sábana, ${fmtInt.format(c.operaciones)} cuentan${crm.total ? ` (${fmtPct(share(c.operaciones, crm.total), 0)})` : ""}`
-              : `Falta el archivo de ventas del CRM. En la sábana: ${fmtInt.format(enSabana)}`,
+              ? `En CRM. En sábana: ${fmtInt.format(enSabana)}; logradas: ${fmtInt.format(c.operaciones)}${crm.total ? ` (${fmtPct(share(c.operaciones, crm.total), 0)})` : ""}`
+              : `Falta el archivo del CRM. En sábana: ${fmtInt.format(enSabana)}`,
             onOpen: crm ? () => open({ fuente: "crm", title: "Ventas ingresadas en el CRM" }) : undefined,
           },
           {
@@ -1276,65 +820,63 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             label: "Faltan para la meta",
             num: c.faltan ?? 0,
             format: money ? fmtMoney : num1,
-            foot: c.faltan === 0 ? "Meta alcanzada" : c.ritmoNecesario !== null ? `${val(c.ritmoNecesario)} por día hábil en los ${c.diasRestantes} que quedan` : "Ya no quedan días hábiles",
+            foot: c.faltan === 0 ? "Meta alcanzada" : c.ritmoNecesario !== null ? `${val(c.ritmoNecesario)} por día hábil en ${c.diasRestantes} días hábiles` : "Sin días hábiles restantes",
             tone: c.faltan === 0 ? "good" : c.ritmoNecesario !== null && c.ritmoNecesario > c.ritmoDiario ? "warn" : undefined,
           },
           { label: "Ritmo actual", num: c.ritmoDiario, format: money ? fmtMoney : num1, foot: `${money ? "Dólares" : "Ventas"} por día hábil` },
-          { label: "Proyección al cierre", num: c.proyeccion, format: money ? fmtMoney : intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta al ritmo actual`, tone: c.proyeccion >= meta ? "good" : "bad" },
+          { label: "Proyección al cierre", num: c.proyeccion, format: money ? fmtMoney : intOf, foot: `${fmtPct(share(c.proyeccion, meta))} de la meta`, tone: c.proyeccion >= meta ? "good" : "bad" },
         ]}
       >
         <Meter thick value={c.ventas} max={meta} mark={metaMTD} markLabel={`Meta MTD al ${corte ?? "corte"}: ${valInt(metaMTD)}${unit}`} label="Avance contra la meta del mes" />
         <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
           {corte ? (
             <>
-              Corte de la sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. La marca es la meta MTD: {valInt(metaMTD)}
+              Corte de sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. Meta MTD: {valInt(metaMTD)}
               {unit}.{" "}
               <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
-                {adelante ? `Van ${valInt(c.ventas - metaMTD)} por encima.` : `Van ${valInt(metaMTD - c.ventas)} por debajo.`}
+                {adelante ? `+${valInt(c.ventas - metaMTD)} sobre la meta MTD.` : `−${valInt(metaMTD - c.ventas)} bajo la meta MTD.`}
               </span>
             </>
           ) : (
-            "La sábana del mes no trae fechas de venta."
+            "Sábana sin fechas de venta."
           )}
         </p>
         {stale && (
           <p className="mt-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-[13px] text-amber-900 dark:bg-amber-500/10 dark:text-amber-100">
-            La sábana de {mes.split(" ")[0]} llega hasta el {corte}: puede venir incompleta o atrasada. El MTD se mide a esa fecha (día hábil {c.diaDelMes}), así que no
-            cuenta como atraso lo que la sábana aún no trae. Al cargar la sábana actualizada se recalcula todo.
+            Sábana de {mes.split(" ")[0]} con corte al {corte}. El MTD se mide a esa fecha (día hábil {c.diaDelMes}).
           </p>
         )}
         <p className="mt-1.5 text-[12.5px] text-ink-faint">
           {reglas}
           {c.agentes ? ` HC: ${c.agentes} agentes autorizados.` : ""}{" "}
           <button type="button" onClick={openCounted} className="font-medium text-brand-600 hover:underline">
-            Ver las ventas que cuentan
+            Ver logrado del mes
           </button>
         </p>
       </FigureStrip>
 
       {(c.cosecha.operaciones > 0 || c.yaContadas.operaciones > 0) && (
         <ChartCard
-          title="De dónde sale lo que cuenta"
-          note={`Cosecha: lo vendido en meses anteriores que el banco ${money ? "aplicó o desembolsó" : "entregó o activó"} en ${mes} cuenta para la meta de ${mes}. Clic en una parte para ver sus ventas.`}
+          title="Logrado por mes de venta"
+          note={`Cosecha: ventas de meses anteriores ${money ? "aplicadas o desembolsadas" : "entregadas o activadas"} en ${mes}`}
         >
           <ShareBar
             format={money ? fmtMoney : intOf}
-            label="Lo que cuenta para la meta según el mes de venta"
+            label="Logrado por mes de venta"
             parts={origenParts}
             onSelect={(x) => {
               const m = origenParts.find((q) => q.label === x.label)?.key ?? a.month!;
               open({
                 fuente: "ventas",
-                title: m === a.month ? `Vendidas en ${mes.split(" ")[0]} que cuentan` : `Cosecha de ${monthLabel(m)}`,
+                title: m === a.month ? `Logrado, ventas de ${mes.split(" ")[0]}` : `Cosecha de ${monthLabel(m)}`,
                 filters: { estatus: c.config.estatus, ...(m === a.month ? { desde: `${m}-01` } : { desde: `${m}-01`, hasta: `${m}-31` }) },
               });
             }}
           />
           {c.yaContadas.operaciones > 0 && (
             <p className="mt-5 text-[13px] text-ink-soft">
-              {fmtInt.format(c.yaContadas.operaciones)} {c.yaContadas.operaciones === 1 ? "venta vuelve" : "ventas vuelven"} a aparecer en la sábana de {mes.split(" ")[0]} pero ya
-              {c.yaContadas.operaciones === 1 ? " contó" : " contaron"} para la meta de un mes anterior: no se repite{c.yaContadas.operaciones === 1 ? "" : "n"}
-              {money ? ` (${fmtMoney(c.yaContadas.valor)})` : ""}.
+              {fmtInt.format(c.yaContadas.operaciones)} {c.yaContadas.operaciones === 1 ? "venta" : "ventas"} de la sábana de {mes.split(" ")[0]} ya
+              contabilizadas en la meta de un mes anterior{money ? ` (${fmtMoney(c.yaContadas.valor)})` : ""}; no se incluyen.
             </p>
           )}
         </ChartCard>
@@ -1344,8 +886,8 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         title="Gap por agente"
         note={
           c.metaPorAgente === null
-            ? "Registra el HC (agentes autorizados) para calcular la meta de cada agente"
-            : `Meta del mes por agente: ${val(c.metaPorAgente)} (meta ÷ HC ${c.agentes}). La meta MTD es la parte que corresponde a ${c.diaDelMes} de ${c.diasDelMes} días hábiles. Clic en un agente para filtrar la campaña.`
+            ? "Falta el HC del mes"
+            : `Meta por agente: ${val(c.metaPorAgente)} (meta ÷ HC ${c.agentes}). Meta MTD al día hábil ${c.diaDelMes} de ${c.diasDelMes}.`
         }
       >
         <DataTable
@@ -1358,7 +900,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             { key: "agent", label: "Agente", render: (r) => r.agent, sort: (r) => r.agent },
             ...(crm ? [{ key: "ingresadas", label: "Ingresadas", align: "right" as const, render: (r: Row) => fmtInt.format(r.ingresadas ?? 0), sort: (r: Row) => r.ingresadas ?? 0 }] : []),
             { key: "total", label: money ? "Monto en sábana" : "En sábana", align: "right", render: (r) => valInt(r.total), sort: (r) => r.total },
-            { key: "ventas", label: money ? "Monto que cuenta" : "Cuentan", align: "right", render: (r) => valInt(r.ventas), sort: (r) => r.ventas },
+            { key: "ventas", label: money ? "Monto logrado" : "Logrado", align: "right", render: (r) => valInt(r.ventas), sort: (r) => r.ventas },
             ...(money ? [{ key: "operaciones", label: "Operaciones", align: "right" as const, render: (r: Row) => fmtInt.format(r.operaciones), sort: (r: Row) => r.operaciones }] : []),
             { key: "metaMTD", label: "Meta MTD", align: "right", render: (r) => val(r.metaMTD), sort: (r) => r.metaMTD ?? 0 },
             {
@@ -1449,7 +991,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
   const h = useQuery(consultaHistorico(a.campaign, a.agente));
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
   const [cut, setCut] = useState<"dia" | "mes">("dia");
-  if (h.isPending) return <p className="text-sm text-ink-soft">Calculando el histórico…</p>;
+  if (h.isPending) return <p className="text-sm text-ink-soft">Cargando el histórico…</p>;
   if (h.isError) return <ErrorMessage>{h.error.message}</ErrorMessage>;
   const meses = h.data;
   const pctAxis = (n: number) => `${fmtInt.format(n)}%`;
@@ -1463,9 +1005,9 @@ function HistoricoTab({ a, setMonth }: Ctx) {
   const alDia = sameDay ? ` al día ${corte}` : "";
   const trends: Trend[] = [
     money
-      ? { key: "monto", title: `Monto de ventas${alDia}`, value: montoDe, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true, note: sameDay ? `Cada mes sumado del 1 al ${corte}` : undefined }
-      : { key: "ventas", title: sameDay ? `Ventas al día ${corte}` : "Ventas de la sábana", value: ventasDe, format: intOf, upIsGood: true, note: sameDay ? `Cada mes contado del 1 al ${corte}` : undefined },
-    { key: "aprobacion", title: "% Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: `Aprobadas sobre las evaluadas (${evaluacionDe(a.campaign).evaluadas.toLowerCase()})` },
+      ? { key: "monto", title: `Monto de ventas${alDia}`, value: montoDe, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true, note: sameDay ? `Del 1 al ${corte} de cada mes` : undefined }
+      : { key: "ventas", title: sameDay ? `Ventas al día ${corte}` : "Ventas de la sábana", value: ventasDe, format: intOf, upIsGood: true, note: sameDay ? `Del 1 al ${corte} de cada mes` : undefined },
+    { key: "aprobacion", title: "% Aprobación", value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: "Aprobadas ÷ evaluadas" },
     {
       key: "rechazo",
       title: "% Rechazo",
@@ -1474,7 +1016,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
       axis: pctAxis,
       rate: true,
       upIsGood: false,
-      note: `Rechazadas sobre las evaluadas (${evaluacionDe(a.campaign).evaluadas.toLowerCase()})`,
+      note: "Rechazadas ÷ evaluadas",
     },
     {
       key: "cumplimiento",
@@ -1484,10 +1026,10 @@ function HistoricoTab({ a, setMonth }: Ctx) {
       axis: pctAxis,
       rate: true,
       note:
-        (live ? `Lo que cuenta para la meta sobre la meta del mes; ${monthLabel(live.month).split(" ")[0]} va a la fecha` : "Lo que cuenta para la meta sobre la meta del mes") +
-        (meses.some((m) => m.oficial) ? ". Meses cerrados: meta y resultado de tu archivo de cumplimientos" : ""),
+        (live ? `Logrado ÷ meta del mes; ${monthLabel(live.month).split(" ")[0]} al corte` : "Logrado ÷ meta del mes") +
+        (meses.some((m) => m.oficial) ? ". Meses cerrados: archivo de cumplimientos" : ""),
     },
-    { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Original más bases adicionales, sin repetir" },
+    { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Base original y adicionales, clientes únicos" },
     { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
     { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true },
   ];
@@ -1501,7 +1043,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-hair bg-white px-5 py-4 dark:bg-slate-900">
           <p className="max-w-3xl text-[13.5px] leading-relaxed text-ink-soft">
             <span className="inline-block font-medium text-ink first-letter:uppercase">{monthLabel(live.month)}</span> va en curso, con datos hasta el {dayLabel(live.hasta!)}.{" "}
-            {sameDay ? `Para comparar parejo, las ventas de cada mes se cuentan del 1 al ${corte}.` : "Las ventas de los meses anteriores están completas."}
+            {sameDay ? `Ventas de cada mes del 1 al ${corte}.` : "Meses anteriores completos."}
           </p>
           <div className="flex items-center gap-1 rounded-full bg-hair/70 p-1 dark:bg-slate-800/70" role="group" aria-label="Cómo comparar las ventas">
             {(
@@ -1533,7 +1075,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
         ))}
       </div>
 
-      <ChartCard title="Mes a mes" note={a.agente ? `Solo ${a.agente}. La base es la misma para todos los agentes.` : "Cada mes con sus archivos vigentes. Clic en un mes para verlo en las demás pestañas."}>
+      <ChartCard title="Mes a mes" note={a.agente ? `Solo ${a.agente}. La base es la misma para todos los agentes.` : undefined}>
         <DataTable
           rows={[...meses].reverse()}
           onRowClick={(r) => setMonth(r.month)}
@@ -1629,23 +1171,23 @@ function HistoricoTab({ a, setMonth }: Ctx) {
  * En TC, la resolución es PCBM. Pendientes: todo lo demás.
  */
 function evaluacionDe(code: string): { titulo: string; cosa: string; evaluadas: string; pendientes: string; aprobadas: string; rechazadas: string } {
-  if (!isCampaignCode(code)) return { titulo: "Evaluación del banco", cosa: "Ventas", evaluadas: "Ya resueltas por el banco", pendientes: "Aún sin resolución del banco", aprobadas: "", rechazadas: "" };
+  if (!isCampaignCode(code)) return { titulo: "Evaluación del banco", cosa: "Ventas", evaluadas: "Con resolución del banco", pendientes: "Sin resolución del banco", aprobadas: "", rechazadas: "" };
   const c = getCampaign(code as CampaignCode);
   const lista = (xs: readonly string[]) => xs.map((x) => x.charAt(0) + x.slice(1).toLowerCase()).join(", ");
   if (code === "tdc")
     return {
       titulo: "Evaluación PCBM",
       cosa: "TC",
-      evaluadas: "Ya pasaron por PCBM",
-      pendientes: "Aún no pasan por PCBM",
+      evaluadas: "Con resolución de PCBM",
+      pendientes: "Sin resolución de PCBM",
       aprobadas: "entregada, en distribución, sin embozo, devolución…",
       rechazadas: "rechazada",
     };
   return {
     titulo: "Evaluación del banco",
     cosa: "Ventas",
-    evaluadas: "Ya resueltas por el banco",
-    pendientes: "Aún sin resolución del banco",
+    evaluadas: "Con resolución del banco",
+    pendientes: "Sin resolución del banco",
     aprobadas: lista(c.approved).toLowerCase(),
     rechazadas: lista(c.rejected).toLowerCase(),
   };
@@ -1686,15 +1228,15 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
   const sh = (n: number | null | undefined, d: number | null | undefined) => (n === null || n === undefined || !d ? null : share(n, d));
   const filas = (
     [
-    { sec: "Ventas", label: "Ventas (toda la sábana)", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true },
-    { sec: "Ventas", label: "Vendidas en el mes", a: v(a) ? v(a)!.total - v(a)!.cosecha.total : null, b: v(b) ? v(b)!.total - v(b)!.cosecha.total : null, tipo: "n", upIsGood: true },
-    { sec: "Ventas", label: "Cosecha (meses anteriores)", a: v(a)?.cosecha.total ?? null, b: v(b)?.cosecha.total ?? null, tipo: "n", upIsGood: null },
+    { sec: "Ventas", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true },
+    { sec: "Ventas", label: "Ventas del mes", a: v(a) ? v(a)!.total - v(a)!.cosecha.total : null, b: v(b) ? v(b)!.total - v(b)!.cosecha.total : null, tipo: "n", upIsGood: true },
+    { sec: "Ventas", label: "Cosecha", a: v(a)?.cosecha.total ?? null, b: v(b)?.cosecha.total ?? null, tipo: "n", upIsGood: null },
     { sec: "Ventas", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas },
     { sec: "Ventas", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, nota: eva.aprobadas },
     { sec: "Ventas", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, nota: eva.rechazadas },
     { sec: "Ventas", label: "Pendientes", a: v(a)?.enProceso ?? null, b: v(b)?.enProceso ?? null, tipo: "n", upIsGood: null, nota: eva.pendientes },
-    { sec: "Ventas", label: "% Aprobación (sobre evaluadas)", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
-    { sec: "Ventas", label: "% Rechazo (sobre evaluadas)", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false },
+    { sec: "Ventas", label: "% Aprobación", a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
+    { sec: "Ventas", label: "% Rechazo", a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false },
     ...(money
       ? ([
           { sec: "Ventas", label: "Monto", a: v(a)?.monto.total ?? null, b: v(b)?.monto.total ?? null, tipo: "money", upIsGood: true },
@@ -1703,21 +1245,21 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       : []),
     {
       sec: "Cumplimiento",
-      label: "Lo que cuenta para la meta",
+      label: "Logrado",
       a: a.cumplimiento.ventas,
       b: b?.cumplimiento.ventas ?? null,
       tipo: a.cumplimiento.unidad === "monto" ? "money" : "n",
       upIsGood: true,
     },
     { sec: "Cumplimiento", label: "Meta del mes", a: a.cumplimiento.meta, b: b?.cumplimiento.meta ?? null, tipo: a.cumplimiento.unidad === "monto" ? "money" : "n", upIsGood: null },
-    { sec: "Cumplimiento", label: "Avance sobre la meta del mes", a: a.cumplimiento.avance, b: b?.cumplimiento.avance ?? null, tipo: "pct", upIsGood: true },
-    { sec: "Cumplimiento", label: "Avance sobre lo esperado a la fecha", a: a.cumplimiento.avanceMTD, b: b?.cumplimiento.avanceMTD ?? null, tipo: "pct", upIsGood: true, nota: "Meta repartida por días hábiles hasta el último día con ventas" },
+    { sec: "Cumplimiento", label: "Cumplimiento del mes", a: a.cumplimiento.avance, b: b?.cumplimiento.avance ?? null, tipo: "pct", upIsGood: true },
+    { sec: "Cumplimiento", label: "Cumplimiento MTD", a: a.cumplimiento.avanceMTD, b: b?.cumplimiento.avanceMTD ?? null, tipo: "pct", upIsGood: true },
     { sec: "Llamadas", label: "Llamadas", a: a.llamadas?.total ?? null, b: b?.llamadas?.total ?? null, tipo: "n", upIsGood: true },
     { sec: "Llamadas", label: "Clientes llamados", a: a.llamadas?.registros ?? null, b: b?.llamadas?.registros ?? null, tipo: "n", upIsGood: true },
     { sec: "Llamadas", label: "Contactabilidad", a: a.llamadas?.contactabilidad ?? null, b: b?.llamadas?.contactabilidad ?? null, tipo: "pct", upIsGood: true },
-    { sec: "Llamadas", label: "Ventas en la tipificación", a: a.llamadas?.ventasUnicas ?? null, b: b?.llamadas?.ventasUnicas ?? null, tipo: "n", upIsGood: true },
+    { sec: "Llamadas", label: "Ventas en VICI", a: a.llamadas?.ventasUnicas ?? null, b: b?.llamadas?.ventasUnicas ?? null, tipo: "n", upIsGood: true },
     { sec: "Llamadas", label: "Penetración de la base", a: a.llamadas?.penetracion ?? null, b: b?.llamadas?.penetracion ?? null, tipo: "pct", upIsGood: true },
-    { sec: "Base", label: "Clientes en la base", a: a.base?.total ?? null, b: b?.base?.total ?? null, tipo: "n", upIsGood: null, nota: "La base no tiene fecha: es la del mes completo" },
+    { sec: "Base", label: "Clientes en la base", a: a.base?.total ?? null, b: b?.base?.total ?? null, tipo: "n", upIsGood: null },
     { sec: "Base", label: "Recorrido de la base", a: a.base?.recorridos?.recorrido ?? null, b: b?.base?.recorridos?.recorrido ?? null, tipo: "pct", upIsGood: true },
     { sec: "Base", label: "Promedio de toques", a: a.base?.recorridos?.promedioToques ?? null, b: b?.base?.recorridos?.promedioToques ?? null, tipo: "dec", upIsGood: null },
     { sec: "CRM", label: "Ventas capturadas en el CRM", a: a.crm?.total ?? null, b: b?.crm?.total ?? null, tipo: "n", upIsGood: true },
@@ -1769,7 +1311,7 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
   // El resumen de arriba: lo que más se mira, con clic para ver cuáles son (del mes que se está viendo).
   const ventasDe = (titulo: string, clase?: SaleClass[]) => () => desglosar(titulo, clase ?? null);
   const resumen: (Fila & { abrir?: () => void })[] = [
-    { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "toda la sábana, con cosecha", abrir: ventasDe("Ventas del mes") },
+    { sec: "", label: "Ventas", a: v(a)?.total ?? null, b: v(b)?.total ?? null, tipo: "n", upIsGood: true, nota: "incluye cosecha", abrir: ventasDe("Ventas del mes") },
     { sec: "", label: "Evaluadas", a: ev(a), b: ev(b), tipo: "n", upIsGood: true, nota: eva.evaluadas.toLowerCase(), abrir: ventasDe(`${eva.cosa} evaluadas`, ["aprobado", "rechazado"]) },
     { sec: "", label: "Aprobadas", a: v(a)?.aprobadas ?? null, b: v(b)?.aprobadas ?? null, tipo: "n", upIsGood: true, nota: eva.aprobadas, abrir: ventasDe(`${eva.cosa} aprobadas`, ["aprobado"]) },
     { sec: "", label: "Rechazadas", a: v(a)?.rechazadas ?? null, b: v(b)?.rechazadas ?? null, tipo: "n", upIsGood: false, nota: eva.rechazadas, abrir: ventasDe(`${eva.cosa} rechazadas`, ["rechazado"]) },
@@ -1788,7 +1330,7 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       {/* Los dos meses frente a frente y contra cuál se compara. */}
       <div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-stretch">
         <div className="rounded-2xl border border-[var(--viz-1)]/40 bg-[var(--viz-1-wash)] px-6 py-5">
-          <p className="text-[12px] text-ink-soft">Estás viendo</p>
+          <p className="text-[12px] text-ink-soft">Mes</p>
           <p className="mt-1 text-[22px] font-semibold text-ink first-letter:uppercase">{nombreA}</p>
           <p className="text-[13px] text-ink-soft">{rango(a)}</p>
         </div>
@@ -1810,9 +1352,9 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
           <p className="text-[13px] text-ink-soft">{b ? rango(b) : rango(a)}</p>
         </div>
       </div>
-      {!mesB && <Aside>Para comparar hace falta otro mes con archivos.</Aside>}
+      {!mesB && <Aside>Falta otro mes con archivos para comparar.</Aside>}
       {qb.isError && <ErrorMessage>{qb.error.message}</ErrorMessage>}
-      {mesB && !b && qb.isFetching && <p className="text-sm text-ink-soft">Calculando {nombreB}…</p>}
+      {mesB && !b && qb.isFetching && <p className="text-sm text-ink-soft">Cargando {nombreB}…</p>}
 
       {/* Lo principal, un mes a la par del otro: evaluadas, aprobadas, rechazadas, pendientes y los %. */}
       {v(a) && (
@@ -1876,10 +1418,10 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
             </h2>
             {sec === "Ventas" && (
               <p className="text-[12px] text-ink-soft">
-                Evaluadas: {eva.evaluadas.toLowerCase()} (aprobadas: {eva.aprobadas}; rechazadas: {eva.rechazadas}). Los % son sobre las evaluadas.
+                % Aprobación y % Rechazo sobre evaluadas.
               </p>
             )}
-            {sec === "Base" && <p className="text-[12px] text-ink-soft">La base no tiene fecha: es la del mes completo.</p>}
+            {sec === "Base" && <p className="text-[12px] text-ink-soft">Base del mes completo.</p>}
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {filas
@@ -1906,7 +1448,7 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       ))}
 
       {ejecutivos.length > 0 && (
-        <ChartCard title="Por ejecutivo" note={`Ventas de cada ejecutivo con los mismos días: ${cortoA} en azul, ${cortoB} en gris. Clic para ver sus ventas de ${cortoA}.`}>
+        <ChartCard title="Por ejecutivo" note={`${cortoA} en azul, ${cortoB} en gris`}>
           <ul className="divide-y divide-hair">
             {ejecutivos.map((e) => {
               const va = e.a?.ventas ?? 0;
@@ -2186,7 +1728,7 @@ export function Campaign() {
       )}
 
       {a && <OtherMonthsWarning a={a} code={code} />}
-      {analysis.isPending && <p className="text-sm text-ink-soft">Calculando…</p>}
+      {analysis.isPending && <p className="text-sm text-ink-soft">Cargando…</p>}
       {analysis.isError && <ErrorMessage>{analysis.error.message}</ErrorMessage>}
       {a && a.months.length === 0 && (
         <EmptyState icon={Upload} title="Esta campaña todavía no tiene archivos cargados">

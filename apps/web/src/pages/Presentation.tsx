@@ -135,7 +135,7 @@ export function Presentation() {
       // La presentación sale SIEMPRE: una campaña que no se pudo leer se queda con las cifras de la semana anterior
       // y se avisa abajo, en rojo, con el motivo.
       const fallas = Object.entries(errores).map(([k, m]) => ({ campana: getCampaign(k as PresentacionCampania["campaign"]).shortName, motivo: m ?? "" }));
-      if (!Object.keys(frescos).length) throw new Error(`No se pudo leer ninguna campaña de ${monthLabel(mes)}, así que no hay nada que actualizar. ${fallas.map((f) => `${f.campana}: ${f.motivo}`).join(" · ")}`);
+      if (!Object.keys(frescos).length) throw new Error(`No se pudo leer ninguna campaña de ${monthLabel(mes)}. ${fallas.map((f) => `${f.campana}: ${f.motivo}`).join(" · ")}`);
       setBusy("Abriendo la presentación…");
       const deck = Pptx.open(await api.plantillaArchivo());
       setBusy("Poniendo las cifras…");
@@ -357,7 +357,7 @@ function CuadreExcel({
                 </p>
                 {calculadas.length > 0 && (
                   <p className="mt-1 text-ink-soft">
-                    De lo que calcula la app, {calculadas.filter((f) => f.cuadra).length} de {calculadas.length} cifras cuadran con tu Excel.
+                    Cifras del CRM: {calculadas.filter((f) => f.cuadra).length} de {calculadas.length} cuadran con tu Excel.
                   </p>
                 )}
                 {sinDatos.length > 0 && <p className="mt-1 text-ink-soft">Sin datos en la app este mes: {sinDatos.map((c) => getCampaign(c).shortName).join(", ")}.</p>}
@@ -407,7 +407,7 @@ function CuadreExcel({
 
       {porCampana.length > 0 && (
         <details className="group/cuadre mt-3">
-          <summary className="cursor-pointer list-none text-[13px] font-medium text-brand-600 hover:underline">Ver el cuadre cifra por cifra: tu Excel contra lo que calcula la app</summary>
+          <summary className="cursor-pointer list-none text-[13px] font-medium text-brand-600 hover:underline">Ver el cuadre cifra por cifra: Excel contra CRM</summary>
           <div className="mt-3 space-y-2">
             {porCampana.map(([camp, fs]) => {
               const malas = fs.filter((f) => !f.cuadra && f.enPresentacion === "app").length;
@@ -417,9 +417,9 @@ function CuadreExcel({
                     <span className="font-semibold text-ink">{getCampaign(camp as PresentacionCampania["campaign"]).shortName}</span>
                     <span className="flex items-center gap-2 text-ink-soft">
                       {malas ? (
-                        <span className="text-amber-700 dark:text-amber-400">{malas} de lo que calcula la app no cuadra</span>
+                        <span className="text-amber-700 dark:text-amber-400">{malas} cifras del CRM no cuadran</span>
                       ) : (
-                        <span className="text-emerald-700 dark:text-emerald-400">Lo que calcula la app cuadra</span>
+                        <span className="text-emerald-700 dark:text-emerald-400">Las cifras del CRM cuadran</span>
                       )}
                       <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
                     </span>

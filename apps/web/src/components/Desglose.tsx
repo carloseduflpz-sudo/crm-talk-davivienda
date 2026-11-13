@@ -52,19 +52,12 @@ export function Desglose({
   const q = useQuery(consultaAnalisis(campaign, spec.mes, agent, dias));
   const a = q.data?.month === spec.mes ? q.data : undefined;
   const etapas = (a?.ventas?.pcbm?.etapas ?? []).filter((e) => !spec.clases || spec.clases.includes(e.clase));
-  const conEtapa = etapas.some((e) => e.etapa !== "(sin etapa)");
   const total = etapas.reduce((t, e) => t + e.ventas, 0);
   const cosecha = etapas.reduce((t, e) => t + e.cosecha, 0);
   const delMes = total - cosecha;
-  // Agrupadas por etapa, con su subtotal (como la tabla dinámica).
-  const grupos = [...new Set(etapas.map((e) => e.etapa))].map((etapa) => {
-    const filas = etapas.filter((e) => e.etapa === etapa).sort((x, y) => y.ventas - x.ventas);
-    return { etapa, filas, ventas: filas.reduce((t, e) => t + e.ventas, 0), cosecha: filas.reduce((t, e) => t + e.cosecha, 0) };
-  });
   const rango = dias ? (dias.desde === dias.hasta ? `día ${dias.desde}` : `del ${dias.desde} al ${dias.hasta}`) : "mes completo";
   const context = [getCampaign(campaign).shortName, monthLabel(spec.mes), rango, agent].filter(Boolean).join(", ");
   const pct = (n: number) => (total ? fmtPct((n / total) * 100) : "—");
-  const num = "px-3 py-2.5 text-right tabular-nums";
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="desglose-titulo">
@@ -83,15 +76,15 @@ export function Desglose({
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
-          {q.isPending && <p className="text-sm text-ink-soft">Calculando…</p>}
+          {q.isPending && <p className="text-sm text-ink-soft">Cargando…</p>}
           {q.isError && <p className="text-sm text-[var(--st-critical)]">{q.error.message}</p>}
           {a && (
             <>
               {/* Del mes, cosecha y total. */}
               <div className="mb-6 grid grid-cols-3 gap-3">
                 {[
-                  { label: "Vendidas en el mes", n: delMes },
-                  { label: "Cosecha (meses anteriores)", n: cosecha },
+                  { label: "Del mes", n: delMes },
+                  { label: "Cosecha", n: cosecha },
                   { label: "Total", n: total, fuerte: true },
                 ].map((k) => (
                   <div key={k.label} className={`rounded-xl border px-4 py-3 ${k.fuerte ? "border-[var(--viz-1)]/40 bg-[var(--viz-1-wash)]" : "border-hair"}`}>
@@ -102,63 +95,7 @@ export function Desglose({
                 ))}
               </div>
 
-              {total === 0 ? (
-                <p className="text-sm text-ink-soft">No hay ventas en este grupo.</p>
-              ) : (
-                <table className="w-full text-[13.5px]">
-                  <thead>
-                    <tr className="border-b border-hair text-left text-[12px] text-ink-soft">
-                      {conEtapa && <th className="py-2 pr-3 font-normal">Etapa</th>}
-                      <th className="py-2 pr-3 font-normal">{conEtapa ? "Subetapa" : "Estatus"}</th>
-                      <th className="px-3 py-2 text-right font-normal">Del mes</th>
-                      <th className="px-3 py-2 text-right font-normal">Cosecha</th>
-                      <th className="px-3 py-2 text-right font-normal">Total</th>
-                      <th className="py-2 pl-3 text-right font-normal">% del total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {grupos.map((g) => (
-                      <Fragment key={g.etapa}>
-                        {g.filas.map((e, i) => (
-                          <tr key={`${g.etapa}|${e.estatus}|${e.clase}`} className="border-b border-hair">
-                            {conEtapa && <td className="py-2.5 pr-3 align-top text-ink">{i === 0 ? g.etapa : ""}</td>}
-                            <td className="py-2.5 pr-3">
-                              <span className="inline-flex items-center gap-2 text-ink">
-                                <span className="size-2 shrink-0 rounded-full" style={{ background: COLOR[e.clase] }} aria-hidden />
-                                {e.estatus}
-                              </span>
-                            </td>
-                            <td className={num}>{fmtInt.format(e.ventas - e.cosecha)}</td>
-                            <td className={`${num} text-ink-soft`}>{e.cosecha ? fmtInt.format(e.cosecha) : "—"}</td>
-                            <td className={`${num} font-medium text-ink`}>{fmtInt.format(e.ventas)}</td>
-                            <td className="py-2.5 pl-3 text-right tabular-nums text-ink-soft">{pct(e.ventas)}</td>
-                          </tr>
-                        ))}
-                        {conEtapa && g.filas.length > 1 && (
-                          <tr key={`${g.etapa}|sub`} className="border-b border-hair bg-slate-50/70 dark:bg-slate-800/30">
-                            <td className="py-2 pr-3 text-[12.5px] text-ink-soft" colSpan={2}>
-                              Subtotal {g.etapa}
-                            </td>
-                            <td className={`${num} py-2 text-[12.5px]`}>{fmtInt.format(g.ventas - g.cosecha)}</td>
-                            <td className={`${num} py-2 text-[12.5px] text-ink-soft`}>{g.cosecha ? fmtInt.format(g.cosecha) : "—"}</td>
-                            <td className={`${num} py-2 text-[12.5px] font-medium text-ink`}>{fmtInt.format(g.ventas)}</td>
-                            <td className="py-2 pl-3 text-right text-[12.5px] tabular-nums text-ink-soft">{pct(g.ventas)}</td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    ))}
-                    <tr className="font-semibold text-ink">
-                      <td className="py-3 pr-3" colSpan={conEtapa ? 2 : 1}>
-                        Total
-                      </td>
-                      <td className={num}>{fmtInt.format(delMes)}</td>
-                      <td className={num}>{fmtInt.format(cosecha)}</td>
-                      <td className={num}>{fmtInt.format(total)}</td>
-                      <td className="py-3 pl-3 text-right tabular-nums">100%</td>
-                    </tr>
-                  </tbody>
-                </table>
-              )}
+              <TablaDesglose etapas={etapas} />
             </>
           )}
         </div>
@@ -170,6 +107,80 @@ export function Desglose({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+export type FilaEtapa = { etapa: string; estatus: string; clase: SaleClass; ventas: number; cosecha: number };
+
+/** Tabla por etapa y subetapa: del mes, cosecha, total y % del total, con subtotal por etapa. */
+export function TablaDesglose({ etapas, vacio = "Sin ventas." }: { etapas: FilaEtapa[]; vacio?: string }) {
+  const conEtapa = etapas.some((e) => e.etapa !== "(sin etapa)");
+  const total = etapas.reduce((t, e) => t + e.ventas, 0);
+  const cosecha = etapas.reduce((t, e) => t + e.cosecha, 0);
+  const delMes = total - cosecha;
+  const grupos = [...new Set(etapas.map((e) => e.etapa))].map((etapa) => {
+    const filas = etapas.filter((e) => e.etapa === etapa).sort((x, y) => y.ventas - x.ventas);
+    return { etapa, filas, ventas: filas.reduce((t, e) => t + e.ventas, 0), cosecha: filas.reduce((t, e) => t + e.cosecha, 0) };
+  });
+  const pct = (n: number) => (total ? fmtPct((n / total) * 100) : "—");
+  const num = "px-3 py-2.5 text-right tabular-nums";
+  if (total === 0) return <p className="text-sm text-ink-soft">{vacio}</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[560px] table-fixed text-[13.5px]">
+      <thead>
+        <tr className="border-b border-hair text-left text-[12px] text-ink-soft">
+          {conEtapa && <th className="w-[24%] py-2 pr-3 font-normal">Etapa primaria</th>}
+          <th className={`${conEtapa ? "w-[32%]" : "w-[56%]"} py-2 pr-3 font-normal`}>{conEtapa ? "Subetapa" : "Estatus"}</th>
+          <th className="w-[11%] px-3 py-2 text-right font-normal">Del mes</th>
+          <th className="w-[11%] px-3 py-2 text-right font-normal">Cosecha</th>
+          <th className="w-[11%] px-3 py-2 text-right font-normal">Total</th>
+          <th className="w-[11%] py-2 pl-3 text-right font-normal">% del total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {grupos.map((g) => (
+          <Fragment key={g.etapa}>
+            {g.filas.map((e, i) => (
+              <tr key={`${g.etapa}|${e.estatus}|${e.clase}`} className="border-b border-hair">
+                {conEtapa && <td className="py-2.5 pr-3 align-top text-ink">{i === 0 ? (g.etapa === "(sin etapa)" ? "Sin etapa" : g.etapa) : ""}</td>}
+                <td className="py-2.5 pr-3">
+                  <span className="inline-flex items-center gap-2 text-ink">
+                    <span className="size-2 shrink-0 rounded-full" style={{ background: COLOR[e.clase] }} aria-hidden />
+                    {e.estatus}
+                  </span>
+                </td>
+                <td className={num}>{fmtInt.format(e.ventas - e.cosecha)}</td>
+                <td className={`${num} text-ink-soft`}>{e.cosecha ? fmtInt.format(e.cosecha) : "—"}</td>
+                <td className={`${num} font-medium text-ink`}>{fmtInt.format(e.ventas)}</td>
+                <td className="py-2.5 pl-3 text-right tabular-nums text-ink-soft">{pct(e.ventas)}</td>
+              </tr>
+            ))}
+            {conEtapa && g.filas.length > 1 && (
+              <tr key={`${g.etapa}|sub`} className="border-b border-hair bg-slate-50/70 dark:bg-slate-800/30">
+                <td className="py-2 pr-3 text-[12.5px] text-ink-soft" colSpan={2}>
+                  Subtotal {g.etapa}
+                </td>
+                <td className={`${num} py-2 text-[12.5px]`}>{fmtInt.format(g.ventas - g.cosecha)}</td>
+                <td className={`${num} py-2 text-[12.5px] text-ink-soft`}>{g.cosecha ? fmtInt.format(g.cosecha) : "—"}</td>
+                <td className={`${num} py-2 text-[12.5px] font-medium text-ink`}>{fmtInt.format(g.ventas)}</td>
+                <td className="py-2 pl-3 text-right text-[12.5px] tabular-nums text-ink-soft">{pct(g.ventas)}</td>
+              </tr>
+            )}
+          </Fragment>
+        ))}
+        <tr className="font-semibold text-ink">
+          <td className="py-3 pr-3" colSpan={conEtapa ? 2 : 1}>
+            Total
+          </td>
+          <td className={num}>{fmtInt.format(delMes)}</td>
+          <td className={num}>{fmtInt.format(cosecha)}</td>
+          <td className={num}>{fmtInt.format(total)}</td>
+          <td className="py-3 pl-3 text-right tabular-nums">100%</td>
+        </tr>
+      </tbody>
+    </table>
     </div>
   );
 }
