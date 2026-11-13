@@ -288,6 +288,33 @@ describe("detalle de clientes", () => {
   });
 });
 
+describe("pendientes por requisito: qué documento se pide", () => {
+  it("lista cada cliente con su documento y cuenta por documento", async () => {
+    const R = "PENDIENTE POR REQUISITO";
+    await load("upin:sabana", "2026-09", [
+      { niu: "1", saleDate: "2026-09-02", executive: "Ana", statusRaw: "Pendiente por requisito", extra: { NOMBRE: "UNO", [R]: "DUI, Constancia de salario" } },
+      { niu: "2", saleDate: "2026-09-03", executive: "Luis", statusRaw: "PENDIENTE POR REQUISITO/VENCIDOS", extra: { NOMBRE: "DOS", [R]: "constancia de  salario" } },
+      { niu: "3", saleDate: "2026-08-28", executive: "Ana", statusRaw: "PENDIENTE POR REQUISITO", extra: { DOCUMENTACION: "Recibo de luz" } },
+      { niu: "4", saleDate: "2026-09-04", executive: "Ana", statusRaw: "APLICADO", extra: { [R]: "DUI" } },
+    ]);
+    const u = (await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis;
+    const r = u.ventas!.requisitos!;
+    expect(r.clientes.map((c) => [c.niu, c.documento, c.origen])).toEqual([
+      ["3", "Recibo de luz", "cosecha"],
+      ["1", "DUI, Constancia de salario", "mes"],
+      ["2", "constancia de  salario", "mes"],
+    ]);
+    expect(r.porDocumento).toEqual([
+      { label: "Constancia de salario", clientes: 2 },
+      { label: "DUI", clientes: 1 },
+      { label: "Recibo de luz", clientes: 1 },
+    ]);
+    // Por agente: solo los de Ana.
+    const ana = (await call("GET", "/analisis/upin?mes=2026-09&agente=Ana")).data.analysis as CampaignAnalysis;
+    expect(ana.ventas!.requisitos!.clientes.map((c) => c.niu)).toEqual(["3", "1"]);
+  });
+});
+
 describe("proceso de las ventas (del mes y cosecha por separado)", () => {
   it("suma lo mismo que la sábana; evaluadas + pendientes = ventas", () => {
     const todas = [...a.ventas!.procesos.actual, ...a.ventas!.procesos.cosecha];

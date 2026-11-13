@@ -101,6 +101,22 @@ export interface CampaignAnalysis {
     cosecha: { total: number; monto: number; porMes: { month: string; ventas: number; monto: number }[] };
     /** En qué proceso va cada venta, por separado las del mes (actual) y las de meses anteriores (cosecha). */
     procesos: { actual: ProcesoRow[]; cosecha: ProcesoRow[] };
+    /** Ventas pendientes por requisito: qué documento se le pide a cada cliente (null si no hay). */
+    requisitos: null | {
+      porDocumento: { label: string; clientes: number }[];
+      clientes: {
+        niu: string;
+        nombre: string | null;
+        fecha: string | null;
+        agente: string;
+        estatus: string;
+        /** Lo que dice "PENDIENTE POR REQUISITO" (o, si viene vacío, "DOCUMENTACION"). */
+        documento: string | null;
+        documentacion: string | null;
+        observacion: string | null;
+        origen: "mes" | "cosecha";
+      }[];
+    };
   };
 
   base: null | {

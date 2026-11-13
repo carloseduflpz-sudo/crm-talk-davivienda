@@ -37,6 +37,7 @@ import { Button, ErrorMessage } from "../components/form";
 import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { consultaAnalisis, consultaHistorico, mesAnterior, type Dias } from "../lib/consultas";
+import { downloadWorkbook } from "../lib/export";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
@@ -285,6 +286,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
       {v.procesos.cosecha.length > 0 && (
         <TablaProcesos titulo="Proceso de la cosecha" nota="Ventas de meses anteriores que trae la sábana de este mes, según el proceso en que va cada una." filas={v.procesos.cosecha} money={money} open={open} />
       )}
+      {v.requisitos && <PendientesRequisito r={v.requisitos} campana={a.campaign} mes={a.month!} />}
 
       {v.porProceso.length > 1 && !v.procesos.actual.length && !v.procesos.cosecha.length && (
         <ChartCard title="Por proceso">
@@ -364,6 +366,75 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         </ChartCard>
       )}
     </Stack>
+  );
+}
+
+/** Pendientes por requisito: qué documento se le está pidiendo a cada cliente, con la lista para descargar. */
+function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["requisitos"]>; campana: string; mes: string }) {
+  const [doc, setDoc] = useState<string | null>(null);
+  const clave = (x: string) =>
+    x
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
+  const filas = doc ? r.clientes.filter((c) => (doc === "Sin documento especificado" ? !c.documento : clave(c.documento ?? "").includes(clave(doc)))) : r.clientes;
+  const columnas = [
+    { key: "niu", label: "NIU" },
+    { key: "nombre", label: "Cliente" },
+    { key: "agente", label: "Ejecutivo" },
+    { key: "fecha", label: "Fecha de venta" },
+    { key: "estatus", label: "Estatus" },
+    { key: "documento", label: "Documento pedido" },
+    { key: "documentacion", label: "Documentación" },
+    { key: "observacion", label: "Observación" },
+    { key: "origen", label: "Venta" },
+  ];
+  const descargar = () =>
+    void downloadWorkbook(`Pendientes por requisito ${campana.toUpperCase()} ${mes}.xlsx`, [
+      { name: "Pendientes", columns: columnas, rows: filas.map((c) => ({ ...c, origen: c.origen === "mes" ? "Del mes" : "Cosecha" })) },
+      { name: "Por documento", columns: [{ key: "label", label: "Documento" }, { key: "clientes", label: "Clientes" }], rows: r.porDocumento },
+    ]);
+  return (
+    <ChartCard
+      title="Pendientes por requisito: qué documento se pide"
+      note={`${fmtInt.format(r.clientes.length)} ${r.clientes.length === 1 ? "venta pendiente" : "ventas pendientes"} por requisito en la sábana (del mes y de la cosecha). Un cliente que debe varios documentos cuenta en cada uno. Clic en un documento para ver solo esos clientes.`}
+      actions={
+        <button type="button" onClick={descargar} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+          Descargar {doc ? "estos clientes" : "la lista"}
+        </button>
+      }
+    >
+      <BarList
+        rows={r.porDocumento.map((d) => ({ label: d.label, value: d.clientes }))}
+        total={r.clientes.length}
+        onSelect={(x) => setDoc(doc === x.label ? null : x.label)}
+        selectHint="Ver solo estos clientes"
+        active={doc ?? undefined}
+      />
+      <div className="mt-8">
+        {doc && (
+          <p className="mb-3 text-[13px] text-ink-soft">
+            Clientes que deben <span className="font-medium text-ink">{doc}</span> ·{" "}
+            <button type="button" onClick={() => setDoc(null)} className="font-medium text-brand-600 hover:underline">
+              ver todos
+            </button>
+          </p>
+        )}
+        <DataTable
+          rows={filas}
+          cols={[
+            { key: "niu", label: "NIU", render: (c) => c.niu },
+            { key: "nombre", label: "Cliente", render: (c) => c.nombre ?? "—" },
+            { key: "agente", label: "Ejecutivo", render: (c) => c.agente },
+            { key: "fecha", label: "Venta", render: (c) => `${c.fecha ?? "—"}${c.origen === "cosecha" ? " (cosecha)" : ""}`, sort: (c) => c.fecha ?? "" },
+            { key: "documento", label: "Documento pedido", render: (c) => c.documento ?? "—" },
+            { key: "observacion", label: "Observación", render: (c) => c.observacion ?? "—" },
+          ]}
+        />
+      </div>
+    </ChartCard>
   );
 }
 

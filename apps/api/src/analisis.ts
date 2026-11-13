@@ -86,6 +86,32 @@ function acumulado(month: string, porDia: { date: string; ventas: number; monto:
   return { ventas: v, monto: m.map((x) => Math.round(x * 100) / 100) };
 }
 
+/**
+ * Cuántos clientes piden cada documento. Un cliente puede deber varios ("DUI, constancia de salario"): cuenta en
+ * cada uno. Se juntan los que vienen escritos distinto solo por mayúsculas, tildes o espacios.
+ */
+export function contarDocumentos(textos: (string | null)[]): { label: string; clientes: number }[] {
+  const clave = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
+  const m = new Map<string, { label: string; clientes: number }>();
+  for (const t of textos) {
+    const partes = t ? t.split(/\s*(?:[,;\/+\n]|\s-\s|\sy\s)\s*/i).map((x) => x.trim()).filter((x) => x.length > 1) : [];
+    for (const p of partes.length ? [...new Set(partes.map(clave))].map((k) => partes.find((x) => clave(x) === k)!) : ["Sin documento especificado"]) {
+      const k = clave(p);
+      // Se muestra como viene escrito la primera vez.
+      const e = m.get(k) ?? { label: p.replace(/\s+/g, " "), clientes: 0 };
+      e.clientes++;
+      m.set(k, e);
+    }
+  }
+  return [...m.values()].sort((a, b) => b.clientes - a.clientes || a.label.localeCompare(b.label, "es"));
+}
+
 /** Días de un mes (del día desde al día hasta) para comparar meses al mismo corte. */
 export interface Dias {
   desde: number;
@@ -337,10 +363,11 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         })),
         cosecha: { total: 0, monto: 0, porMes: [] },
         procesos: { actual: [], cosecha: [] },
+        requisitos: null,
       };
       // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
       if (month) {
-        const [cos, proc] = await db.batch([
+        const [cos, proc, req] = await db.batch([
           db
             .prepare(
               `SELECT substr(sale_date, 1, 7) AS m, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS monto FROM bank_sales
@@ -358,7 +385,34 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                  FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2 ORDER BY n DESC`,
             )
             .bind(month, id, ...fb),
+          /* Pendientes por requisito: a quién y qué documento se le está pidiendo (columnas de la sábana TDC:
+             "PENDIENTE POR REQUISITO" y "DOCUMENTACION"; la observación de extrarrequisito como detalle). */
+          db
+            .prepare(
+              `SELECT niu, sale_date AS fecha, ${agentLabel("executive")} AS agente, COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)') AS estatus,
+                      NULLIF(TRIM(json_extract(extra, '$.NOMBRE')), '') AS nombre,
+                      NULLIF(TRIM(json_extract(extra, '$."PENDIENTE POR REQUISITO"')), '') AS pend,
+                      NULLIF(TRIM(json_extract(extra, '$.DOCUMENTACION')), '') AS doc,
+                      NULLIF(TRIM(json_extract(extra, '$."MOTIVO DEVOLUCION/OBSERVACIONES EXTRARREQUISITO/COMENTARIO GENERAL"')), '') AS obs,
+                      CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'mes' ELSE 'cosecha' END AS origen
+                 FROM bank_sales WHERE upload_id = ?${fs("")} AND status_raw LIKE '%PENDIENTE%REQUISITO%'
+                ORDER BY sale_date, niu LIMIT 3000`,
+            )
+            .bind(month, id, ...fb),
         ]);
+        type Req = { niu: string; fecha: string | null; agente: string; estatus: string; nombre: string | null; pend: string | null; doc: string | null; obs: string | null; origen: "mes" | "cosecha" };
+        const pendientes = (req!.results as Req[]).map((r) => ({
+          niu: r.niu,
+          nombre: r.nombre,
+          fecha: r.fecha,
+          agente: r.agente,
+          estatus: r.estatus,
+          documento: r.pend ?? r.doc,
+          documentacion: r.doc,
+          observacion: r.obs,
+          origen: r.origen,
+        }));
+        out.ventas.requisitos = pendientes.length ? { clientes: pendientes, porDocumento: contarDocumentos(pendientes.map((x) => x.documento)) } : null;
         const prevRows = cos!.results as { m: string; n: number; monto: number }[];
         out.ventas.cosecha = {
           total: prevRows.reduce((t, r) => t + n(r.n), 0),
