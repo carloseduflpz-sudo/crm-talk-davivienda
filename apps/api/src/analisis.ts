@@ -69,6 +69,8 @@ function parseDays(v: string | null | undefined): number[] {
   return d.length ? [...new Set(d)].sort() : [...DEFAULT_WORK_DAYS];
 }
 const n = (v: unknown) => Number(v ?? 0);
+/** Estatus exactamente "PENDIENTE POR REQUISITO" (sin importar mayúsculas ni espacios de más). */
+const PEND_REQ = (col: string) => `UPPER(TRIM(${col})) = 'PENDIENTE POR REQUISITO'`;
 /** Día (AAAA-MM-DD, hora de El Salvador, UTC−6) en que se cargó un archivo. */
 const diaCarga = (ms: number) => new Date(ms - 6 * 3600_000).toISOString().slice(0, 10);
 const placeholders = (k: number) => Array.from({ length: k }, () => "?").join(", ");
@@ -388,7 +390,9 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                  FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2 ORDER BY n DESC`,
             )
             .bind(month, id, ...fb),
-          /* Pendientes por requisito: a quién y qué documento se le está pidiendo (columnas de la sábana TDC:
+          /* Pendientes por requisito: solo la subetapa "PENDIENTE POR REQUISITO" exacta, como la tabla dinámica de
+             la sábana ("PENDIENTE POR REQUISITO/VENCIDOS", extrarrequisito y creación de empresas son otras subetapas).
+             A quién y qué documento se le está pidiendo (columnas de la sábana TDC:
              "PENDIENTE POR REQUISITO" y "DOCUMENTACION"; la observación de extrarrequisito como detalle). */
           db
             .prepare(
@@ -406,8 +410,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                          FROM bank_sales p JOIN uploads u2 ON u2.id = p.upload_id
                         WHERE p.niu = bank_sales.niu AND COALESCE(p.sale_date, '') = COALESCE(bank_sales.sale_date, '')
                           AND u2.campaign = ? AND u2.kind = 'sabana' AND u2.status IN ('vigente', 'reemplazada')
-                          AND p.status_raw LIKE '%PENDIENTE%REQUISITO%') AS visto
-                 FROM bank_sales WHERE upload_id = ?${fs("")} AND status_raw LIKE '%PENDIENTE%REQUISITO%'
+                          AND ${PEND_REQ("p.status_raw")}) AS visto
+                 FROM bank_sales WHERE upload_id = ?${fs("")} AND ${PEND_REQ("status_raw")}
                 ORDER BY sale_date, niu LIMIT 3000`,
             )
             .bind(month, campaign, id, ...fb),

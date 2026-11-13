@@ -310,14 +310,13 @@ describe("pendientes por requisito: qué documento se pide", () => {
     ]);
     const u = (await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis;
     const r = u.ventas!.requisitos!;
+    // Solo la subetapa "PENDIENTE POR REQUISITO" exacta: la de "/VENCIDOS" es otra (como en la tabla dinámica).
     expect(r.clientes.map((c) => [c.niu, c.documento, c.origen])).toEqual([
       ["3", "Recibo de luz", "cosecha"],
       ["1", "DUI, Constancia de salario", "mes"],
-      ["2", "constancia de  salario", "mes"],
     ]);
     // Unificado: cada venta en un solo grupo (la combinación que debe); la suma da el total.
     expect(r.porDocumento).toEqual([
-      { label: "Constancia de salario", clientes: 1 },
       { label: "Constancia de salario + DUI", clientes: 1 },
       { label: "Recibo de luz", clientes: 1 },
     ]);
