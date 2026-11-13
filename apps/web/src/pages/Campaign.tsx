@@ -222,7 +222,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
         />
       </FigureStrip>
 
-      {v.pcbm && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} />}
+      {v.pcbm && <EvaluacionPcbm p={v.pcbm} prev={prev?.ventas?.pcbm ?? null} prevMonth={prev?.month ?? null} open={open} />}
 
       <ChartCard
         title={money ? "Monto por día" : "Ventas por día"}
@@ -375,12 +375,39 @@ function VentasTab({ a, prev, open, setAgent, setMonth }: Ctx) {
  * Evaluación PCBM (TDC): evaluadas = ya pasaron por PCBM (aprobadas + rechazadas); los % de aprobación y de rechazo
  * se sacan sobre las evaluadas. Del mes, de la cosecha y total; y la tabla por etapa como la dinámica de la sábana.
  */
-function EvaluacionPcbm({ p, prev, prevMonth }: { p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>; prev: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]> | null; prevMonth: string | null }) {
+function EvaluacionPcbm({
+  p,
+  prev,
+  prevMonth,
+  open,
+}: {
+  p: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]>;
+  prev: NonNullable<NonNullable<CampaignAnalysis["ventas"]>["pcbm"]> | null;
+  prevMonth: string | null;
+  open: Ctx["open"];
+}) {
   const filas = [
-    { nombre: "Vendidas en el mes", f: p.mes },
-    { nombre: "Cosecha (meses anteriores)", f: p.cosecha },
-    { nombre: "Total de la sábana", f: p.total, total: true },
+    { nombre: "Vendidas en el mes", f: p.mes, origen: "mes" as const },
+    { nombre: "Cosecha (meses anteriores)", f: p.cosecha, origen: "cosecha" as const },
+    { nombre: "Total de la sábana", f: p.total, origen: null, total: true },
   ].filter((x) => x.total || x.f.ventas > 0);
+  // Clic en una cifra: las ventas (TC) detrás de ella.
+  const CLASES = { ventas: [], evaluadas: ["aprobado", "rechazado"], aprobadas: ["aprobado"], rechazadas: ["rechazado"], pendientes: ["en_proceso"] } as const;
+  const NOMBRE = { ventas: "Ventas", evaluadas: "TC evaluadas por PCBM", aprobadas: "TC aprobadas", rechazadas: "TC rechazadas", pendientes: "TC pendientes de evaluar" } as const;
+  const ver = (que: keyof typeof CLASES, origen: "mes" | "cosecha" | null) =>
+    open({
+      fuente: "ventas",
+      title: `${NOMBRE[que]}${origen === "mes" ? " · vendidas en el mes" : origen === "cosecha" ? " · cosecha" : ""}`,
+      filters: { ...(CLASES[que].length ? { clase: [...CLASES[que]] } : {}), ...(origen ? { origen } : {}) },
+    });
+  const cifra = (n: number, onClick: () => void, fuerte = false) =>
+    n > 0 ? (
+      <button type="button" onClick={onClick} title="Ver cuáles son" className={`tabular-nums underline decoration-hair decoration-dotted underline-offset-4 hover:text-brand-600 hover:decoration-brand-600 ${fuerte ? "font-semibold text-ink" : ""}`}>
+        {fmtInt.format(n)}
+      </button>
+    ) : (
+      <span className={fuerte ? "font-semibold text-ink" : ""}>0</span>
+    );
   const pm = prevMonth ? monthLabel(prevMonth).split(" ")[0] : "";
   type F = (typeof filas)[number];
   const b = (x: { total?: boolean }, v: ReactNode) => (x.total ? <span className="font-semibold text-ink">{v}</span> : v);
@@ -391,37 +418,51 @@ function EvaluacionPcbm({ p, prev, prevMonth }: { p: NonNullable<NonNullable<Cam
     { etapa: "Total general", estatus: "", clase: "en_proceso" as const, ventas: p.total.ventas, cosecha: p.total.ventas - p.mes.ventas, total: true },
   ];
   return (
-    <ChartCard title="Evaluación PCBM" note="Evaluadas: ventas que ya pasaron por PCBM, aprobadas (entregada, en distribución, sin embozo, devolución…) o rechazadas. Los % de aprobación y de rechazo se sacan sobre las evaluadas. Pendientes: las que siguen en PCBM o en apoyo Talk.">
+    <ChartCard title="Evaluación PCBM" note="Evaluadas: ventas que ya pasaron por PCBM, aprobadas (entregada, en distribución, sin embozo, devolución…) o rechazadas. Los % de aprobación y de rechazo se sacan sobre las evaluadas. Pendientes: las que siguen en PCBM o en apoyo Talk. Clic en cualquier cifra o fila para ver cuáles TC son.">
       <div className="mb-6 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
         {[
-          { label: "Evaluadas por PCBM", v: fmtInt.format(p.total.evaluadas), foot: `de ${fmtInt.format(p.total.ventas)} ventas` },
-          { label: "% Aprobación", v: fmtPct(p.total.aprobacion), foot: `${fmtInt.format(p.total.aprobadas)} aprobadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.aprobacion)}` : ""}` },
-          { label: "% Rechazo", v: fmtPct(p.total.rechazo), foot: `${fmtInt.format(p.total.rechazadas)} rechazadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.rechazo)}` : ""}` },
-          { label: "Pendientes", v: fmtInt.format(p.total.pendientes), foot: "aún sin evaluar" },
+          { label: "Evaluadas por PCBM", v: fmtInt.format(p.total.evaluadas), foot: `de ${fmtInt.format(p.total.ventas)} ventas`, que: "evaluadas" as const },
+          { label: "% Aprobación", v: fmtPct(p.total.aprobacion), foot: `${fmtInt.format(p.total.aprobadas)} aprobadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.aprobacion)}` : ""}`, que: "aprobadas" as const },
+          { label: "% Rechazo", v: fmtPct(p.total.rechazo), foot: `${fmtInt.format(p.total.rechazadas)} rechazadas${prev && prev.total.evaluadas ? ` · ${pm}: ${fmtPct(prev.total.rechazo)}` : ""}`, que: "rechazadas" as const },
+          { label: "Pendientes", v: fmtInt.format(p.total.pendientes), foot: "aún sin evaluar", que: "pendientes" as const },
         ].map((k) => (
-          <div key={k.label}>
+          <button
+            key={k.label}
+            type="button"
+            onClick={() => ver(k.que, null)}
+            title="Ver cuáles son"
+            className="-m-2 rounded-xl p-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
+          >
             <p className="text-[13px] text-ink-soft">{k.label}</p>
             <p className="mt-1 text-[26px] font-semibold tabular-nums text-ink">{k.v}</p>
             <p className="text-[12px] text-ink-soft">{k.foot}</p>
-          </div>
+          </button>
         ))}
       </div>
       <DataTable
         rows={filas}
         cols={[
           { key: "nombre", label: "", render: (x: F) => b(x, x.nombre) },
-          { key: "ventas", label: "Ventas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.ventas)) },
-          { key: "evaluadas", label: "Evaluadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.evaluadas)) },
-          { key: "aprobadas", label: "Aprobadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.aprobadas)) },
-          { key: "rechazadas", label: "Rechazadas", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.rechazadas)) },
+          { key: "ventas", label: "Ventas", align: "right", render: (x: F) => cifra(x.f.ventas, () => ver("ventas", x.origen), x.total) },
+          { key: "evaluadas", label: "Evaluadas", align: "right", render: (x: F) => cifra(x.f.evaluadas, () => ver("evaluadas", x.origen), x.total) },
+          { key: "aprobadas", label: "Aprobadas", align: "right", render: (x: F) => cifra(x.f.aprobadas, () => ver("aprobadas", x.origen), x.total) },
+          { key: "rechazadas", label: "Rechazadas", align: "right", render: (x: F) => cifra(x.f.rechazadas, () => ver("rechazadas", x.origen), x.total) },
           { key: "aprobacion", label: "% Aprobación", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.aprobacion) : "—") },
           { key: "rechazo", label: "% Rechazo", align: "right", render: (x: F) => b(x, x.f.evaluadas ? fmtPct(x.f.rechazo) : "—") },
-          { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => b(x, fmtInt.format(x.f.pendientes)) },
+          { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => cifra(x.f.pendientes, () => ver("pendientes", x.origen), x.total) },
         ]}
       />
       <h3 className="mt-8 mb-2 text-[14px] font-semibold text-ink">Por etapa (como la tabla dinámica de la sábana)</h3>
       <DataTable
         rows={etapas}
+        onRowClick={(e) =>
+          open(
+            e.total
+              ? { fuente: "ventas", title: "Todas las ventas de la sábana" }
+              : { fuente: "ventas", title: `${e.etapa} · ${e.estatus}`, filters: { etapa: e.etapa, estatus: e.estatus } },
+          )
+        }
+        rowHint="Ver cuáles son"
         cols={[
           { key: "etapa", label: "Etapa primaria", render: (e: E) => b(e, e.total || e.primera ? e.etapa : "") },
           { key: "estatus", label: "Subetapa", render: (e: E) => e.estatus },

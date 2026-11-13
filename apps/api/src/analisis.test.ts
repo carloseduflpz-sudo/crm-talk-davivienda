@@ -655,6 +655,13 @@ describe("evaluación PCBM (TDC)", () => {
     ]);
     expect(t.etapas.reduce((a, e) => a + e.ventas, 0)).toBe(t.total.ventas);
     expect(t.total.evaluadas + t.total.pendientes).toBe(t.total.ventas);
+    // Clic: las TC detrás de cada cifra.
+    const det = async (q: string) => (await call("GET", `/analisis/tdc/detalle?fuente=ventas&mes=2026-07&${q}`)).data as { total: number; rows: { niu: string }[] };
+    expect((await det("clase=aprobado&clase=rechazado")).total).toBe(5);
+    expect((await det("clase=aprobado&clase=rechazado&origen=cosecha")).total).toBe(0);
+    expect((await det("clase=en_proceso&origen=cosecha")).rows.map((r) => r.niu)).toEqual(["9009"]);
+    expect((await det("etapa=2EN%20DISTRIBUCION&estatus=SIN%20EMBOZO")).rows.map((r) => r.niu)).toEqual(["9003"]);
+    expect((await call("GET", "/analisis/tdc/detalle?fuente=ventas&mes=2026-07&clase=otra")).status).toBe(400);
     // Otras campañas no la tienen.
     expect(((await call("GET", "/analisis/upin?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!.pcbm).toBe(null);
   });

@@ -123,7 +123,18 @@ export function registerDetalle(r: Router): void {
 
     const clase = text("clase");
     if (src.table === "bank_sales") {
-      if (clase) add("status_class = ?", clase);
+      // Una o varias clases (evaluadas = aprobadas y rechazadas).
+      const clases = q.getAll("clase").map((x) => x.trim()).filter(Boolean);
+      if (clases.some((c) => !["aprobado", "rechazado", "en_proceso"].includes(c))) throw new HttpError(400, "Clase inválida.");
+      if (clases.length) add(`status_class IN (${clases.map(() => "?").join(", ")})`, ...clases);
+      // Del mes (fecha del mes o sin fecha) o cosecha (fecha de un mes anterior).
+      const origen = text("origen");
+      if (origen === "mes") add("(sale_date IS NULL OR substr(sale_date, 1, 7) >= ?)", mes);
+      else if (origen === "cosecha") add("sale_date IS NOT NULL AND substr(sale_date, 1, 7) < ?", mes);
+      else if (origen) throw new HttpError(400, "Origen inválido.");
+      // Etapa primaria de la sábana TDC.
+      const etapa = text("etapa");
+      if (etapa) add(`COALESCE(NULLIF(TRIM(json_extract(extra, '$."ETAPA PRIMARIA"')), ''), '(sin etapa)') = ?`, etapa);
       // Uno o varios estatus (la meta puede contar varios).
       const estatus = q.getAll("estatus").map((x) => x.trim()).filter(Boolean);
       if (estatus.length > 50 || estatus.some((x) => x.length > 200)) throw new HttpError(400, "Demasiados estatus en el filtro.");
