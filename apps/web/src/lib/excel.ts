@@ -11,6 +11,8 @@ export class ReadCancelled extends Error {
 
 const CRASH =
   "El navegador se quedó sin memoria leyendo este archivo. Cierra otras pestañas y vuelve a intentarlo; si sigue pasando, guarda una copia solo con la hoja de datos.";
+/** El lector no llegó a arrancar: casi siempre es una pestaña abierta desde antes de publicar una versión nueva. */
+const SIN_LECTOR = "El CRM se actualizó mientras tenías esta página abierta. Recarga la página (Ctrl + F5) y vuelve a elegir los archivos.";
 
 /** Traduce los errores del lector a algo accionable. */
 function friendly(message: string): string {
@@ -32,10 +34,13 @@ export class ExcelReader {
   private seq = 0;
   private pending = new Map<number, Pending>();
   private closed = false;
+  /** Si el lector ya respondió algo: así se distingue un lector que no pudo arrancar de uno que se cayó leyendo. */
+  private alive = false;
 
   constructor() {
     this.worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const m = e.data;
+      this.alive = true;
       const p = this.pending.get(m.id);
       if (!p) return;
       if (m.type === "step") return p.onStep(m.message);
@@ -43,12 +48,14 @@ export class ExcelReader {
       if (m.type === "done") p.resolve({ result: m.result, sha: m.sha });
       else p.reject(new Error(friendly(m.message)));
     };
-    // Un error sin capturar dentro del lector casi siempre es falta de memoria.
+    // Un error sin capturar dentro del lector casi siempre es falta de memoria; si el lector ni siquiera
+    // arrancó (no se pudo descargar), la página es de una versión anterior.
     this.worker.onerror = (e) => {
       e.preventDefault();
       this.closed = true;
       this.worker.terminate();
-      this.failAll(new Error(CRASH));
+      const sinArrancar = !this.alive && !(e instanceof ErrorEvent && e.message);
+      this.failAll(new Error(sinArrancar ? SIN_LECTOR : CRASH));
     };
   }
 

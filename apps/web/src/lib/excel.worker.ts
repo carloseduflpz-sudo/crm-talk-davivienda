@@ -1,7 +1,7 @@
 /* Lee el Excel en segundo plano (Web Worker): por pesado que sea el archivo, la pantalla sigue
    respondiendo. Guarda el archivo en memoria mientras está abierto, por si el usuario cambia el
    tipo de archivo a mano y hay que volver a leerlo. */
-import { compactWorkbook, peekWorkbook, readDataset, type CampaignCode, type Detection, type WorkbookReader, type XLSXReader } from "@crm/core";
+import { compactWorkbook, peekWorkbook, readDatasetAsync, type CampaignCode, type Detection, type WorkbookReader, type XLSXReader } from "@crm/core";
 
 export type WorkerRequest = { type: "open"; id: number; buf: ArrayBuffer; campaign: CampaignCode; fileName?: string } | { type: "analyze"; id: number; datasetId: string };
 export type WorkerResponse =
@@ -62,11 +62,11 @@ scope.onmessage = async (e) => {
       if (!compacted) step("Reconociendo el tipo de archivo…");
       const { reader, detections } = peekWorkbook(XLSX, data, msg.campaign, msg.fileName ?? "");
       open = { data, campaign: msg.campaign, reader, detections, compacted };
-      const result = readDataset(XLSX, data, msg.campaign, reader, detections, detections[0]?.datasetId ?? null, step, !compacted);
+      const result = await readDatasetAsync(XLSX, data, msg.campaign, reader, detections, detections[0]?.datasetId ?? null, step, !compacted);
       scope.postMessage({ type: "done", id: msg.id, result, sha });
     } else {
       if (!open) throw new Error("Vuelve a elegir el archivo.");
-      const result = readDataset(XLSX, open.data, open.campaign, open.reader, open.detections, msg.datasetId, step, !open.compacted);
+      const result = await readDatasetAsync(XLSX, open.data, open.campaign, open.reader, open.detections, msg.datasetId, step, !open.compacted);
       scope.postMessage({ type: "done", id: msg.id, result });
     }
   } catch (err) {

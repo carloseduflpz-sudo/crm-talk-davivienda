@@ -510,6 +510,12 @@ export class WorkbookReader {
     }
     return r;
   }
+  /** Lector armado con filas ya leídas (lectura ligera de hojas grandes). */
+  static desdeFilas(sheetNames: string[], filas: Map<string, Cell[][]>, XLSX: XLSXLike): WorkbookReader {
+    const r = new WorkbookReader(XLSX, { SheetNames: sheetNames, Sheets: {} });
+    for (const sn of sheetNames) r.cache.set(sn, filas.get(sn) ?? []);
+    return r;
+  }
   pickSheet(names: string[]): string | null {
     const want = names.map(normHeader);
     return this.wb.SheetNames.find((sn) => want.includes(normHeader(sn))) ?? null;
@@ -738,6 +744,19 @@ export function sheetAssignments(reader: WorkbookReader, detections: Detection[]
   const out: Record<string, string[]> = {};
   for (const d of detections) for (const sn of neededSheets(reader, d.datasetId)) (out[sn] ??= []).push(d.datasetId);
   return out;
+}
+
+/** Columnas (con nombre normalizado) que usa un tipo de archivo de una sola hoja, para leer solo esas.
+    Null si el tipo lee varias hojas con columnas distintas. */
+export function columnasUsadas(datasetId: string): { requeridas: (string | string[])[]; columnas: Set<string> } | null {
+  const prof = PROFILES[datasetId];
+  if (!prof || prof.multiSheet) return null;
+  const nombres = [
+    ...Object.values(prof.fields).flatMap((f) => (Array.isArray(f[0]) ? f[0] : [f[0]])),
+    ...prof.required.flatMap((r) => (Array.isArray(r) ? r : [r])),
+    ...(prof.markers ?? []),
+  ];
+  return { requeridas: prof.required, columnas: new Set(nombres.map(normHeader)) };
 }
 
 /** Hojas que `parseWorkbook` va a leer para ese tipo de archivo. Basta con los encabezados, así que

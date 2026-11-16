@@ -7,6 +7,7 @@
 import { getCampaign, type CampaignCode, type UploadKind } from "./campaigns";
 import {
   WorkbookReader,
+  columnasUsadas,
   detectDatasets,
   dominantMonth,
   headerPreview,
@@ -19,6 +20,7 @@ import {
   type WorkBookLike,
   type XLSXLike,
 } from "./importers";
+import { leerHojasLigero } from "./hojaLigera";
 
 export type XLSXReader = XLSXLike & { read(data: ArrayBuffer | Uint8Array, opts: Record<string, unknown>): WorkBookLike };
 
@@ -125,42 +127,43 @@ export function onlyMonth<T extends NormalizedRow>(rows: readonly T[], month: st
   });
 }
 
-/** Segundo paso: lee completo lo que necesita `datasetId` y deja las filas listas para guardar. */
-export function readDataset(
-  XLSX: XLSXReader,
-  data: Uint8Array,
-  campaign: CampaignCode,
+/** Lo que se sabe antes de leer las filas: el resultado ya armado (si no hay nada que leer) o las hojas a leer. */
+function preparar(
   peek: WorkbookReader,
+  campaign: CampaignCode,
   detections: Detection[],
   datasetId: string | null,
-  step: Step = () => {},
-  /** false cuando el libro se compactó: el rango declarado de la hoja ya no dice cuántas filas hay. */
-  countRows = true,
-): ExcelReading {
+  step: Step,
+  countRows: boolean,
+): { listo: ExcelReading } | { base: ExcelReading; sheets: string[]; datasetId: string } {
   const assigned = sheetAssignments(peek, detections);
   const hojas = peek.sheetNames.map((name) => ({ name, rows: countRows ? sheetRowCount(peek.wb, name) : null, tipos: assigned[name] ?? [] }));
   const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null, hojas, covered: [] };
   if (!datasetId) {
     return {
-      ...base,
-      error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Elige el tipo a mano arriba; si aun así no se lee, comparte estos encabezados para ajustarlo. ${headerPreview(peek)}`,
+      listo: {
+        ...base,
+        error: `No reconocí este archivo como ninguno de los de ${getCampaign(campaign).shortName}. Elige el tipo a mano arriba; si aun así no se lee, comparte estos encabezados para ajustarlo. ${headerPreview(peek)}`,
+      },
     };
   }
   const sheets = neededSheets(peek, datasetId);
   // Sin hojas que leer: el lector da el mensaje exacto de qué falta.
   if (!sheets.length) {
     const res = parseWorkbook(peek, datasetId);
-    return { ...base, error: "error" in res ? res.error : "No encontré la hoja con los datos." };
+    return { listo: { ...base, error: "error" in res ? res.error : "No encontré la hoja con los datos." } };
   }
   const total = countRows ? sheets.reduce((s, sn) => s + (totalRows(peek.wb, sn) ?? 0), 0) : 0;
   step(total ? `Leyendo ${fmt.format(total)} filas de ${sheets.length > 1 ? "las hojas" : "la hoja"} ${sheets.join(" y ")}…` : "Leyendo las filas…");
+  return { base, sheets, datasetId };
+}
 
-  const wb = XLSX.read(data, { ...LEAN, sheets });
-  const reader = new WorkbookReader(XLSX, wb);
+/** Con las hojas ya leídas: filas validadas y listas para guardar. */
+function terminar(reader: WorkbookReader, base: ExcelReading, campaign: CampaignCode, datasetId: string, step: Step, soltar: () => void): ExcelReading {
   const res = parseWorkbook(reader, datasetId);
   if ("error" in res) return { ...base, error: res.error };
   // Las celdas ya se convirtieron en filas: se sueltan para liberar memoria.
-  for (const sn of sheets) delete wb.Sheets[sn];
+  soltar();
 
   step(`Validando ${fmt.format(res.rows.length)} filas…`);
   const kind = getCampaign(campaign).datasets.find((d) => d.id === datasetId)!.kind as UploadKind;
@@ -176,4 +179,61 @@ export function readDataset(
     missingOptional: res.missingOptional,
     month: dominantMonth(res.rows, datasetId),
   };
+}
+
+/** Segundo paso: lee completo lo que necesita `datasetId` y deja las filas listas para guardar. */
+export function readDataset(
+  XLSX: XLSXReader,
+  data: Uint8Array,
+  campaign: CampaignCode,
+  peek: WorkbookReader,
+  detections: Detection[],
+  datasetId: string | null,
+  step: Step = () => {},
+  /** false cuando el libro se compactó: el rango declarado de la hoja ya no dice cuántas filas hay. */
+  countRows = true,
+): ExcelReading {
+  const p = preparar(peek, campaign, detections, datasetId, step, countRows);
+  if ("listo" in p) return p.listo;
+  const wb = XLSX.read(data, { ...LEAN, sheets: p.sheets });
+  return terminar(new WorkbookReader(XLSX, wb), p.base, campaign, p.datasetId, step, () => {
+    for (const sn of p.sheets) delete wb.Sheets[sn];
+  });
+}
+
+/**
+ * Igual que `readDataset`, pero las hojas muy grandes de un .xlsx se leen por partes y solo con las columnas
+ * que se usan (ver hojaLigera.ts): así un histórico de cientos de miles de llamadas no agota la memoria.
+ */
+export async function readDatasetAsync(
+  XLSX: XLSXReader,
+  data: Uint8Array,
+  campaign: CampaignCode,
+  peek: WorkbookReader,
+  detections: Detection[],
+  datasetId: string | null,
+  step: Step = () => {},
+  countRows = true,
+  /** Desde qué tamaño de hoja se usa la lectura ligera (pruebas). */
+  opts: { minBytes?: number } = {},
+): Promise<ExcelReading> {
+  const p = preparar(peek, campaign, detections, datasetId, step, countRows);
+  if ("listo" in p) return p.listo;
+  const usadas = columnasUsadas(p.datasetId);
+  let filas: Awaited<ReturnType<typeof leerHojasLigero>> = null;
+  if (usadas) {
+    try {
+      filas = await leerHojasLigero(data, p.sheets, usadas, opts);
+    } catch {
+      filas = null; // si la lectura ligera falla, se usa el camino normal
+    }
+  }
+  if (filas) {
+    const leidas = filas;
+    return terminar(WorkbookReader.desdeFilas(p.sheets, leidas, XLSX), p.base, campaign, p.datasetId, step, () => leidas.clear());
+  }
+  const wb = XLSX.read(data, { ...LEAN, sheets: p.sheets });
+  return terminar(new WorkbookReader(XLSX, wb), p.base, campaign, p.datasetId, step, () => {
+    for (const sn of p.sheets) delete wb.Sheets[sn];
+  });
 }

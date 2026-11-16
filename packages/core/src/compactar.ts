@@ -11,7 +11,7 @@ export const EMPTY_GAP = 20_000;
 /** Solo se intenta con hojas que descomprimidas pesan más que esto. */
 export const MIN_SHEET_BYTES = 40 * 1024 * 1024;
 
-interface Entry {
+export interface LibroEntrada {
   name: string;
   method: number;
   crc: number;
@@ -25,7 +25,7 @@ const u16 = (b: Uint8Array, o: number) => b[o]! | (b[o + 1]! << 8);
 const u32 = (b: Uint8Array, o: number) => (b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16) | (b[o + 3]! << 24)) >>> 0;
 
 /** Lee el directorio del zip. Devuelve null si no es un zip simple (por ejemplo ZIP64). */
-function readZip(buf: Uint8Array): Entry[] | null {
+export function readZip(buf: Uint8Array): LibroEntrada[] | null {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65_557); i--) {
     if (u32(buf, i) === 0x06054b50) {
@@ -37,7 +37,7 @@ function readZip(buf: Uint8Array): Entry[] | null {
   const count = u16(buf, eocd + 10);
   const cdOffset = u32(buf, eocd + 16);
   if (count === 0xffff || cdOffset === 0xffffffff) return null;
-  const out: Entry[] = [];
+  const out: LibroEntrada[] = [];
   let p = cdOffset;
   const dec = new TextDecoder();
   for (let i = 0; i < count; i++) {
@@ -165,42 +165,105 @@ function xlsbScanner(gap: number) {
 /** Registros que cierran la hoja después del corte: BrtEndSheetData (146) y BrtEndSheet (130). */
 const XLSB_TAIL = new Uint8Array([0x92, 0x01, 0x00, 0x82, 0x01, 0x00]);
 
-/** Hoja .xml (XLSX): se busca fila por fila si trae algún valor. */
-function xlsxScanner(gap: number) {
-  const dec = new TextDecoder();
-  let decodedBytes = 0;
-  let text = "";
-  let scanFrom = 0;
+/**
+ * Hoja .xml (XLSX): se busca fila por fila si trae algún valor, directamente sobre los bytes (las etiquetas son
+ * ASCII) y sin guardar la hoja: así una hoja de cientos de MB se recorre en segundos y con poca memoria.
+ * Devuelve el byte (en la hoja descomprimida) donde empieza la fila en que cortar, o null si no hace falta.
+ */
+async function xlsxCorte(compressed: Uint8Array, gap: number): Promise<number | null> {
+  const stream = new Blob([compressed as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const reader = stream.getReader();
+  let carry = new Uint8Array(0);
+  let base = 0; // posición (en la hoja) del primer byte de `carry`
   let row = 0;
   let lastValueRow = -1;
-  let prefix = "";
-  return (g: Grow, done: boolean): number | "fin" | null => {
-    if (g.len > decodedBytes) {
-      text += dec.decode(g.buf.subarray(decodedBytes, g.len), { stream: !done });
-      decodedBytes = g.len;
+  let rowHasValue = false;
+  let started = false;
+  const isName = (c: number) => (c >= 48 && c <= 58) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 45 || c === 46;
+  for (;;) {
+    const { value, done } = await reader.read();
+    let buf: Uint8Array;
+    if (value && carry.length) {
+      buf = new Uint8Array(carry.length + value.length);
+      buf.set(carry);
+      buf.set(value, carry.length);
+    } else buf = value ?? carry;
+    const len = buf.length;
+    let i = 0;
+    let keepFrom = len;
+    while (i < len) {
+      if (buf[i] !== 60) {
+        i++;
+        continue;
+      }
+      // Nombre de la etiqueta (sin prefijo de espacio de nombres).
+      let j = i + 1;
+      const closing = buf[j] === 47;
+      if (closing) j++;
+      let nameStart = j;
+      while (j < len && isName(buf[j]!)) {
+        if (buf[j] === 58) nameStart = j + 1;
+        j++;
+      }
+      if (j >= len && !done) {
+        keepFrom = i;
+        break;
+      }
+      const n = j - nameStart;
+      const is = (w: string) => n === w.length && [...w].every((ch, k) => buf[nameStart + k] === ch.charCodeAt(0));
+      if (closing) {
+        if (is("sheetData")) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+      } else if (is("row")) {
+        // La etiqueta completa, para leer r="N".
+        let k = j;
+        while (k < len && buf[k] !== 62) k++;
+        if (k >= len && !done) {
+          keepFrom = i;
+          break;
+        }
+        if (started && rowHasValue) lastValueRow = row;
+        const attrs = new TextDecoder().decode(buf.subarray(j, k));
+        const r = /\br="(\d+)"/.exec(attrs);
+        const rw = r ? Number(r[1]) : row + 1;
+        if (lastValueRow >= 0 && rw - lastValueRow > gap) {
+          await reader.cancel().catch(() => {});
+          return base + i;
+        }
+        row = rw;
+        rowHasValue = false;
+        started = true;
+        i = k;
+        continue;
+      } else if (is("v") || is("is")) {
+        rowHasValue = true;
+      }
+      i = j;
     }
-    const rowRe = /<((?:\w+:)?)row\b([^>]*)>/g;
-    rowRe.lastIndex = scanFrom;
-    let m: RegExpExecArray | null;
-    let prevStart = -1;
-    while ((m = rowRe.exec(text))) {
-      // Valores de la fila anterior: lo que hay entre su inicio y este.
-      if (prevStart >= 0 && /<(?:\w+:)?(?:v|is)\b/.test(text.slice(prevStart, m.index))) lastValueRow = row;
-      prefix = m[1]!;
-      const r = /\br="(\d+)"/.exec(m[2]!);
-      const rw = r ? Number(r[1]) : row + 1;
-      if (lastValueRow >= 0 && rw - lastValueRow > gap) return new TextEncoder().encode(text.slice(0, m.index)).length;
-      row = rw;
-      prevStart = m.index;
-      scanFrom = m.index;
-    }
-    if (text.includes(`</${prefix}sheetData>`, Math.max(0, scanFrom))) return "fin";
-    return done ? "fin" : null;
-  };
+    if (done) return null;
+    base += keepFrom;
+    carry = keepFrom < len ? buf.slice(keepFrom) : new Uint8Array(0);
+  }
+}
+
+/** Los primeros `bytes` de la hoja descomprimida. */
+async function inflatePrefix(compressed: Uint8Array, bytes: number): Promise<Uint8Array> {
+  const stream = new Blob([compressed as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const reader = stream.getReader();
+  const g = new Grow();
+  while (g.len < bytes) {
+    const { value, done } = await reader.read();
+    if (value) g.push(value);
+    if (done) break;
+  }
+  await reader.cancel().catch(() => {});
+  return g.buf.subarray(0, Math.min(bytes, g.len));
 }
 
 /** Escribe un zip nuevo: las entradas sin cambios se copian comprimidas tal cual; las compactadas, sin comprimir. */
-function writeZip(src: Uint8Array, entries: Entry[], replaced: Map<string, Uint8Array>): Uint8Array {
+function writeZip(src: Uint8Array, entries: LibroEntrada[], replaced: Map<string, Uint8Array>): Uint8Array {
   const enc = new TextEncoder();
   const parts: Uint8Array[] = [];
   const central: Uint8Array[] = [];
@@ -279,15 +342,19 @@ export async function compactWorkbook(buf: Uint8Array, opts: { gap?: number; min
     const bin = /^xl\/worksheets\/[^/]+\.bin$/i.test(e.name);
     const xml = /^xl\/worksheets\/[^/]+\.xml$/i.test(e.name);
     if ((!bin && !xml) || e.method !== 8 || e.size < min) continue;
-    const res = await inflateUntil(buf.subarray(e.dataStart, e.dataStart + e.compSize), bin ? xlsbScanner(gap) : xlsxScanner(gap));
-    if (!res) continue;
+    const comp = buf.subarray(e.dataStart, e.dataStart + e.compSize);
     let sheet: Uint8Array;
     if (bin) {
+      const res = await inflateUntil(comp, xlsbScanner(gap));
+      if (!res) continue;
       sheet = new Uint8Array(res.cut + XLSB_TAIL.length);
       sheet.set(res.data.buf.subarray(0, res.cut));
       sheet.set(XLSB_TAIL, res.cut);
     } else {
-      const head = new TextDecoder().decode(res.data.buf.subarray(0, res.cut));
+      // Primero solo se busca dónde cortar (sin guardar la hoja); si hay que cortar, se descomprime hasta ahí.
+      const cut = await xlsxCorte(comp, gap);
+      if (cut === null) continue;
+      const head = new TextDecoder().decode(await inflatePrefix(comp, cut));
       const pre = /<(\w+:)?sheetData\b/.exec(head)?.[1] ?? "";
       const root = /<((?:\w+:)?)worksheet\b/.exec(head)?.[1] ?? "";
       sheet = new TextEncoder().encode(`${head}</${pre}sheetData></${root}worksheet>`);

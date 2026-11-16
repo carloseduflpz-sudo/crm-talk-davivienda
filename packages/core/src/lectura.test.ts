@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { XLSX, workbookBytes } from "../test/libros";
 import { CAMPAIGNS } from "./campaigns";
 import { WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook } from "./importers";
-import { chunkEnds, onlyMonth, peekWorkbook, readDataset, rowMonth, rowsByMonth, type XLSXReader } from "./lectura";
+import { chunkEnds, onlyMonth, peekWorkbook, readDataset, readDatasetAsync, rowMonth, rowsByMonth, type XLSXReader } from "./lectura";
 
 const X = XLSX as unknown as XLSXReader;
 
@@ -16,6 +16,39 @@ function lecturaAnterior(bytes: Uint8Array, campaign: (typeof CAMPAIGNS)[number]
   const kind = CAMPAIGNS.find((c) => c.code === campaign)!.datasets.find((d) => d.id === datasetId)!.kind;
   return { detections, rows: res.rows.map((r) => normalizeRow(datasetId, kind, campaign, r)), dropped: res.dropped, sheet: res.sheet, month: dominantMonth(res.rows, datasetId) };
 }
+
+describe("lectura ligera de hojas grandes (solo las columnas que se usan)", () => {
+  for (const c of CAMPAIGNS) {
+    for (const ds of c.datasets) {
+      it(`${ds.id}: mismo resultado que la lectura normal`, async () => {
+        const bytes = workbookBytes(ds.id, { rowsPerSheet: 40, extraSheet: true });
+        const { reader, detections } = peekWorkbook(X, bytes, c.code);
+        const normal = readDataset(X, bytes, c.code, reader, detections, ds.id);
+        const ligera = await readDatasetAsync(X, bytes, c.code, reader, detections, ds.id, () => {}, true, { minBytes: 0 });
+        expect(ligera.error).toBe(normal.error);
+        expect(ligera.rows).toEqual(normal.rows);
+        expect(ligera.dropped).toBe(normal.dropped);
+        expect(ligera.sheet).toBe(normal.sheet);
+        expect(ligera.month).toEqual(normal.month);
+      });
+    }
+  }
+
+  it("VICI con columnas de más, textos con acentos y caracteres especiales", async () => {
+    const enc = ["id_cliente", "categoria", "tipologia", "subtipologia", "user_name", "call_date", "extra1", "extra2", "phone_number"];
+    const filas: unknown[][] = [enc];
+    for (let i = 0; i < 3000; i++)
+      filas.push([String(1000 + i), i % 2 ? "Contacto Efectivo Positivo" : "No Contacto", i % 3 ? "Venta <realizada> & más" : "Buzón de voz", "", `Agente ${i % 7}`, `2026-09-${String(1 + (i % 28)).padStart(2, "0")} 10:${String(i % 60).padStart(2, "0")}:00`, "x".repeat(20), i, 70000000 + i]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), "Worksheet");
+    const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
+    const { reader, detections } = peekWorkbook(X, bytes, "tdc");
+    const normal = readDataset(X, bytes, "tdc", reader, detections, "tdc:tipif");
+    const ligera = await readDatasetAsync(X, bytes, "tdc", reader, detections, "tdc:tipif", () => {}, true, { minBytes: 0 });
+    expect(normal.rows.length).toBe(3000);
+    expect(ligera.rows).toEqual(normal.rows);
+  });
+});
 
 describe("lectura en dos pasos", () => {
   for (const c of CAMPAIGNS) {
