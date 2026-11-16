@@ -271,14 +271,28 @@ function FigureCell({ f, className, children }: { f: Figure; className: string; 
 /** Indicadores en una sola franja separada por líneas finas. El primero es el protagonista. */
 export function FigureStrip({ figures, children, actions }: { figures: Figure[]; children?: ReactNode; actions?: ReactNode }) {
   const [lead, ...rest] = figures;
-  // Con muchos indicadores, en una sola fila solo en pantallas anchas; si no, en dos o tres columnas.
-  const muchos = rest.length >= 5;
-  const fila = muchos ? "xl:grid-cols-[minmax(0,1.4fr)_repeat(var(--n),minmax(0,1fr))]" : "lg:grid-cols-[minmax(0,1.5fr)_repeat(var(--n),minmax(0,1fr))]";
-  const grupo = muchos ? "grid grid-cols-2 sm:grid-cols-3 border-t border-hair -ml-px -mb-px xl:contents" : "grid grid-cols-2 border-t border-hair -ml-px -mb-px lg:contents";
-  const celda = muchos ? "min-w-0 border-hair border-l border-b p-6 xl:border-b-0 xl:px-5 xl:py-8" : "min-w-0 border-hair border-l border-b p-7 lg:border-b-0 lg:px-7 lg:py-8";
+  // El acomodo se decide por el ancho real del recuadro (no por la pantalla): todos en una fila si cada
+  // indicador tiene al menos 150 px; si no, el principal arriba y los demás en columnas debajo.
+  const ref = useRef<HTMLDivElement>(null);
+  const [ancho, setAncho] = useState(() => (typeof window !== "undefined" ? window.innerWidth - 120 : 1200));
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setAncho(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((e) => setAncho(e[0]?.contentRect.width ?? el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const n = rest.length;
+  const fila = n > 0 && ancho >= 150 * (n + 1.5);
+  // Columnas debajo del principal: las que quepan, de preferencia filas completas (6 indicadores → 3 y 3).
+  const caben = Math.max(2, Math.min(n, Math.floor(ancho / 210)));
+  const cols = Array.from({ length: caben - 1 }, (_, i) => caben - i).find((c) => n % c === 0) ?? caben;
+  const celda = fila ? "min-w-0 border-l border-hair px-5 py-8" : "min-w-0 border-b border-l border-hair p-6";
   return (
     <Panel className="overflow-hidden">
-      <div className={`grid ${fila}`} style={{ ["--n" as string]: rest.length }}>
+      <div ref={ref} className="grid" style={fila ? { gridTemplateColumns: `minmax(0,1.5fr) repeat(${n}, minmax(0,1fr))` } : undefined}>
         {lead && (
           <FigureCell f={lead} className="min-w-0 p-7 lg:p-8">
             <span className="flex items-start justify-between gap-3">
@@ -295,8 +309,11 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
             {lead.spark && <Spark values={lead.spark} />}
           </FigureCell>
         )}
-        {rest.length > 0 && (
-          <div className={grupo}>
+        {n > 0 && (
+          <div
+            className={fila ? "contents" : "-mb-px -ml-px grid border-t border-hair"}
+            style={fila ? undefined : { gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))` }}
+          >
             {rest.map((f) => (
               <FigureCell key={f.label} f={f} className={celda}>
                 <span className="block text-[13.5px] text-ink-soft">{f.label}</span>
