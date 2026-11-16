@@ -53,6 +53,7 @@
   --st-good: #2f9e6e;
   --st-warning: #f0b43c;
   --st-critical: #e25c5c;
+  --st-serious: #d9783a;
 }
 .dark {
   /* La tinta y el papel se invierten en oscuro; los componentes no necesitan clases dark: para el texto. */
@@ -74,6 +75,7 @@
   --st-good: #3fb27f;
   --st-warning: #e8b04a;
   --st-critical: #e8706f;
+  --st-serious: #e8904f;
 }
 
 /* Movimiento de las gráficas: una sola entrada al abrir o al cambiar de mes/agente, nunca en bucle.

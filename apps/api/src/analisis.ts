@@ -1,6 +1,6 @@
 /* Análisis de una campaña en un mes, calculado en la base con los archivos VIGENTES.
    Definiciones (las mismas de la versión 1):
-   - Aprobación = aprobadas ÷ (aprobadas + rechazadas).
+   - Aprobación = aprobadas ÷ evaluadas (aprobadas + rechazadas + no desembolsadas, estas solo en CDC y Extra).
    - Contactabilidad = llamadas con contacto efectivo ÷ llamadas. Contacto efectivo =
      venta + negativo (+ no efectivo, según la regla de la campaña; por defecto sí).
    - Registros = clientes (NIU) distintos llamados.
@@ -290,7 +290,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         db
           .prepare(
             `SELECT ${agentLabel("executive")} AS agent, COUNT(*) AS ventas,
-                    SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas,
+                    SUM(status_class = 'aprobado') AS aprobadas, SUM(status_class = 'rechazado') AS rechazadas, SUM(status_class = 'no_desembolsado') AS no_desemb,
                     COALESCE(SUM(amount), 0) AS monto, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS monto_aprobado
                FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1 ORDER BY ventas DESC`,
           )
@@ -310,7 +310,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         db
           .prepare(
             `SELECT u.month AS month, COUNT(*) AS ventas, SUM(b.status_class = 'aprobado') AS aprobadas,
-                    SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'en_proceso') AS en_proceso,
+                    SUM(b.status_class = 'rechazado') AS rechazadas, SUM(b.status_class = 'no_desembolsado') AS no_desemb, SUM(b.status_class = 'en_proceso') AS en_proceso,
                     COALESCE(SUM(b.amount), 0) AS monto, COALESCE(SUM(CASE WHEN b.status_class = 'aprobado' THEN b.amount END), 0) AS monto_aprobado
                FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
               WHERE u.campaign = ? AND u.is_current = 1 AND u.kind = 'sabana'${fa("b.executive")}${porMesEnRango("b.sale_date")}
@@ -322,27 +322,31 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
       const montoByClass = Object.fromEntries((totals!.results as { c: string; m: number }[]).map((r) => [r.c, n(r.m)]));
       const aprobadas = byClass.aprobado ?? 0;
       const rechazadas = byClass.rechazado ?? 0;
+      const noDesembolsadas = byClass.no_desembolsado ?? 0;
       const enProceso = byClass.en_proceso ?? 0;
-      const total = aprobadas + rechazadas + enProceso;
+      const total = aprobadas + rechazadas + noDesembolsadas + enProceso;
       out.ventas = {
         total,
         aprobadas,
         rechazadas,
+        noDesembolsadas,
         enProceso,
-        aprobacion: pct(aprobadas, aprobadas + rechazadas),
+        aprobacion: pct(aprobadas, aprobadas + rechazadas + noDesembolsadas),
         monto: {
           total: Object.values(montoByClass).reduce((x, y) => x + y, 0),
           aprobado: montoByClass.aprobado ?? 0,
           rechazado: montoByClass.rechazado ?? 0,
+          noDesembolsado: montoByClass.no_desembolsado ?? 0,
           enProceso: montoByClass.en_proceso ?? 0,
         },
         porEstatus: (estatus!.results as { label: string; c: string; n: number; m: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n), monto: n(r.m) })),
-        porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+        porEjecutivo: (ejecutivos!.results as { agent: string; ventas: number; aprobadas: number; rechazadas: number; no_desemb: number; monto: number; monto_aprobado: number }[]).map((r) => ({
           agent: r.agent,
           ventas: n(r.ventas),
           aprobadas: n(r.aprobadas),
           rechazadas: n(r.rechazadas),
-          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+          noDesembolsadas: n(r.no_desemb),
+          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas) + n(r.no_desemb)),
           monto: n(r.monto),
           montoAprobado: n(r.monto_aprobado),
         })),
@@ -355,13 +359,14 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           montoAprobado: n(r.monto_aprobado),
         })),
         porProceso: (procesos!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) })),
-        mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; en_proceso: number; monto: number; monto_aprobado: number }[]).map((r) => ({
+        mensual: (mensual!.results as { month: string; ventas: number; aprobadas: number; rechazadas: number; no_desemb: number; en_proceso: number; monto: number; monto_aprobado: number }[]).map((r) => ({
           month: r.month,
           ventas: n(r.ventas),
           aprobadas: n(r.aprobadas),
           rechazadas: n(r.rechazadas),
+          noDesembolsadas: n(r.no_desemb),
           enProceso: n(r.en_proceso),
-          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas)),
+          aprobacion: pct(n(r.aprobadas), n(r.aprobadas) + n(r.rechazadas) + n(r.no_desemb)),
           monto: n(r.monto),
           montoAprobado: n(r.monto_aprobado),
         })),
@@ -380,12 +385,12 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
             )
             .bind(id, ...fb, month),
           /* En qué proceso va cada venta: del mes (fecha del mes o sin fecha) y de la cosecha (fecha de un mes
-             anterior), por separado. Evaluadas = aprobadas + rechazadas; pendientes = las que siguen en proceso. */
+             anterior), por separado. Evaluadas = aprobadas + rechazadas + no desembolsadas; pendientes = las que siguen en proceso. */
           db
             .prepare(
               `SELECT CASE WHEN sale_date IS NULL OR substr(sale_date, 1, 7) >= ? THEN 'actual' ELSE 'cosecha' END AS origen,
                       COALESCE(NULLIF(TRIM(process), ''), 'Sin proceso') AS proceso, COUNT(*) AS n,
-                      SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'en_proceso') AS ep,
+                      SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'no_desembolsado') AS nd, SUM(status_class = 'en_proceso') AS ep,
                       COALESCE(SUM(amount), 0) AS m, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS ma
                  FROM bank_sales WHERE upload_id = ?${fs("")} GROUP BY 1, 2 ORDER BY n DESC`,
             )
@@ -433,8 +438,19 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           const de = (c: SaleClass) => rs.filter((r) => r.clase === c).reduce((t, r) => t + n(r.n), 0);
           const aprobadas = de("aprobado");
           const rechazadas = de("rechazado");
-          const evaluadas = aprobadas + rechazadas;
-          return { ventas: rs.reduce((t, r) => t + n(r.n), 0), evaluadas, aprobadas, rechazadas, pendientes: de("en_proceso"), aprobacion: pct(aprobadas, evaluadas), rechazo: pct(rechazadas, evaluadas) };
+          const noDesembolsadas = de("no_desembolsado");
+          const evaluadas = aprobadas + rechazadas + noDesembolsadas;
+          return {
+            ventas: rs.reduce((t, r) => t + n(r.n), 0),
+            evaluadas,
+            aprobadas,
+            rechazadas,
+            noDesembolsadas,
+            pendientes: de("en_proceso"),
+            aprobacion: pct(aprobadas, evaluadas),
+            rechazo: pct(rechazadas, evaluadas),
+            noDesembolso: pct(noDesembolsadas, evaluadas),
+          };
         };
         // Todas las campañas (el desglose por estatus); la etapa primaria solo la trae la sábana de TC.
         if (pcbmRows.length) {
@@ -492,11 +508,11 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           monto: prevRows.reduce((t, r) => t + n(r.monto), 0),
           porMes: prevRows.map((r) => ({ month: r.m, ventas: n(r.n), monto: n(r.monto) })),
         };
-        type P = { origen: string; proceso: string; n: number; ap: number; re: number; ep: number; m: number; ma: number };
+        type P = { origen: string; proceso: string; n: number; ap: number; re: number; nd: number; ep: number; m: number; ma: number };
         const filas = (origen: string) =>
           (proc!.results as P[])
             .filter((r) => r.origen === origen)
-            .map((r) => ({ proceso: r.proceso, ventas: n(r.n), aprobadas: n(r.ap), rechazadas: n(r.re), pendientes: n(r.ep), monto: n(r.m), montoAprobado: n(r.ma) }));
+            .map((r) => ({ proceso: r.proceso, ventas: n(r.n), aprobadas: n(r.ap), rechazadas: n(r.re), noDesembolsadas: n(r.nd), pendientes: n(r.ep), monto: n(r.m), montoAprobado: n(r.ma) }));
         out.ventas.procesos = { actual: filas("actual"), cosecha: filas("cosecha") };
       }
     }
@@ -915,6 +931,7 @@ async function historicoCompleto(env: Env, campaign: string, agente: string, res
           ventas: a.ventas?.total ?? null,
           aprobadas: a.ventas?.aprobadas ?? null,
           rechazadas: a.ventas?.rechazadas ?? null,
+          noDesembolsadas: a.ventas?.noDesembolsadas ?? null,
           aprobacion: a.ventas ? a.ventas.aprobacion : null,
           monto: a.ventas ? a.ventas.monto.total : null,
           montoAprobado: a.ventas ? a.ventas.monto.aprobado : null,
@@ -955,7 +972,7 @@ function aplicarOficial(campaign: string, summary: MonthSummary[], oficial: Ofic
           // Del rango que ya muestra el histórico o de los últimos 12 meses.
           if (of.month < desde && of.month < limite) continue;
           s = {
-            month: of.month, ventas: null, aprobadas: null, rechazadas: null, aprobacion: null, monto: null, montoAprobado: null, base: null, adicionales: 0,
+            month: of.month, ventas: null, aprobadas: null, rechazadas: null, noDesembolsadas: null, aprobacion: null, monto: null, montoAprobado: null, base: null, adicionales: 0,
             llamadas: null, registros: null, contactabilidad: null, ventasVici: null, penetracion: null, unidad, meta: null, logrado: null, cumplimiento: null,
             diasHabiles: 0, hasta: null, acumulado: { ventas: [], monto: [] },
           };
@@ -997,7 +1014,7 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
   const [ventas, dias, hasta, bases, llamadas, estatus] = await db.batch([
     db
       .prepare(
-        `SELECT upload_id AS id, SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'en_proceso') AS ep,
+        `SELECT upload_id AS id, SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'no_desembolsado') AS nd, SUM(status_class = 'en_proceso') AS ep,
                 COALESCE(SUM(amount), 0) AS m, COALESCE(SUM(CASE WHEN status_class = 'aprobado' THEN amount END), 0) AS ma
            FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?)) GROUP BY upload_id`,
       )
@@ -1033,7 +1050,7 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
       .bind(ids(tipifs)),
     db.prepare(`SELECT DISTINCT upload_id AS id, ${etiqueta} AS label FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?))`).bind(ids(sabanas)),
   ]);
-  type V = { id: string; ap: number; re: number; ep: number; m: number; ma: number };
+  type V = { id: string; ap: number; re: number; nd: number; ep: number; m: number; ma: number };
   type L = { id: string; total: number; registros: number; efectivos: number; ventas: number };
   const porVentas = new Map((ventas!.results as V[]).map((r) => [r.id, r]));
   const porLlamadas = new Map((llamadas!.results as L[]).map((r) => [r.id, r]));
@@ -1095,15 +1112,17 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
     const dias = businessDays(month, parseDays(config?.work_days), (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month))).length;
     const ap = n(v?.ap);
     const re = n(v?.re);
+    const nd = n(v?.nd);
     const ventasVici = l ? n(l.ventas) : null;
     const meta = goal ? n(goal.sales_goal) : null;
     const logrado = sab && logradoDe.has(month) ? logradoDe.get(month)! : null;
     return {
       month,
-      ventas: sab ? ap + re + n(v?.ep) : null,
+      ventas: sab ? ap + re + nd + n(v?.ep) : null,
       aprobadas: sab ? ap : null,
       rechazadas: sab ? re : null,
-      aprobacion: sab ? pct(ap, ap + re) : null,
+      noDesembolsadas: sab ? nd : null,
+      aprobacion: sab ? pct(ap, ap + re + nd) : null,
       monto: sab ? n(v?.m) : null,
       montoAprobado: sab ? n(v?.ma) : null,
       base,

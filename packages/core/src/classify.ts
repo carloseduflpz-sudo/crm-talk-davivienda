@@ -3,7 +3,8 @@
 import { getCampaign, type CampaignCode } from "./campaigns";
 import { matchKey } from "./text";
 
-export type SaleClass = "aprobado" | "rechazado" | "en_proceso";
+/** no_desembolsado (CDC, Extra): evaluada por el banco, pero no se desembolsó; va aparte del rechazo. */
+export type SaleClass = "aprobado" | "rechazado" | "no_desembolsado" | "en_proceso";
 export type CallClass = "venta" | "negativo" | "no_efectivo" | "no_contacto" | "sin_tipificar";
 
 export const CALL_CLASSES: readonly CallClass[] = ["venta", "negativo", "no_efectivo", "no_contacto", "sin_tipificar"];
@@ -15,6 +16,7 @@ export function classifySale(campaign: CampaignCode, rawStatus: unknown): SaleCl
   if (!key) return "en_proceso";
   if (c.approved.some((s) => matchKey(s) === key)) return "aprobado";
   if (c.rejected.some((s) => matchKey(s) === key)) return "rechazado";
+  if (c.notDisbursed?.some((s) => matchKey(s) === key)) return "no_desembolsado";
   return clasePorPartes(campaign, rawStatus) ?? "en_proceso";
 }
 

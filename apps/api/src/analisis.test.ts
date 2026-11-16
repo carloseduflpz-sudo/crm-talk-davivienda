@@ -218,9 +218,35 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(anaMTD.gapMTD).toBeCloseTo((5000.25 * 3) / 22 - 3500.5, 6);
     // La pestaña Ventas también trae los montos.
     const v = ((await call("GET", "/analisis/cdc?mes=2026-09")).data.analysis as CampaignAnalysis).ventas!;
-    expect(v.monto).toEqual({ total: 4900.5, aprobado: 4000.5, rechazado: 900, enProceso: 0 });
+    expect(v.monto).toEqual({ total: 4900.5, aprobado: 4000.5, rechazado: 900, noDesembolsado: 0, enProceso: 0 });
     expect(v.porEjecutivo.find((x) => x.agent === "Luis")).toMatchObject({ monto: 1400, montoAprobado: 500 });
     expect(v.porDia.find((d) => d.date === "2026-09-03")).toMatchObject({ monto: 1400, montoAprobado: 500 });
+  });
+
+  it("CDC y Extra: No desembolsado va aparte del rechazo (No aplica); los % son sobre evaluadas", async () => {
+    await load("cdc:sabana", "2026-10", [
+      { niu: "11", saleDate: "2026-10-01", executive: "Ana", statusRaw: "APLICADA", amount: 1000 },
+      { niu: "12", saleDate: "2026-10-01", executive: "Ana", statusRaw: "NO APLICA", amount: 200 },
+      { niu: "13", saleDate: "2026-10-02", executive: "Luis", statusRaw: "No Desembolsado", amount: 300 },
+      { niu: "14", saleDate: "2026-10-02", executive: "Luis", statusRaw: "NO DESEMBOLSADO", amount: 400 },
+      { niu: "15", saleDate: "2026-10-02", executive: "Luis", statusRaw: "EN ANALISIS", amount: 50 },
+    ]);
+    const v = ((await call("GET", "/analisis/cdc?mes=2026-10")).data.analysis as CampaignAnalysis).ventas!;
+    expect(v).toMatchObject({ total: 5, aprobadas: 1, rechazadas: 1, noDesembolsadas: 2, enProceso: 1 });
+    expect(v.aprobacion).toBeCloseTo(25, 6); // 1 ÷ 4 evaluadas
+    expect(v.monto).toMatchObject({ rechazado: 200, noDesembolsado: 700 });
+    expect(v.pcbm!.total).toMatchObject({ evaluadas: 4, aprobadas: 1, rechazadas: 1, noDesembolsadas: 2, pendientes: 1, rechazo: 25, noDesembolso: 50 });
+    expect(v.rechazoPorMotivo.reduce((t, m) => t + m.value, 0)).toBe(1);
+    expect(v.mensual.find((m) => m.month === "2026-10")).toMatchObject({ rechazadas: 1, noDesembolsadas: 2 });
+    expect(v.porEjecutivo.find((x) => x.agent === "Luis")).toMatchObject({ rechazadas: 0, noDesembolsadas: 2 });
+    // Extra: "NO APLICA" es rechazo y "NO DESEMBOLSADO", categoría propia.
+    await load("extrafin:sabana", "2026-10", [
+      { niu: "21", saleDate: "2026-10-01", executive: "Ana", statusRaw: "NO APLICA", amount: 100 },
+      { niu: "22", saleDate: "2026-10-01", executive: "Ana", statusRaw: "NO DESEMBOLSADO", amount: 100 },
+      { niu: "23", saleDate: "2026-10-01", executive: "Ana", statusRaw: "DESEMBOLSADO", amount: 100 },
+    ]);
+    const x = ((await call("GET", "/analisis/extrafin?mes=2026-10")).data.analysis as CampaignAnalysis).ventas!;
+    expect(x).toMatchObject({ aprobadas: 1, rechazadas: 1, noDesembolsadas: 1, enProceso: 0 });
   });
 
   it("validaciones de la meta", async () => {

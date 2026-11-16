@@ -16,7 +16,7 @@ export interface DesgloseSpec {
   mes: string;
 }
 
-const COLOR: Record<SaleClass, string> = { aprobado: "var(--st-good)", rechazado: "var(--st-critical)", en_proceso: "var(--st-warning)" };
+const COLOR: Record<SaleClass, string> = { aprobado: "var(--st-good)", rechazado: "var(--st-critical)", no_desembolsado: "var(--st-serious)", en_proceso: "var(--st-warning)" };
 
 export function Desglose({
   campaign,

@@ -11,7 +11,8 @@ export interface SalesAgentRow {
   ventas: number;
   aprobadas: number;
   rechazadas: number;
-  /** aprobadas ÷ (aprobadas + rechazadas), en %. */
+  noDesembolsadas: number;
+  /** aprobadas ÷ evaluadas (aprobadas + rechazadas + no desembolsadas), en %. */
   aprobacion: number;
   /** Suma del monto de la sábana (CDC, Extra, UPIN traen monto) y de lo aprobado. */
   monto: number;
@@ -27,9 +28,11 @@ export interface PcbmRow {
   evaluadas: number;
   aprobadas: number;
   rechazadas: number;
+  noDesembolsadas: number;
   pendientes: number;
   aprobacion: number;
   rechazo: number;
+  noDesembolso: number;
 }
 
 /** Ventas en un proceso del banco: evaluadas = aprobadas + rechazadas; pendientes = siguen en proceso. */
@@ -38,6 +41,7 @@ export interface ProcesoRow {
   ventas: number;
   aprobadas: number;
   rechazadas: number;
+  noDesembolsadas: number;
   pendientes: number;
   monto: number;
   montoAprobado: number;
@@ -48,6 +52,7 @@ export interface MonthlySalesRow {
   ventas: number;
   aprobadas: number;
   rechazadas: number;
+  noDesembolsadas: number;
   enProceso: number;
   aprobacion: number;
   monto: number;
@@ -102,10 +107,12 @@ export interface CampaignAnalysis {
     total: number;
     aprobadas: number;
     rechazadas: number;
+    /** CDC y Extra: evaluadas que no se desembolsaron (aparte del rechazo). */
+    noDesembolsadas: number;
     enProceso: number;
     aprobacion: number;
     /** Montos en dólares (0 si la sábana no trae monto). */
-    monto: { total: number; aprobado: number; rechazado: number; enProceso: number };
+    monto: { total: number; aprobado: number; rechazado: number; noDesembolsado: number; enProceso: number };
     porEstatus: (Count & { class: string; monto: number })[];
     porEjecutivo: SalesAgentRow[];
     rechazoPorMotivo: (Count & { monto: number })[];
@@ -292,6 +299,7 @@ export interface MonthSummary {
   ventas: number | null;
   aprobadas: number | null;
   rechazadas: number | null;
+  noDesembolsadas: number | null;
   aprobacion: number | null;
   monto: number | null;
   montoAprobado: number | null;

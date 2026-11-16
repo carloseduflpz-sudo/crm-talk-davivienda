@@ -125,7 +125,7 @@ export function registerDetalle(r: Router): void {
     if (src.table === "bank_sales") {
       // Una o varias clases (evaluadas = aprobadas y rechazadas).
       const clases = q.getAll("clase").map((x) => x.trim()).filter(Boolean);
-      if (clases.some((c) => !["aprobado", "rechazado", "en_proceso"].includes(c))) throw new HttpError(400, "Clase inválida.");
+      if (clases.some((c) => !["aprobado", "rechazado", "no_desembolsado", "en_proceso"].includes(c))) throw new HttpError(400, "Clase inválida.");
       if (clases.length) add(`status_class IN (${clases.map(() => "?").join(", ")})`, ...clases);
       // Del mes (fecha del mes o sin fecha) o cosecha (fecha de un mes anterior).
       const origen = text("origen");

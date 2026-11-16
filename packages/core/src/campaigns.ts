@@ -27,6 +27,8 @@ export interface CampaignDef {
   approved: readonly string[];
   /** Estatus del banco que cuentan como rechazo. */
   rejected: readonly string[];
+  /** Estatus que cuentan como evaluada no desembolsada (CDC, Extra): ni aprobada ni rechazo. */
+  notDisbursed?: readonly string[];
   /**
    * Además de los estatus exactos: partes del estatus que lo hacen rechazo o aprobada (sin tildes, en mayúsculas).
    * Se revisa primero el rechazo. TDC: todo lo que ya pasó por PCBM es tarjeta aprobada (en emboso, en ruta,
@@ -68,7 +70,8 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     shortName: "Extrafin",
     statusField: "Etapa",
     approved: ["ENTREGADA", "DESEMBOLSADO"],
-    rejected: ["DEVOLUCION", "NO DESEMBOLSADO"],
+    rejected: ["DEVOLUCION", "NO APLICA"],
+    notDisbursed: ["NO DESEMBOLSADO"],
     processes: ["BASE", "ONLINE"],
     datasets: [
       { id: "extrafin:sabana", kind: "sabana", label: "Sábana", source: "Reporte de Extrafinanciamiento (Base + Extra Online)" },
@@ -83,7 +86,8 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     shortName: "CDC",
     statusField: "Status",
     approved: ["APLICADA"],
-    rejected: ["NO APLICA", "NO DESEMBOLSADO"],
+    rejected: ["NO APLICA"],
+    notDisbursed: ["NO DESEMBOLSADO"],
     datasets: [
       { id: "cdc:sabana", kind: "sabana", label: "Sábana", source: "Reporte de CDC (hoja BASE)" },
       { id: "cdc:base:cdc", kind: "base", label: "Base CDC", source: "Base Compra de Cartera" },

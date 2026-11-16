@@ -271,8 +271,8 @@ function FigureCell({ f, className, children }: { f: Figure; className: string; 
 /** Indicadores en una sola franja separada por líneas finas. El primero es el protagonista. */
 export function FigureStrip({ figures, children, actions }: { figures: Figure[]; children?: ReactNode; actions?: ReactNode }) {
   const [lead, ...rest] = figures;
-  // El acomodo se decide por el ancho real del recuadro (no por la pantalla): todos en una fila si cada
-  // indicador tiene al menos 150 px; si no, el principal arriba y los demás en columnas debajo.
+  // El acomodo se decide por el ancho real del recuadro (no por la pantalla): todos en una fila si el principal
+  // tiene al menos 300 px y cada uno de los demás 150 px; si no, el principal arriba y los demás en columnas debajo.
   const ref = useRef<HTMLDivElement>(null);
   const [ancho, setAncho] = useState(() => (typeof window !== "undefined" ? window.innerWidth - 120 : 1200));
   useEffect(() => {
@@ -285,14 +285,14 @@ export function FigureStrip({ figures, children, actions }: { figures: Figure[];
     return () => ro.disconnect();
   }, []);
   const n = rest.length;
-  const fila = n > 0 && ancho >= 150 * (n + 1.5);
+  const fila = n > 0 && ancho >= Math.max(150 * (n + 1.5), 300 + 150 * n);
   // Columnas debajo del principal: las que quepan, de preferencia filas completas (6 indicadores → 3 y 3).
   const caben = Math.max(2, Math.min(n, Math.floor(ancho / 210)));
   const cols = Array.from({ length: caben - 1 }, (_, i) => caben - i).find((c) => n % c === 0) ?? caben;
   const celda = fila ? "min-w-0 border-l border-hair px-5 py-8" : "min-w-0 border-b border-l border-hair p-6";
   return (
     <Panel className="overflow-hidden">
-      <div ref={ref} className="grid" style={fila ? { gridTemplateColumns: `minmax(0,1.5fr) repeat(${n}, minmax(0,1fr))` } : undefined}>
+      <div ref={ref} className="grid" style={fila ? { gridTemplateColumns: `minmax(300px,1.5fr) repeat(${n}, minmax(0,1fr))` } : undefined}>
         {lead && (
           <FigureCell f={lead} className="min-w-0 p-7 lg:p-8">
             <span className="flex items-start justify-between gap-3">

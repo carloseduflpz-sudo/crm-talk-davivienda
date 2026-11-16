@@ -6,7 +6,7 @@ import { downloadWorkbook } from "./export";
 
 const campana = (c: string) => (isCampaignCode(c) ? getCampaign(c as CampaignCode).shortName : c);
 const base = (c: string, id: string) => (isCampaignCode(c) ? (getCampaign(c as CampaignCode).datasets.find((d) => d.id === id)?.label ?? id) : id);
-const CLASE_VENTA: Record<string, string> = { aprobado: "Aprobada", rechazado: "Rechazada", en_proceso: "En proceso" };
+const CLASE_VENTA: Record<string, string> = { aprobado: "Aprobada", rechazado: "Rechazada", no_desembolsado: "No desembolsada", en_proceso: "En proceso" };
 const CLASE_LLAMADA: Record<string, string> = { venta: "Venta", negativo: "Contacto negativo", no_efectivo: "Contacto no efectivo", no_contacto: "No contacto", sin_tipificar: "Sin tipificar" };
 
 type Col = { key: string; label: string };

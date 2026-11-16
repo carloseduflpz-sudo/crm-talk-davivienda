@@ -11,6 +11,7 @@ import { dayLabel, fmtInt, fmtMoney } from "./charts";
 const CLASS_TONE: Record<string, { label: string; color: string }> = {
   aprobado: { label: "Aprobada", color: "var(--st-good)" },
   rechazado: { label: "Rechazada", color: "var(--st-critical)" },
+  no_desembolsado: { label: "No desembolsada", color: "var(--st-serious)" },
   en_proceso: { label: "En proceso", color: "var(--st-warning)" },
 };
 const CALL_LABEL: Record<string, string> = {
