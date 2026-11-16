@@ -158,6 +158,8 @@ export interface CampaignAnalysis {
 
   base: null | {
     total: number;
+    /** Clientes de la base con venta en la sábana del mes (cruce por NIU); null si no hay sábana. */
+    ventasEnBase: number | null;
     /** Cada carga de base vigente del mes: la original y las adicionales, en orden de llegada.
         Los clientes que se repiten se atribuyen a la primera base que los trajo. */
     porCarga: {
@@ -209,7 +211,7 @@ export interface CampaignAnalysis {
     seguimiento: number;
     ventasPrimerIntento: number;
     ventasRellamado: number;
-    /** Clientes con venta en VICI ÷ base del mes, en %. Null si no hay base cargada. */
+    /** Clientes de la base con venta en la sábana (por NIU) ÷ base del mes, en %. Null sin base o sin sábana. */
     penetracion: number | null;
     ventasUnicas: number;
   };

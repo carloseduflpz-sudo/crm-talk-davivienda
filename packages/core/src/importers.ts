@@ -452,9 +452,18 @@ export const PROFILES: Record<string, Profile> = {
     fields: {
       NIU: ["NIU", "niu"], Nombre: ["NOMBRE"], Usuario: ["Usuarios"], Colector: ["COLECTOR"], Fecha: ["FECHA", "rawdate"],
       Monto: ["MONTO A PAGAR", "str"], Status: [["COMENTARIO BANCO", "STATUS DOMI SEGUN SISTEMA", "STATUS"], "upper"],
+      Recuperadas: ["RECUPERADAS", "upper"],
     },
     monthField: "Fecha",
     monthDMY: true,
+    // Fallida + columna RECUPERADAS → "FALLIDA RECUPERADA", "FALLIDA PENDIENTE" o "FALLIDA RECHAZADA".
+    transform: (rec) => {
+      const status = String(rec.Status ?? "").trim();
+      const r = String(rec.Recuperadas ?? "").trim();
+      if (!/^FALLID/.test(status) || !r) return;
+      const lado = /RECUPER|^SI$|^SÍ$/.test(r) ? "RECUPERADA" : /PENDIENT/.test(r) ? "PENDIENTE" : /RECHAZ|^NO$/.test(r) ? "RECHAZADA" : null;
+      if (lado) rec.Status = `FALLIDA ${lado}`;
+    },
   },
   "domi:base:domi": {
     label: "Base Domiciliaciones",

@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { XLSX, workbookFor } from "../test/libros";
 import { ALL_DATASETS, type CampaignCode, type UploadKind } from "./campaigns";
+import { classifySale } from "./classify";
 import { PROFILES, WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook, telefonoSV } from "./importers";
 
 describe("lectores de Excel: los 27 tipos de archivo", () => {
@@ -73,6 +74,31 @@ describe("reglas de lectura", () => {
     if ("error" in res) throw new Error(res.error);
     const row = normalizeRow("tdc:sabana", "sabana", "tdc", res.rows[0]!) as { saleDate: string };
     expect(row.saleDate).toBe("2026-06-05");
+  });
+});
+
+describe("DOMI: fallidas con la columna RECUPERADAS", () => {
+  it("fallida + recuperada / pendiente / rechazada; exitosa y fallida sin dato quedan igual", () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ["NIU", "Usuarios", "COLECTOR", "FECHA", "STATUS", "RECUPERADAS"],
+        ["1", "Ana", "X", "05/10/2026", "EXITOSA", ""],
+        ["2", "Ana", "X", "05/10/2026", "FALLIDA", "Recuperada"],
+        ["3", "Ana", "X", "05/10/2026", "FALLIDA", "PENDIENTE"],
+        ["4", "Ana", "X", "05/10/2026", "Fallida", "rechazado"],
+        ["5", "Ana", "X", "05/10/2026", "FALLIDA", ""],
+      ]),
+      "TALK AMERICAS",
+    );
+    const res = parseWorkbook(new WorkbookReader(XLSX, wb as never), "domi:sabana");
+    if ("error" in res) throw new Error(res.error);
+    const st = res.rows.map((r) => (normalizeRow("domi:sabana", "sabana", "domi", r) as { statusRaw: string }).statusRaw);
+    expect(st).toEqual(["EXITOSA", "FALLIDA RECUPERADA", "FALLIDA PENDIENTE", "FALLIDA RECHAZADA", "FALLIDA"]);
+    expect(st.map((x) => classifySale("domi", x))).toEqual(["aprobado", "aprobado", "en_proceso", "rechazado", "rechazado"]);
+    expect(classifySale("upin", "DEVOLUCION")).toBe("aprobado");
+    expect(classifySale("upin", "Devolución")).toBe("aprobado");
   });
 });
 

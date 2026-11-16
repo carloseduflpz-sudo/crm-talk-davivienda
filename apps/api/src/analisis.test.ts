@@ -145,7 +145,9 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
       { intentos: "3", clientes: 1 },
     ]);
     expect(L.ventasUnicas).toBe(2);
-    expect(L.penetracion).toBeCloseTo((2 / 35) * 100, 6);
+    // Penetración: clientes de la base con venta en la sábana (NIU 100–119, los 20 están en la base) ÷ 35 de la base.
+    expect(a.base!.ventasEnBase).toBe(20);
+    expect(L.penetracion).toBeCloseTo((20 / 35) * 100, 6);
     const ana = L.porAgente.find((x) => x.agent === "Ana")!;
     expect(ana).toMatchObject({ llamadas: 4, registros: 2, ventas: 1, noContacto: 2, efectivos: 2 });
   });
@@ -247,6 +249,25 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     ]);
     const x = ((await call("GET", "/analisis/extrafin?mes=2026-10")).data.analysis as CampaignAnalysis).ventas!;
     expect(x).toMatchObject({ aprobadas: 1, rechazadas: 1, noDesembolsadas: 1, enProceso: 0 });
+  });
+
+  it("UPIN: la devolución cuenta como aprobada; DOMI: fallida recuperada, pendiente o rechazada", async () => {
+    await load("upin:sabana", "2026-07", [
+      { niu: "31", saleDate: "2026-07-01", executive: "Ana", statusRaw: "APLICADO", amount: 100 },
+      { niu: "32", saleDate: "2026-07-01", executive: "Ana", statusRaw: "DEVOLUCION", amount: 100 },
+      { niu: "33", saleDate: "2026-07-01", executive: "Ana", statusRaw: "RECHAZADO", amount: 100 },
+    ]);
+    const u = ((await call("GET", "/analisis/upin?mes=2026-07")).data.analysis as CampaignAnalysis).ventas!;
+    expect(u).toMatchObject({ aprobadas: 2, rechazadas: 1, enProceso: 0 });
+    await load("domi:sabana", "2026-07", [
+      { niu: "41", saleDate: "2026-07-01", executive: "Ana", statusRaw: "EXITOSA" },
+      { niu: "42", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA RECUPERADA" },
+      { niu: "43", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA PENDIENTE" },
+      { niu: "44", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA RECHAZADA" },
+      { niu: "45", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA" },
+    ]);
+    const d = ((await call("GET", "/analisis/domi?mes=2026-07")).data.analysis as CampaignAnalysis).ventas!;
+    expect(d).toMatchObject({ aprobadas: 2, enProceso: 1, rechazadas: 2 });
   });
 
   it("validaciones de la meta", async () => {

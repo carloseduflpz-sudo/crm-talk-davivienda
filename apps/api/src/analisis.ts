@@ -522,6 +522,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   /* ---------- base ---------- */
   const baseIds = bases.map((b) => b.id);
   let baseUnicos = 0;
+  // Clientes de la base del mes con venta en la sábana (cruce por NIU): para la penetración.
+  let ventasEnBase: number | null = null;
   const baseP = (async () => {
     if (baseIds.length) {
       const inIds = placeholders(baseIds.length);
@@ -591,7 +593,19 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
             )
             .bind(JSON.stringify(baseIds), tipif.id, ...fb),
         );
-      const [porArchivo, unicos, historial, perfiles, ...resto] = await db.batch([...stmts, ...perUpload]);
+      // Penetración: clientes de la base (original y adicionales) con venta en la sábana del mes, por NIU.
+      stmts.splice(
+        4,
+        0,
+        sabana
+          ? db
+              .prepare(`SELECT COUNT(DISTINCT s.niu) AS n FROM bank_sales s WHERE s.upload_id = ?${fs("s.")} AND s.niu IN (SELECT niu FROM base_records WHERE upload_id IN (${inIds}))`)
+              .bind(sabana.id, ...fb, ...baseIds)
+          : db.prepare("SELECT NULL AS n"),
+      );
+      const [porArchivo, unicos, historial, perfiles, enBase, ...resto] = await db.batch([...stmts, ...perUpload]);
+      const enBaseN = (enBase!.results[0] as { n: number | null } | undefined)?.n;
+      ventasEnBase = enBaseN === null || enBaseN === undefined ? null : n(enBaseN);
       const cuadre = tipif ? (resto.shift()!.results[0] as Record<string, number> | undefined) : undefined;
       const cargas = resto;
       baseUnicos = n((unicos!.results[0] as { n: number } | undefined)?.n);
@@ -622,6 +636,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
       const toques = porCarga.reduce((t, c) => t + c.toques, 0);
       out.base = {
         total: baseUnicos,
+        ventasEnBase,
         porCarga,
         recorridos: tipif ? { clientes: recorridos, recorrido: pct(recorridos, baseUnicos), toques, promedioToques: recorridos ? toques / recorridos : 0 } : null,
         cuadre: cuadre
@@ -906,7 +921,8 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   })();
 
   await Promise.all([fechasP, ventasP, baseP, llamadasP, crmP, agentesP, cumplimientoP]);
-  if (out.llamadas) out.llamadas.penetracion = baseUnicos ? pct(out.llamadas.ventasUnicas, baseUnicos) : null;
+  // Penetración = clientes de la base con venta en la sábana (cruce por NIU) ÷ clientes de la base.
+  if (out.llamadas) out.llamadas.penetracion = baseUnicos && ventasEnBase !== null ? pct(ventasEnBase, baseUnicos) : null;
   // Para que se vea qué nombres se unieron (solo los agentes de este mes).
   const present = new Set(out.agentes);
   out.agentesUnidos = naming.groups
@@ -1011,7 +1027,7 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
   const ids = (us: { id: string }[]) => JSON.stringify(us.map((u) => u.id));
   const enMes = (col: string) => `substr(${col}, 1, 7) = u.month`;
   const etiqueta = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
-  const [ventas, dias, hasta, bases, llamadas, estatus] = await db.batch([
+  const [ventas, dias, hasta, bases, llamadas, estatus, enBase] = await db.batch([
     db
       .prepare(
         `SELECT upload_id AS id, SUM(status_class = 'aprobado') AS ap, SUM(status_class = 'rechazado') AS re, SUM(status_class = 'no_desembolsado') AS nd, SUM(status_class = 'en_proceso') AS ep,
@@ -1049,7 +1065,18 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
       )
       .bind(ids(tipifs)),
     db.prepare(`SELECT DISTINCT upload_id AS id, ${etiqueta} AS label FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?))`).bind(ids(sabanas)),
+    // Penetración: clientes de la base del mes con venta en la sábana del mismo mes (cruce por NIU).
+    db
+      .prepare(
+        `SELECT us.month AS month, COUNT(DISTINCT s.niu) AS n FROM bank_sales s JOIN uploads us ON us.id = s.upload_id
+          WHERE s.upload_id IN (SELECT value FROM json_each(?1))
+            AND EXISTS (SELECT 1 FROM base_records b JOIN uploads ub ON ub.id = b.upload_id
+                         WHERE b.niu = s.niu AND ub.month = us.month AND b.upload_id IN (SELECT value FROM json_each(?2)))
+          GROUP BY 1`,
+      )
+      .bind(ids(sabanas), ids(de("base"))),
   ]);
+  const porEnBase = new Map((enBase!.results as { month: string; n: number }[]).map((r) => [r.month, n(r.n)]));
   type V = { id: string; ap: number; re: number; nd: number; ep: number; m: number; ma: number };
   type L = { id: string; total: number; registros: number; efectivos: number; ventas: number };
   const porVentas = new Map((ventas!.results as V[]).map((r) => [r.id, r]));
@@ -1131,7 +1158,7 @@ async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary
       registros: tip ? n(l?.registros) : null,
       contactabilidad: tip ? pct(n(l?.efectivos), n(l?.total)) : null,
       ventasVici: tip ? ventasVici : null,
-      penetracion: tip ? (base ? pct(n(ventasVici), base) : null) : null,
+      penetracion: sab && base ? pct(porEnBase.get(month) ?? 0, base) : null,
       unidad,
       meta,
       logrado,

@@ -930,8 +930,14 @@ function EfectividadTab({ a, prev, open, setAgent }: Ctx) {
             onOpen: () => open({ fuente: "llamadas", title: "Llamadas con venta", filters: { clase: "venta" } }),
           },
           l.penetracion === null
-            ? { label: "Penetración", value: "—", foot: "Carga la base del mes" }
-            : { label: "Penetración", num: l.penetracion, format: pct2, foot: `Sobre ${fmtInt.format(base)} clientes de la base`, delta: deltaOf(l.penetracion, p?.penetracion, vs, { rate: true }) },
+            ? { label: "Penetración", value: "—", foot: a.base ? "Falta la sábana del mes" : "Falta la base del mes" }
+            : {
+                label: "Penetración",
+                num: l.penetracion,
+                format: pct2,
+                foot: `${fmtInt.format(a.base?.ventasEnBase ?? 0)} de ${fmtInt.format(base)} clientes de la base con venta en la sábana`,
+                delta: deltaOf(l.penetracion, p?.penetracion, vs, { rate: true }),
+              },
         ]}
       />
       <Aside>Contacto efectivo es venta, contacto negativo{l.reglaContacto === "con_no_efectivo" ? " y contacto no efectivo" : ""}, con la misma regla de la versión anterior.</Aside>
@@ -1481,7 +1487,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
     },
     { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Base original y adicionales, clientes únicos" },
     { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
-    { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true },
+    { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true, note: "Clientes de la base con venta en la sábana ÷ base" },
   ];
   type R = MonthSummary;
   const opt = <T,>(v: T | null, f: (x: T) => string) => (v === null ? "—" : f(v));
