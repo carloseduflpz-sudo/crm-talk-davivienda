@@ -251,7 +251,7 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(x).toMatchObject({ aprobadas: 1, rechazadas: 1, noDesembolsadas: 1, enProceso: 0 });
   });
 
-  it("UPIN: la devolución cuenta como aprobada; DOMI: fallida recuperada, pendiente o rechazada", async () => {
+  it("UPIN: la devolución cuenta como aprobada; DOMI: todas las fallidas son fallidas, con su comentario", async () => {
     await load("upin:sabana", "2026-07", [
       { niu: "31", saleDate: "2026-07-01", executive: "Ana", statusRaw: "APLICADO", amount: 100 },
       { niu: "32", saleDate: "2026-07-01", executive: "Ana", statusRaw: "DEVOLUCION", amount: 100 },
@@ -263,11 +263,12 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
       { niu: "41", saleDate: "2026-07-01", executive: "Ana", statusRaw: "EXITOSA" },
       { niu: "42", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA RECUPERADA" },
       { niu: "43", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA PENDIENTE" },
-      { niu: "44", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA RECHAZADA" },
+      { niu: "44", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA IRRECUPERABLE", reason: "Cuenta cerrada" },
       { niu: "45", saleDate: "2026-07-01", executive: "Ana", statusRaw: "FALLIDA" },
     ]);
     const d = ((await call("GET", "/analisis/domi?mes=2026-07")).data.analysis as CampaignAnalysis).ventas!;
-    expect(d).toMatchObject({ aprobadas: 2, enProceso: 1, rechazadas: 2 });
+    expect(d).toMatchObject({ aprobadas: 1, enProceso: 0, rechazadas: 4 });
+    expect(d.rechazoPorMotivo.find((m) => m.label === "Cuenta cerrada")).toMatchObject({ value: 1 });
   });
 
   it("validaciones de la meta", async () => {

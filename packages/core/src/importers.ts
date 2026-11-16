@@ -322,8 +322,8 @@ export const PROFILES: Record<string, Profile> = {
     label: "Sábana Extrafinanciamiento (Base + Extra Online)",
     required: [],
     multiSheet: [
-      { sheet: "BASE", process: "BASE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA (ADP)"], extra: { Etapa: ["ETAPA (ADP)"], Dias: ["Días en proceso", "int"], Motivo: ["MOTIVO"] } },
-      { sheet: "EXTRA ONLINE", process: "ONLINE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA"], extra: { Etapa: ["ETAPA"], Dias: ["__no__"], Motivo: ["__no__"] } },
+      { sheet: "BASE", process: "BASE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA (ADP)"], extra: { Etapa: ["ETAPA (ADP)"], Dias: ["Días en proceso", "int"], Motivo: [["MOTIVO", "COMENTARIOS"]] } },
+      { sheet: "EXTRA ONLINE", process: "ONLINE", required: ["NIU", "FECHA VENTA", "EJECUTIVO", "ETAPA"], extra: { Etapa: ["ETAPA"], Dias: ["__no__"], Motivo: ["COMENTARIOS"] } },
     ],
     fields: {
       NIU: ["NIU", "niu"], Fecha: ["FECHA VENTA", "isoDMY"], Nombre: ["Nombre del cliente"], DUI: ["DUI"], Ejecutivo: ["EJECUTIVO"],
@@ -399,7 +399,7 @@ export const PROFILES: Record<string, Profile> = {
     ],
     fields: {
       Fecha: ["FECHA", "iso"], Nombre: ["NOMBRE DE CLIENTE"], Ejecutivo: ["EJECUTIVO"],
-      Limite: ["LIMITE A OTORGAR", "num"], Status: ["STATUS TALK AMERICA", "upper"], Base: ["BASE"],
+      Limite: ["LIMITE A OTORGAR", "num"], Status: ["STATUS TALK AMERICA", "upper"], Base: ["BASE"], Comentarios: ["COMENTARIOS"],
     },
     monthField: "Fecha",
   },
@@ -427,7 +427,7 @@ export const PROFILES: Record<string, Profile> = {
     required: ["NIU", "EJECUTIVO", "STATUS", "TIPO DE SEGURO"],
     fields: {
       NIU: ["NIU", "niu"], Nombre: ["NOMBRE"], Ejecutivo: ["EJECUTIVO"], Fecha: ["FECHA", "isoDMY"],
-      TipoSeguro: ["TIPO DE SEGURO"], Plan: ["PLAN"], Tarjeta: ["TARJETA"], Status: ["STATUS"],
+      TipoSeguro: ["TIPO DE SEGURO"], Plan: ["PLAN"], Tarjeta: ["TARJETA"], Status: ["STATUS"], Comentarios: ["COMENTARIOS"],
     },
     monthField: "Fecha",
   },
@@ -452,17 +452,13 @@ export const PROFILES: Record<string, Profile> = {
     fields: {
       NIU: ["NIU", "niu"], Nombre: ["NOMBRE"], Usuario: ["Usuarios"], Colector: ["COLECTOR"], Fecha: ["FECHA", "rawdate"],
       Monto: ["MONTO A PAGAR", "str"], Status: [["COMENTARIO BANCO", "STATUS DOMI SEGUN SISTEMA", "STATUS"], "upper"],
-      Recuperadas: ["RECUPERADAS", "upper"],
+      Recuperadas: ["RECUPERADAS", "upper"], Comentarios: ["COMENTARIOS"],
     },
     monthField: "Fecha",
     monthDMY: true,
-    // Fallida + columna RECUPERADAS → "FALLIDA RECUPERADA", "FALLIDA PENDIENTE" o "FALLIDA RECHAZADA".
+    // Fallida + columna RECUPERADAS → "FALLIDA RECUPERADA", "FALLIDA PENDIENTE" o "FALLIDA IRRECUPERABLE".
     transform: (rec) => {
-      const status = String(rec.Status ?? "").trim();
-      const r = String(rec.Recuperadas ?? "").trim();
-      if (!/^FALLID/.test(status) || !r) return;
-      const lado = /RECUPER|^SI$|^SÍ$/.test(r) ? "RECUPERADA" : /PENDIENT/.test(r) ? "PENDIENTE" : /RECHAZ|^NO$/.test(r) ? "RECHAZADA" : null;
-      if (lado) rec.Status = `FALLIDA ${lado}`;
+      rec.Status = fallidaDomi(rec.Status, rec.Recuperadas);
     },
   },
   "domi:base:domi": {
@@ -746,6 +742,17 @@ export function sheetAssignments(reader: WorkbookReader, detections: Detection[]
   return out;
 }
 
+/** DOMI: una fallida con la columna RECUPERADAS → "FALLIDA RECUPERADA", "FALLIDA PENDIENTE" o "FALLIDA IRRECUPERABLE". */
+export function fallidaDomi(status: unknown, recuperadas: unknown): string {
+  const s = String(status ?? "").trim();
+  const r = String(recuperadas ?? "")
+    .trim()
+    .toUpperCase();
+  if (!/^FALLID/i.test(s) || !r) return s;
+  const lado = /IRRECUPER|^NO$/.test(r) ? "IRRECUPERABLE" : /RECUPER|^SI$|^SÍ$/.test(r) ? "RECUPERADA" : /PENDIENT/.test(r) ? "PENDIENTE" : null;
+  return lado ? `FALLIDA ${lado}` : s;
+}
+
 /** Columnas (con nombre normalizado) que usa un tipo de archivo de una sola hoja, para leer solo esas.
     Null si el tipo lee varias hojas con columnas distintas. */
 export function columnasUsadas(datasetId: string): { requeridas: (string | string[])[]; columnas: Set<string> } | null {
@@ -931,10 +938,11 @@ interface SaleMap {
 const SALE_MAP: Record<CampaignCode, SaleMap> = {
   tdc: { status: "SUBETAPA", date: "VENTA", dateDMY: true, executive: "EJECUTIVO", reason: "RECHAZO HOMOLOGADO", days: "CONTADOR DIAS" },
   extrafin: { status: "Etapa", date: "Fecha", executive: "Ejecutivo", reason: "Motivo", days: "Dias", amount: "Monto", process: "Proceso" },
-  cdc: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Monto" },
-  upin: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Limite", process: "Proceso" },
-  seguros: { status: "Status", date: "Fecha", executive: "Ejecutivo" },
-  domi: { status: "Status", date: "Fecha", dateDMY: true, executive: "Usuario" },
+  // reason: el comentario de por qué se rechazó (Motivos de rechazo).
+  cdc: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Monto", reason: "Comentarios" },
+  upin: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Limite", process: "Proceso", reason: "Comentarios" },
+  seguros: { status: "Status", date: "Fecha", executive: "Ejecutivo", reason: "Comentarios" },
+  domi: { status: "Status", date: "Fecha", dateDMY: true, executive: "Usuario", reason: "Comentarios" },
 };
 const BASE_MAP: Record<string, { niu?: string; profile?: string; offer?: string }> = {
   "tdc:base:primeras": { profile: "Perfil", offer: "Oferta" },

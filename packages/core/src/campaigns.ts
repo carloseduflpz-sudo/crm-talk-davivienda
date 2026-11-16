@@ -132,11 +132,11 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     name: "Domiciliaciones",
     shortName: "DOMI",
     statusField: "Status",
-    /* Las fallidas se separan con la columna RECUPERADAS de la sábana: recuperada cuenta como aprobada,
-       pendiente sigue en proceso y rechazada es rechazo. Una fallida sin dato en esa columna queda como rechazo. */
-    approved: ["EXITOSA", "FALLIDA RECUPERADA"],
-    rejected: ["FALLIDA", "FALLIDA RECHAZADA"],
-    pendingIf: ["FALLIDA PENDIENTE"],
+    /* Todas las fallidas cuentan como fallidas (el rechazo de DOMI). Dentro, la columna RECUPERADAS de la sábana
+       dice cuáles se recuperaron, cuáles siguen pendientes y cuáles son irrecuperables. */
+    approved: ["EXITOSA"],
+    rejected: ["FALLIDA", "FALLIDA RECUPERADA", "FALLIDA PENDIENTE", "FALLIDA IRRECUPERABLE"],
+    rejectedIf: ["FALLID"],
     datasets: [
       { id: "domi:sabana", kind: "sabana", label: "Sábana", source: "Reporte de Domiciliaciones (hoja TALK AMERICAS)" },
       { id: "domi:base:domi", kind: "base", label: "Base Domiciliaciones", source: "Base Domiciliaciones" },

@@ -78,7 +78,7 @@ describe("reglas de lectura", () => {
 });
 
 describe("DOMI: fallidas con la columna RECUPERADAS", () => {
-  it("fallida + recuperada / pendiente / rechazada; exitosa y fallida sin dato quedan igual", () => {
+  it("fallida + recuperada / pendiente / irrecuperable; exitosa y fallida sin dato quedan igual", () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
       wb,
@@ -87,7 +87,7 @@ describe("DOMI: fallidas con la columna RECUPERADAS", () => {
         ["1", "Ana", "X", "05/10/2026", "EXITOSA", ""],
         ["2", "Ana", "X", "05/10/2026", "FALLIDA", "Recuperada"],
         ["3", "Ana", "X", "05/10/2026", "FALLIDA", "PENDIENTE"],
-        ["4", "Ana", "X", "05/10/2026", "Fallida", "rechazado"],
+        ["4", "Ana", "X", "05/10/2026", "Fallida", "Irrecuperable"],
         ["5", "Ana", "X", "05/10/2026", "FALLIDA", ""],
       ]),
       "TALK AMERICAS",
@@ -95,8 +95,9 @@ describe("DOMI: fallidas con la columna RECUPERADAS", () => {
     const res = parseWorkbook(new WorkbookReader(XLSX, wb as never), "domi:sabana");
     if ("error" in res) throw new Error(res.error);
     const st = res.rows.map((r) => (normalizeRow("domi:sabana", "sabana", "domi", r) as { statusRaw: string }).statusRaw);
-    expect(st).toEqual(["EXITOSA", "FALLIDA RECUPERADA", "FALLIDA PENDIENTE", "FALLIDA RECHAZADA", "FALLIDA"]);
-    expect(st.map((x) => classifySale("domi", x))).toEqual(["aprobado", "aprobado", "en_proceso", "rechazado", "rechazado"]);
+    expect(st).toEqual(["EXITOSA", "FALLIDA RECUPERADA", "FALLIDA PENDIENTE", "FALLIDA IRRECUPERABLE", "FALLIDA"]);
+    // Todas las fallidas son fallidas (el rechazo de DOMI); la columna solo las separa por dentro.
+    expect(st.map((x) => classifySale("domi", x))).toEqual(["aprobado", "rechazado", "rechazado", "rechazado", "rechazado"]);
     expect(classifySale("upin", "DEVOLUCION")).toBe("aprobado");
     expect(classifySale("upin", "Devolución")).toBe("aprobado");
   });
