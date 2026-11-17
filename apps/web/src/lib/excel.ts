@@ -10,7 +10,7 @@ export class ReadCancelled extends Error {
 }
 
 const CRASH =
-  "El navegador se quedó sin memoria leyendo este archivo. Cierra otras pestañas y vuelve a intentarlo; si sigue pasando, guarda una copia solo con la hoja de datos.";
+  "El lector de Excel se detuvo. Recarga la página (Ctrl + F5) y vuelve a elegir el archivo: casi siempre es una pestaña abierta desde antes de una actualización del CRM. Si el archivo es muy grande y vuelve a pasar, cierra otras pestañas.";
 /** El lector no llegó a arrancar: casi siempre es una pestaña abierta desde antes de publicar una versión nueva. */
 const SIN_LECTOR = "El CRM se actualizó mientras tenías esta página abierta. Recarga la página (Ctrl + F5) y vuelve a elegir los archivos.";
 

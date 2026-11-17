@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { api, type Me } from "../lib/api";
 import { precargarCampana, precargarTodas } from "../lib/consultas";
+import { VersionNueva } from "./VersionNueva";
 import { useTheme } from "../lib/theme";
 
 const linkBase = "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors";
@@ -207,6 +208,7 @@ export function Layout() {
 
   return (
     <div className={`min-h-dvh ${pinned ? "lg:pl-64" : ""}`}>
+      <VersionNueva />
       {/* Zona invisible en el borde izquierdo: al acercar el mouse aparece el menú. */}
       {!pinned && (
         <>
