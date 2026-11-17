@@ -744,6 +744,7 @@ export function sheetAssignments(reader: WorkbookReader, detections: Detection[]
 
 /** DOMI: una fallida con la columna RECUPERADAS → "FALLIDA RECUPERADA", "FALLIDA PENDIENTE" o "FALLIDA IRRECUPERABLE". */
 export function fallidaDomi(status: unknown, recuperadas: unknown): string {
+  // En la sábana, una recuperada ya viene como EXITOSA (así la cuenta el banco): solo cambian las fallidas.
   const s = String(status ?? "").trim();
   const r = String(recuperadas ?? "")
     .trim()

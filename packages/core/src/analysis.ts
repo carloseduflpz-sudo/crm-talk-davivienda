@@ -109,6 +109,8 @@ export interface CampaignAnalysis {
     rechazadas: number;
     /** CDC y Extra: evaluadas que no se desembolsaron (aparte del rechazo). */
     noDesembolsadas: number;
+    /** DOMI, columna RECUPERADAS: recuperadas (ya vienen como exitosas) e irrecuperables (fallidas). */
+    recuperacion?: { recuperadas: number; irrecuperables: number };
     enProceso: number;
     aprobacion: number;
     /** Montos en dólares (0 si la sábana no trae monto). */

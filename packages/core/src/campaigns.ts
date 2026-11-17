@@ -101,8 +101,9 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     name: "UPIN · Upgrades e Incrementos",
     shortName: "UPIN",
     statusField: "Status",
-    // La devolución es un producto aprobado (cuenta como aprobada).
-    approved: ["APLICADO", "APROBADO", "DEVOLUCION"],
+    /* Aprobada = ya pasó PCBM, como en el RESUMEN del banco: aplicado, aprobado, devolución y las etapas de
+       contrato y courier (NO SE HA GENERADO CONTRATO, EN PROCESO). Pendientes: PENDIENTE EVALUACIÓN y SIN RESOLUCION. */
+    approved: ["APLICADO", "APROBADO", "DEVOLUCION", "NO SE HA GENERADO CONTRATO", "EN PROCESO"],
     rejected: ["RECHAZADO"],
     approvedIf: ["DEVOLU", "DEVUELT"],
     processes: ["INCREMENTO", "UPGRADE"],

@@ -100,6 +100,9 @@ describe("DOMI: fallidas con la columna RECUPERADAS", () => {
     expect(st.map((x) => classifySale("domi", x))).toEqual(["aprobado", "rechazado", "rechazado", "rechazado", "rechazado"]);
     expect(classifySale("upin", "DEVOLUCION")).toBe("aprobado");
     expect(classifySale("upin", "Devolución")).toBe("aprobado");
+    expect(classifySale("upin", "NO SE HA GENERADO CONTRATO")).toBe("aprobado");
+    expect(classifySale("upin", "En Proceso")).toBe("aprobado");
+    expect(classifySale("upin", "PENDIENTE EVALUACIÓN")).toBe("en_proceso");
   });
 });
 

@@ -174,9 +174,9 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
   const domi = a.campaign === "domi";
   const fallidas = (x: NonNullable<CampaignAnalysis["ventas"]>, lado: string) =>
     x.porEstatus.filter((e) => e.class === "rechazado" && e.label.toUpperCase().endsWith(lado)).reduce((t, e) => t + e.value, 0);
-  const fallidaDe = (lado: string) => fallidas(v, lado);
   const irrecuperablesDe = (x: NonNullable<CampaignAnalysis["ventas"]>) => fallidas(x, "IRRECUPERABLE");
-  const irrecuperables = irrecuperablesDe(v);
+  const irrecuperables = v.recuperacion?.irrecuperables ?? irrecuperablesDe(v);
+  const recuperadas = v.recuperacion?.recuperadas ?? 0;
   const pEvN = p ? evaluadasN(p) : undefined;
   const parts = (nd ? (["aprobado", "en_proceso", "no_desembolsado", "rechazado"] as const) : (["aprobado", "en_proceso", "rechazado"] as const)).map((k) => ({
     key: k,
@@ -236,7 +236,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
             label: N.aprobadas,
             num: v.aprobadas,
             format: intOf,
-            foot: `${fmtPct(share(v.aprobadas, evN))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.aprobado)}` : ""}`,
+            foot: `${fmtPct(share(v.aprobadas, evN))} de las evaluadas${money ? ` · ${fmtMoney(v.monto.aprobado)}` : ""}${domi && recuperadas ? ` · incluye ${fmtInt.format(recuperadas)} recuperadas` : ""}`,
             delta: pDays ? deltaOf(cSum("aprobadas"), pSum("aprobadas"), vsDay) : deltaOf(v.aprobadas, p?.aprobadas, vs),
           },
           {
@@ -254,8 +254,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
                   label: "Irrecuperables",
                   num: irrecuperables,
                   format: intOf,
-                  foot: `${fmtPct(share(irrecuperables, v.rechazadas))} de las fallidas${fallidaDe("RECUPERADA") + fallidaDe("PENDIENTE") ? ` · ${fmtInt.format(fallidaDe("RECUPERADA"))} recuperadas, ${fmtInt.format(fallidaDe("PENDIENTE"))} pendientes` : ""}`,
-                  delta: deltaOf(irrecuperables, p ? irrecuperablesDe(p) : undefined, vs, { upIsGood: false }),
+                  foot: `${fmtPct(share(irrecuperables, v.rechazadas))} de las fallidas · ${fmtInt.format(Math.max(0, v.rechazadas - irrecuperables))} en gestión`,
+                  delta: deltaOf(irrecuperables, p ? (p.recuperacion?.irrecuperables ?? irrecuperablesDe(p)) : undefined, vs, { upIsGood: false }),
                   onOpen: () => desglosar("Fallidas", ["rechazado"]),
                   openLabel: "Ver desglose",
                 },
@@ -312,7 +312,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
 
       {v.pcbm && a.campaign === "tdc" && <EvaluacionPcbm p={v.pcbm} desglosar={desglosar} />}
 
-      <ChartCard title={ev.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note={nd ? "Aprobadas, rechazadas y no desembolsadas, por estatus" : domi ? "Exitosas y fallidas (recuperadas, pendientes e irrecuperables), por estatus" : "Aprobadas y rechazadas, por etapa y subetapa"}>
+      <ChartCard title={ev.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note={nd ? "Aprobadas, rechazadas y no desembolsadas, por estatus" : domi ? "Exitosas y fallidas (irrecuperables y en gestión), por estatus" : "Aprobadas y rechazadas, por etapa y subetapa"}>
         <TablaDesglose etapas={etapasDe(EVALUADAS)} vacio="Sin ventas evaluadas." />
       </ChartCard>
 

@@ -375,6 +375,19 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         requisitos: null,
         pcbm: null,
       };
+      // DOMI: la columna RECUPERADAS (recuperadas, que el banco ya cuenta como exitosas, e irrecuperables).
+      if (campaign === "domi") {
+        const rec = await db
+          .prepare(
+            `SELECT SUM(UPPER(COALESCE(json_extract(extra, '$.Recuperadas'), '')) LIKE '%IRRECUPER%') AS irr,
+                    SUM(UPPER(COALESCE(json_extract(extra, '$.Recuperadas'), '')) LIKE '%RECUPERAD%'
+                        AND UPPER(COALESCE(json_extract(extra, '$.Recuperadas'), '')) NOT LIKE '%IRRECUPER%') AS rec
+               FROM bank_sales WHERE upload_id = ?${fs("")}`,
+          )
+          .bind(sabana.id, ...fb)
+          .first<{ irr: number | null; rec: number | null }>();
+        out.ventas.recuperacion = { recuperadas: n(rec?.rec), irrecuperables: n(rec?.irr) };
+      }
       // Cosecha: ventas de meses anteriores que vienen en la sábana de este mes.
       if (month) {
         const [cos, proc, req, pcbm] = await db.batch([
