@@ -223,6 +223,29 @@ export interface CampaignAnalysis {
     conEstatusBanco: number | null;
     porAgente: Count[];
     porDia: { date: string; ventas: number }[];
+    /**
+     * Pendiente de actualización en sábana: ventas procesadas en TL (ya reportadas al banco) que la sábana
+     * vigente todavía no trae. Cuando llega una sábana nueva con esas ventas, salen solas de aquí (no se duplican).
+     */
+    actualizacion: {
+      /** Último día con ventas en la sábana del mes; null si no hay sábana. */
+      corte: string | null;
+      procesadas: number;
+      enSabana: number;
+      /** Vendidas después del corte: la sábana todavía no llega a esa fecha. */
+      pendientes: number;
+      /** Vendidas hasta el corte y que la sábana no trae: hay que revisar por qué. */
+      noAparecen: number;
+      lista: {
+        niu: string;
+        cliente: string | null;
+        agente: string;
+        fecha: string | null;
+        estado: string | null;
+        situacion: "pendiente" | "no_aparece";
+        causa: string | null;
+      }[];
+    };
   };
 
   cumplimiento: {

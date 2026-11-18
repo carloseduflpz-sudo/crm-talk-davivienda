@@ -772,6 +772,16 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         conEstatusBanco: sabana ? n((match!.results[0] as { n: number } | undefined)?.n) : null,
         porAgente: (agentes!.results as { label: string; n: number }[]).map((r): Count => ({ label: r.label, value: n(r.n) })),
         porDia: (dias!.results as { d: string; n: number }[]).map((r) => ({ date: r.d, ventas: n(r.n) })),
+        actualizacion: await pendienteDeActualizacion(db, {
+          campaign,
+          month: crm.month,
+          crmId: crm.id,
+          sabanaId: sabana?.id ?? null,
+          diaCarga: sabana ? diaCarga(sabana.created_at) : null,
+          filtro: fc("c."),
+          binds: fb,
+          agente: agentLabel,
+        }),
       };
     }
 
@@ -945,6 +955,93 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   return out;
 }
 
+
+/* ---------- pendiente de actualización en sábana ---------- */
+
+/** Estado del backoffice en TL que cuenta como procesado (ya reportado al banco). */
+const PROCESADA = `(UPPER(COALESCE(json_extract(c.extra, '$.EstadoBackoffice'), '')) LIKE '%PROCESAD%'
+  AND UPPER(COALESCE(json_extract(c.extra, '$.EstadoBackoffice'), '')) NOT LIKE '%NO PROCESAD%'
+  AND UPPER(COALESCE(json_extract(c.extra, '$.EstadoBackoffice'), '')) NOT LIKE '%SIN PROCESAR%')`;
+
+const NOMBRE_CAMPANA: Record<string, string> = { tdc: "TDC", extrafin: "Extra", cdc: "CDC", upin: "UPIN", seguros: "Seguros", domi: "DOMI" };
+
+/**
+ * Ventas procesadas en TL del mes que todavía no vienen en la sábana. Una venta ya está en sábana si su NIU
+ * aparece en la sábana vigente de este mes o de uno posterior (como cosecha). Las que no:
+ *   - vendidas después del corte de la sábana → pendientes de actualización (la sábana aún no llega a esa fecha);
+ *   - vendidas hasta el corte → no aparecen en sábana: se indica la posible causa.
+ */
+async function pendienteDeActualizacion(
+  db: D1Database,
+  p: { campaign: string; month: string; crmId: string; sabanaId: string | null; diaCarga: string | null; filtro: string; binds: unknown[]; agente: (col: string) => string },
+): Promise<NonNullable<CampaignAnalysis["crm"]>["actualizacion"]> {
+  const sabanas = `SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month >= ?`;
+  const [corteR, filas] = await db.batch([
+    p.sabanaId
+      ? // Corte: último día con ventas en la sábana, nunca después del día en que se cargó (fechas mal escritas).
+        db
+          .prepare(`SELECT MAX(sale_date) AS corte FROM bank_sales WHERE upload_id = ? AND sale_date LIKE ? AND sale_date <= ?`)
+          .bind(p.sabanaId, `${p.month}%`, p.diaCarga ?? "9999-12-31")
+      : db.prepare("SELECT NULL AS corte"),
+    db
+      .prepare(
+        `SELECT c.niu AS niu, ${p.agente("c.agent")} AS agente,
+                COALESCE(json_extract(c.extra, '$.Fecha'), substr(c.entered_at, 1, 10)) AS fecha,
+                json_extract(c.extra, '$.EstadoBackoffice') AS estado, json_extract(c.extra, '$.Nombre') AS cliente,
+                c.niu IN (SELECT niu FROM bank_sales WHERE upload_id IN (${sabanas})) AS en_sabana
+           FROM crm_sales c WHERE c.upload_id = ?${p.filtro} AND ${PROCESADA}
+          ORDER BY fecha, c.niu`,
+      )
+      .bind(p.campaign, p.month, p.crmId, ...p.binds),
+  ]);
+  const corte = (corteR!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
+  type F = { niu: string; agente: string; fecha: string | null; estado: string | null; cliente: string | null; en_sabana: number };
+  const todas = filas!.results as F[];
+  const faltan = todas.filter((f) => !n(f.en_sabana));
+
+  // Posible causa: el NIU sí está, pero en la sábana de un mes anterior o de otra campaña.
+  const donde = new Map<string, { campaign: string; month: string }[]>();
+  if (faltan.length) {
+    const { results } = await db
+      .prepare(
+        `SELECT DISTINCT b.niu AS niu, u.campaign AS campaign, u.month AS month FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
+          WHERE u.kind = 'sabana' AND u.is_current = 1 AND b.niu IN (SELECT value FROM json_each(?))`,
+      )
+      .bind(JSON.stringify([...new Set(faltan.map((f) => f.niu))]))
+      .all<{ niu: string; campaign: string; month: string }>();
+    for (const r of results) donde.set(r.niu, [...(donde.get(r.niu) ?? []), { campaign: r.campaign, month: r.month }]);
+  }
+  const causaDe = (f: F, pendiente: boolean): string | null => {
+    const en = donde.get(f.niu) ?? [];
+    const antes = en.filter((x) => x.campaign === p.campaign && x.month < p.month).sort((x, y) => y.month.localeCompare(x.month))[0];
+    if (antes) return `Viene en la sábana de ${antes.month} (venta anterior)`;
+    const otra = en.find((x) => x.campaign !== p.campaign);
+    if (otra) return `Viene en la sábana de ${NOMBRE_CAMPANA[otra.campaign] ?? otra.campaign}`;
+    if (pendiente) return corte ? `Vendida después del corte de la sábana (${corte})` : "Aún no hay sábana del mes";
+    if (!f.fecha) return "Sin fecha de venta en TL";
+    return "El banco no la reporta en la sábana";
+  };
+  const lista = faltan.map((f) => {
+    const pendiente = !corte || !f.fecha || f.fecha > corte;
+    return {
+      niu: f.niu,
+      cliente: f.cliente ?? null,
+      agente: f.agente,
+      fecha: f.fecha ?? null,
+      estado: f.estado ?? null,
+      situacion: (pendiente ? "pendiente" : "no_aparece") as "pendiente" | "no_aparece",
+      causa: causaDe(f, pendiente),
+    };
+  });
+  return {
+    corte,
+    procesadas: todas.length,
+    enSabana: todas.length - faltan.length,
+    pendientes: lista.filter((x) => x.situacion === "pendiente").length,
+    noAparecen: lista.filter((x) => x.situacion === "no_aparece").length,
+    lista,
+  };
+}
 
 /** Histórico con filtro por agente: el análisis completo de cada mes (lo que cuenta por agente necesita todo el cálculo). */
 async function historicoCompleto(env: Env, campaign: string, agente: string, res: Resultados): Promise<MonthSummary[]> {

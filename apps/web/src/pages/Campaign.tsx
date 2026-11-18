@@ -310,6 +310,8 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
         <ShareBar parts={parts} format={money ? fmtMoney : intOf} label={money ? "Monto por estatus del banco" : "Ventas por estatus del banco"} />
       </FigureStrip>
 
+      {a.crm?.actualizacion && <PendienteActualizacion x={a.crm.actualizacion} campana={a.campaign} mes={a.month ?? ""} />}
+
       {v.pcbm && a.campaign === "tdc" && <EvaluacionPcbm p={v.pcbm} desglosar={desglosar} />}
 
       <ChartCard title={ev.cosa === "TC" ? "Evaluadas por PCBM" : "Evaluadas"} note={nd ? "Aprobadas, rechazadas y no desembolsadas, por estatus" : domi ? "Exitosas y fallidas (irrecuperables y en gestión), por estatus" : "Aprobadas y rechazadas, por etapa y subetapa"}>
@@ -474,6 +476,168 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
         </ChartCard>
       )}
     </Stack>
+  );
+}
+
+/** Pendiente de actualización en sábana: ventas procesadas en TL (ya reportadas al banco) que la sábana aún no trae. */
+function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAnalysis["crm"]>["actualizacion"]; campana: string; mes: string }) {
+  type Fila = (typeof x.lista)[number];
+  const [lista, setLista] = useState<{ titulo: string; filas: Fila[] } | null>(null);
+  const pendientes = x.lista.filter((f) => f.situacion === "pendiente");
+  const noAparecen = x.lista.filter((f) => f.situacion === "no_aparece");
+  const corte = x.corte ? dayLabel(x.corte) : null;
+  const descargar = (filas: Fila[]) =>
+    void downloadWorkbook(`Pendiente de actualizacion en sabana ${campana.toUpperCase()} ${mes}.xlsx`, [
+      {
+        name: "Pendientes",
+        columns: [
+          { key: "niu", label: "NIU" },
+          { key: "cliente", label: "Cliente" },
+          { key: "agente", label: "Ejecutivo" },
+          { key: "fecha", label: "Fecha de venta (TL)" },
+          { key: "estado", label: "Estado en TL" },
+          { key: "situacion", label: "Situación" },
+          { key: "causa", label: "Posible causa" },
+        ],
+        rows: filas.map((f) => ({ ...f, situacion: f.situacion === "pendiente" ? "Pendiente de actualización en sábana" : "No aparece en sábana" })),
+      },
+    ]);
+  const kpis = [
+    { label: "Procesadas en TL", v: x.procesadas, foot: "reportadas al banco en el mes" },
+    { label: "Ya en sábana", v: x.enSabana, foot: `${fmtPct(share(x.enSabana, x.procesadas))} de las procesadas` },
+    {
+      label: "Pendiente de actualización en sábana",
+      v: x.pendientes,
+      foot: corte ? `vendidas después del corte (${corte})` : "aún no hay sábana del mes",
+      color: "var(--st-warning)",
+      abrir: pendientes.length ? () => setLista({ titulo: "Pendiente de actualización en sábana", filas: pendientes }) : undefined,
+    },
+    {
+      label: "No aparecen en sábana",
+      v: x.noAparecen,
+      foot: "vendidas hasta el corte: revisar con el banco",
+      color: "var(--st-critical)",
+      abrir: noAparecen.length ? () => setLista({ titulo: "Procesadas en TL que no aparecen en sábana", filas: noAparecen }) : undefined,
+    },
+  ];
+  return (
+    <ChartCard
+      title="Pendiente de actualización en sábana"
+      note={corte ? `Ventas procesadas en TL que la sábana (corte al ${corte}) todavía no trae` : "Ventas procesadas en TL; aún no hay sábana del mes"}
+      actions={
+        x.lista.length ? (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setLista({ titulo: "Procesadas en TL sin estatus en sábana", filas: x.lista })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+              Ver ventas
+            </button>
+            <button type="button" onClick={() => descargar(x.lista)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+              Descargar
+            </button>
+          </div>
+        ) : undefined
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {kpis.map((k) => {
+          const cuerpo = (
+            <>
+              <p className="text-[12.5px] text-ink-soft">{k.label}</p>
+              <p className="mt-0.5 text-[26px] font-semibold text-ink tabular-nums" style={k.color && k.v ? { color: k.color } : undefined}>
+                {fmtInt.format(k.v)}
+              </p>
+              <p className="text-[12px] text-ink-soft">{k.foot}</p>
+            </>
+          );
+          return k.abrir ? (
+            <button key={k.label} type="button" onClick={k.abrir} title="Ver estas ventas" className="rounded-xl border border-hair px-4 py-3 text-left hover:border-ink-faint">
+              {cuerpo}
+            </button>
+          ) : (
+            <div key={k.label} className="rounded-xl border border-hair px-4 py-3">
+              {cuerpo}
+            </div>
+          );
+        })}
+      </div>
+      {x.procesadas > 0 && (
+        <p className="mt-4 text-[13px] text-ink-soft">
+          Cuadre: {fmtInt.format(x.enSabana)} en sábana + {fmtInt.format(x.pendientes)} pendientes de actualización + {fmtInt.format(x.noAparecen)} que no aparecen ={" "}
+          {fmtInt.format(x.procesadas)} procesadas en TL. Cuando la sábana se actualiza, las que ya trae pasan solas a "Ya en sábana".
+        </p>
+      )}
+      {lista && <PanelVentasTL titulo={lista.titulo} filas={lista.filas} onClose={() => setLista(null)} onDescargar={() => descargar(lista.filas)} />}
+    </ChartCard>
+  );
+}
+
+function PanelVentasTL({
+  titulo,
+  filas,
+  onClose,
+  onDescargar,
+}: {
+  titulo: string;
+  filas: NonNullable<CampaignAnalysis["crm"]>["actualizacion"]["lista"];
+  onClose: () => void;
+  onDescargar: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={titulo}>
+      <div className="fade-in absolute inset-0 bg-[#0e1b3d]/20 backdrop-blur-[2px] dark:bg-black/50" onClick={onClose} aria-hidden />
+      <div className="drawer-in absolute inset-y-0 right-0 flex w-full max-w-[1180px] flex-col border-l border-hair bg-white shadow-[-24px_0_48px_rgba(14,27,61,0.10)] dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-hair px-6 pt-6 pb-5">
+          <div className="min-w-0">
+            <h2 className="text-[20px] leading-tight font-semibold text-ink">{titulo}</h2>
+            <p className="mt-1 text-[13px] text-ink-soft">
+              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta" : "ventas"} procesadas en TL
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onDescargar} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+              Descargar
+            </button>
+            <button type="button" onClick={onClose} className="rounded-full p-2 text-ink-soft hover:bg-paper hover:text-ink dark:hover:bg-slate-800" aria-label="Cerrar">
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto px-6 pb-6">
+          <DataTable
+            rows={filas}
+            maxRows={5000}
+            cols={[
+              { key: "niu", label: "NIU", render: (f) => f.niu },
+              { key: "cliente", label: "Cliente", render: (f) => <span title={f.estado ?? undefined}>{f.cliente ?? "—"}</span> },
+              { key: "agente", label: "Ejecutivo", render: (f) => f.agente, sort: (f) => f.agente },
+              { key: "fecha", label: "Fecha de venta", render: (f) => (f.fecha ? dayLabel(f.fecha) : "—"), sort: (f) => f.fecha ?? "" },
+              {
+                key: "situacion",
+                label: "Situación",
+                render: (f) =>
+                  f.situacion === "pendiente" ? (
+                    <span className="font-medium text-amber-700 dark:text-amber-300">Pendiente de actualización</span>
+                  ) : (
+                    <span className="font-medium text-[var(--st-critical)]">No aparece en sábana</span>
+                  ),
+                sort: (f) => f.situacion,
+              },
+              { key: "causa", label: "Posible causa", render: (f) => f.causa ?? "—", sort: (f) => f.causa ?? "" },
+            ]}
+            initialSort="fecha"
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 

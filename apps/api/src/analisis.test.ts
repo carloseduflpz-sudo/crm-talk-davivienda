@@ -271,6 +271,45 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     expect(d.rechazoPorMotivo.find((m) => m.label === "Cuenta cerrada")).toMatchObject({ value: 1 });
   });
 
+  it("pendiente de actualización en sábana: procesadas en TL que la sábana aún no trae, sin duplicar al actualizar", async () => {
+    await load("seguros:sabana", "2026-05", [{ niu: "507", saleDate: "2026-05-20", executive: "Ana", statusRaw: "Activo" }]);
+    await load("seguros:sabana", "2026-06", [
+      { niu: "501", saleDate: "2026-06-02", executive: "Ana", statusRaw: "Activo" },
+      { niu: "502", saleDate: "2026-06-03", executive: "Ana", statusRaw: "Activo" },
+      { niu: "503", saleDate: "2026-06-05", executive: "Luis", statusRaw: "Activo" },
+    ]);
+    const tl = (niu: string, d: string, estado: string) => ({ niu, agent: "Ana", enteredAt: `${d}T09:00:00`, product: null, extra: { Fecha: d, EstadoBackoffice: estado, Nombre: `Cliente ${niu}` } });
+    await load("seguros:ventas", "2026-06", [
+      tl("501", "2026-06-02", "PROCESADO"),
+      tl("504", "2026-06-04", "Procesada"),
+      tl("505", "2026-06-10", "PROCESADO"),
+      tl("506", "2026-06-10", "Sin procesar"),
+      tl("507", "2026-06-03", "PROCESADO"),
+    ]);
+    const act = async () => ((await call("GET", "/analisis/seguros?mes=2026-06")).data.analysis as CampaignAnalysis).crm!.actualizacion;
+    let a = await act();
+    expect(a).toMatchObject({ corte: "2026-06-05", procesadas: 4, enSabana: 1, pendientes: 1, noAparecen: 2 });
+    expect(a.lista.map((x) => [x.niu, x.situacion])).toEqual([
+      ["507", "no_aparece"],
+      ["504", "no_aparece"],
+      ["505", "pendiente"],
+    ]);
+    expect(a.lista.find((x) => x.niu === "507")!.causa).toContain("2026-05");
+    expect(a.lista.find((x) => x.niu === "504")!.causa).toBe("El banco no la reporta en la sábana");
+    expect(a.lista.find((x) => x.niu === "505")!.causa).toContain("después del corte");
+    // Llega la sábana actualizada con la 505: sale de pendientes y no se duplica.
+    await load("seguros:sabana", "2026-06", [
+      { niu: "501", saleDate: "2026-06-02", executive: "Ana", statusRaw: "Activo" },
+      { niu: "502", saleDate: "2026-06-03", executive: "Ana", statusRaw: "Activo" },
+      { niu: "503", saleDate: "2026-06-05", executive: "Luis", statusRaw: "Activo" },
+      { niu: "505", saleDate: "2026-06-10", executive: "Ana", statusRaw: "Activo" },
+    ]);
+    a = await act();
+    expect(a).toMatchObject({ corte: "2026-06-10", procesadas: 4, enSabana: 2, pendientes: 0, noAparecen: 2 });
+    const v = ((await call("GET", "/analisis/seguros?mes=2026-06")).data.analysis as CampaignAnalysis).ventas!;
+    expect(v.total).toBe(4);
+  });
+
   it("validaciones de la meta", async () => {
     expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, workDays: [] })).status).toBe(400);
     expect((await call("PUT", "/metas", { campaign: "tdc", month: "2026-09", salesGoal: 10, holidays: ["2026-10-01"] })).status).toBe(400);
