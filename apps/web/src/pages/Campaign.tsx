@@ -503,19 +503,19 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
       },
     ]);
   const kpis = [
-    { label: "Procesadas en TL", v: x.procesadas, foot: "reportadas al banco en el mes" },
+    { label: "Procesadas en TL", v: x.procesadas, foot: "del mes" },
     { label: "Ya en sábana", v: x.enSabana, foot: `${fmtPct(share(x.enSabana, x.procesadas))} de las procesadas` },
     {
       label: "Pendiente de actualización en sábana",
       v: x.pendientes,
-      foot: corte ? `vendidas después del corte (${corte})` : "aún no hay sábana del mes",
+      foot: corte ? "después del corte" : "sin sábana del mes",
       color: "var(--st-warning)",
       abrir: pendientes.length ? () => setLista({ titulo: "Pendiente de actualización en sábana", filas: pendientes }) : undefined,
     },
     {
       label: "No aparecen en sábana",
       v: x.noAparecen,
-      foot: "vendidas hasta el corte: revisar con el banco",
+      foot: "hasta el corte",
       color: "var(--st-critical)",
       abrir: noAparecen.length ? () => setLista({ titulo: "Procesadas en TL que no aparecen en sábana", filas: noAparecen }) : undefined,
     },
@@ -523,7 +523,7 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
   return (
     <ChartCard
       title="Pendiente de actualización en sábana"
-      note={corte ? `Ventas procesadas en TL que la sábana (corte al ${corte}) todavía no trae` : "Ventas procesadas en TL; aún no hay sábana del mes"}
+      note={corte ? `Corte de sábana: ${corte}` : "Sin sábana del mes"}
       actions={
         x.lista.length ? (
           <div className="flex flex-wrap gap-2">
@@ -559,12 +559,6 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
           );
         })}
       </div>
-      {x.procesadas > 0 && (
-        <p className="mt-4 text-[13px] text-ink-soft">
-          Cuadre: {fmtInt.format(x.enSabana)} en sábana + {fmtInt.format(x.pendientes)} pendientes de actualización + {fmtInt.format(x.noAparecen)} que no aparecen ={" "}
-          {fmtInt.format(x.procesadas)} procesadas en TL. Cuando la sábana se actualiza, las que ya trae pasan solas a "Ya en sábana".
-        </p>
-      )}
       {lista && <PanelVentasTL titulo={lista.titulo} filas={lista.filas} onClose={() => setLista(null)} onDescargar={() => descargar(lista.filas)} />}
     </ChartCard>
   );
@@ -674,10 +668,6 @@ function EvaluacionPcbm({ p, desglosar }: { p: NonNullable<NonNullable<CampaignA
           { key: "pendientes", label: "Pendientes", align: "right", render: (x: F) => cifra(x, x.f.pendientes, "TC pendientes", ["en_proceso"]) },
         ]}
       />
-      <p className="mt-3 text-[13px] text-ink-soft">
-        Cuadre: {fmtInt.format(p.total.aprobadas)} aprobadas + {fmtInt.format(p.total.rechazadas)} rechazadas = {fmtInt.format(p.total.evaluadas)} evaluadas; + {fmtInt.format(p.total.pendientes)} pendientes ={" "}
-        {fmtInt.format(p.total.ventas)} ventas.
-      </p>
     </ChartCard>
   );
 }
@@ -741,7 +731,7 @@ function PendientesRequisito({ r, campana, mes }: { r: NonNullable<NonNullable<C
   return (
     <ChartCard
       title="Pendientes por requisito"
-      note="Subetapa Pendiente por requisito: documento solicitado y días pendiente"
+      note="Documento solicitado y días pendiente"
       actions={
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setLista({ titulo: "Todos los pendientes por requisito", filtro: () => true })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
@@ -945,8 +935,8 @@ function BaseTab({ a, prev, open, setMonth }: Ctx) {
           title={b.porCarga.length > 1 ? "Bases del mes" : "Recorrido de la base"}
           note={
             b.porCarga.length > 1
-              ? "Base original y adicionales, en orden de llegada. Cada cliente se asigna a la primera base en que llegó."
-              : "Recorrido: clientes de la base llamados al menos una vez. Toques: llamadas de la tipificación a esos clientes; el promedio es toques ÷ clientes recorridos."
+              ? "Base original y adicionales"
+              : "Recorrido, toques y promedio de toques"
           }
         >
           <DataTable
@@ -1319,7 +1309,7 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
           </div>
         </ChartCard>
       ) : (
-        l && <Aside>Carga las ventas del CRM del mes para ver lo que capturaron los agentes antes del estatus del banco.</Aside>
+        l && <Aside>Sin archivo de ventas del CRM del mes.</Aside>
       )}
     </Stack>
   );
@@ -1500,7 +1490,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
       {(c.cosecha.operaciones > 0 || c.yaContadas.operaciones > 0) && (
         <ChartCard
           title="Logrado por mes de venta"
-          note={`Cosecha: ventas de meses anteriores ${money ? "aplicadas o desembolsadas" : "entregadas o activadas"} en ${mes}`}
+          note={"Cosecha: ventas de meses anteriores"}
         >
           <ShareBar
             format={money ? fmtMoney : intOf}

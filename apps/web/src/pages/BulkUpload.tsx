@@ -513,7 +513,7 @@ export function BulkUpload() {
             <p className="mt-1 max-w-lg text-sm text-slate-500">
               La campaña se toma del nombre del archivo o de su carpeta (TDC, Extra, CDC, UPIN, Seguros, DOMI).{" "}
               {kind === "sabana"
-                ? "El mes, del nombre del archivo; si no lo dice, del mes más reciente de sus ventas. Lo puedes corregir antes de guardar."
+                ? "El mes se toma del nombre del archivo; puedes corregirlo antes de guardar."
                 : `El mes, de la fecha de cada ${kind === "tipif" ? "llamada" : "venta"}.`}
             </p>
             <input

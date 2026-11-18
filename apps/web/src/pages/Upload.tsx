@@ -597,7 +597,7 @@ export function Upload() {
                   <p className="mt-1 text-sm text-slate-500" aria-live="polite">
                     {phase.step}
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">La pantalla sigue respondiendo. Si sales del Centro de carga, la lectura se cancela.</p>
+                  <p className="mt-1 text-xs text-slate-400">Si sales del Centro de carga, la lectura se cancela.</p>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -931,7 +931,7 @@ export function Upload() {
                           <span>Sí, reemplazar de todos modos. La vigente queda de respaldo y puedes volver a ella desde el historial.</span>
                         </label>
                       ) : (
-                        <p className="mt-3 text-[13px]">Al guardar, el cumplimiento, el MTD, el ritmo y la proyección se recalculan con el nuevo corte.</p>
+                        null
                       )}
                     </div>
                   )}
