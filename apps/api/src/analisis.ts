@@ -966,8 +966,9 @@ const PROCESADA = `(UPPER(COALESCE(json_extract(c.extra, '$.EstadoBackoffice'), 
 const NOMBRE_CAMPANA: Record<string, string> = { tdc: "TDC", extrafin: "Extra", cdc: "CDC", upin: "UPIN", seguros: "Seguros", domi: "DOMI" };
 
 /**
- * Ventas procesadas en TL del mes que todavía no vienen en la sábana. Una venta ya está en sábana si su NIU
- * aparece en la sábana vigente de este mes o de uno posterior (como cosecha). Las que no:
+ * Ventas procesadas en TL del mes que todavía no vienen en la sábana. Solo ventas vendidas en el mes: la cosecha
+ * (vendida en meses anteriores) cuenta para el cumplimiento, pero no es venta de TL de este mes. Una venta ya está en
+ * sábana si su NIU aparece, con fecha de venta de este mes, en la sábana vigente de este mes o de uno posterior. Las que no:
  *   - vendidas después del corte de la sábana → pendientes de actualización (la sábana aún no llega a esa fecha);
  *   - vendidas hasta el corte → no aparecen en sábana: se indica la posible causa.
  */
@@ -988,11 +989,12 @@ async function pendienteDeActualizacion(
         `SELECT c.niu AS niu, ${p.agente("c.agent")} AS agente,
                 COALESCE(json_extract(c.extra, '$.Fecha'), substr(c.entered_at, 1, 10)) AS fecha,
                 json_extract(c.extra, '$.EstadoBackoffice') AS estado, json_extract(c.extra, '$.Nombre') AS cliente,
-                c.niu IN (SELECT niu FROM bank_sales WHERE upload_id IN (${sabanas})) AS en_sabana
+                c.niu IN (SELECT niu FROM bank_sales WHERE upload_id IN (${sabanas}) AND COALESCE(substr(sale_date, 1, 7), ?) = ?) AS en_sabana
            FROM crm_sales c WHERE c.upload_id = ?${p.filtro} AND ${PROCESADA}
+            AND COALESCE(json_extract(c.extra, '$.Fecha'), substr(c.entered_at, 1, 10)) LIKE ?
           ORDER BY fecha, c.niu`,
       )
-      .bind(p.campaign, p.month, p.crmId, ...p.binds),
+      .bind(p.campaign, p.month, p.month, p.month, p.crmId, ...p.binds, `${p.month}%`),
   ]);
   const corte = (corteR!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
   type F = { niu: string; agente: string; fecha: string | null; estado: string | null; cliente: string | null; en_sabana: number };
@@ -1000,21 +1002,23 @@ async function pendienteDeActualizacion(
   const faltan = todas.filter((f) => !n(f.en_sabana));
 
   // Posible causa: el NIU sí está, pero en la sábana de un mes anterior o de otra campaña.
-  const donde = new Map<string, { campaign: string; month: string }[]>();
+  const donde = new Map<string, { campaign: string; month: string; vendida: string | null }[]>();
   if (faltan.length) {
     const { results } = await db
       .prepare(
-        `SELECT DISTINCT b.niu AS niu, u.campaign AS campaign, u.month AS month FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
+        `SELECT DISTINCT b.niu AS niu, u.campaign AS campaign, u.month AS month, substr(b.sale_date, 1, 7) AS vendida FROM bank_sales b JOIN uploads u ON u.id = b.upload_id
           WHERE u.kind = 'sabana' AND u.is_current = 1 AND b.niu IN (SELECT value FROM json_each(?))`,
       )
       .bind(JSON.stringify([...new Set(faltan.map((f) => f.niu))]))
-      .all<{ niu: string; campaign: string; month: string }>();
-    for (const r of results) donde.set(r.niu, [...(donde.get(r.niu) ?? []), { campaign: r.campaign, month: r.month }]);
+      .all<{ niu: string; campaign: string; month: string; vendida: string | null }>();
+    for (const r of results) donde.set(r.niu, [...(donde.get(r.niu) ?? []), { campaign: r.campaign, month: r.month, vendida: r.vendida }]);
   }
   const causaDe = (f: F, pendiente: boolean): string | null => {
     const en = donde.get(f.niu) ?? [];
     const antes = en.filter((x) => x.campaign === p.campaign && x.month < p.month).sort((x, y) => y.month.localeCompare(x.month))[0];
     if (antes) return `Viene en la sábana de ${antes.month} (venta anterior)`;
+    const otraFecha = en.find((x) => x.campaign === p.campaign && x.vendida && x.vendida !== p.month);
+    if (otraFecha) return `Viene en la sábana, pero como venta de ${otraFecha.vendida} (no de este mes)`;
     const otra = en.find((x) => x.campaign !== p.campaign);
     if (otra) return `Viene en la sábana de ${NOMBRE_CAMPANA[otra.campaign] ?? otra.campaign}`;
     if (pendiente) return corte ? `Vendida después del corte de la sábana (${corte})` : "Aún no hay sábana del mes";
