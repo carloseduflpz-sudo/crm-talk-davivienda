@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "npm run build -w @crm/web && wrangler dev",
     "dev:web": "npm run dev -w @crm/web",
-    "build": "npm run build -w @crm/web",
+    "build": "node scripts/huella-calculo.mjs && npm run build -w @crm/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "check": "npm run typecheck && npm run test && npm run build",

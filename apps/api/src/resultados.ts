@@ -10,13 +10,15 @@
      (recalcular todo a la vez satura la base de datos de Cloudflare).
    Si R2 falla, se calcula como siempre: lo guardado es un atajo, nunca la fuente de las cifras. */
 import type { Env } from "./env";
+import { HUELLA_CALCULO } from "./huella";
 
 const REVISION = "cache/revision";
 const revisionDe = (campana: string | null) => (campana ? `${REVISION}/${campana}` : REVISION);
 const PREFIJO = "cache/resultados/";
 
-/** Código publicado: con cada publicación nueva se recalcula todo. */
-const publicacion = (env: Env) => env.CF_VERSION_METADATA?.id ?? "local";
+/** Código que calcula las cifras: solo si cambia (no con cada publicación) se recalcula todo. Sin huella
+    (compilación sin el script), cada publicación nueva recalcula, como antes. */
+const publicacion = (env: Env) => (HUELLA_CALCULO !== "sin-huella" ? HUELLA_CALCULO : (env.CF_VERSION_METADATA?.id ?? "local"));
 
 async function leerRevision(env: Env, campana: string | null): Promise<string> {
   const obj = await env.FILES.get(revisionDe(campana));
