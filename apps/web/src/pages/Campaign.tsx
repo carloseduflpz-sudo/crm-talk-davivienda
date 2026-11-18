@@ -284,14 +284,14 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
             label: N.aprobacion,
             num: v.aprobacion,
             format: pct1,
-            foot: `${fmtInt.format(v.aprobadas)} ÷ ${fmtInt.format(evN)} evaluadas`,
+            foot: `de ${fmtInt.format(evN)} evaluadas`,
             delta: deltaOf(v.aprobacion, p?.aprobacion, vs, { rate: true }),
           },
           {
             label: N.rechazo,
             num: share(v.rechazadas, evN),
             format: pct1,
-            foot: `${fmtInt.format(v.rechazadas)} ÷ ${fmtInt.format(evN)} evaluadas`,
+            foot: `de ${fmtInt.format(evN)} evaluadas`,
             delta: deltaOf(share(v.rechazadas, evN), p ? share(p.rechazadas, pEvN!) : undefined, vs, { rate: true, upIsGood: false }),
           },
           ...(nd
@@ -300,7 +300,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
                   label: "% No desembolso",
                   num: share(v.noDesembolsadas ?? 0, evN),
                   format: pct1,
-                  foot: `${fmtInt.format(v.noDesembolsadas ?? 0)} ÷ ${fmtInt.format(evN)} evaluadas`,
+                  foot: `de ${fmtInt.format(evN)} evaluadas`,
                   delta: deltaOf(share(v.noDesembolsadas ?? 0, evN), p ? share(p.noDesembolsadas ?? 0, pEvN!) : undefined, vs, { rate: true, upIsGood: false }),
                 },
               ]
@@ -1519,7 +1519,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         note={
           c.metaPorAgente === null
             ? "Falta el HC del mes"
-            : `Meta por agente: ${val(c.metaPorAgente)} (meta ÷ HC ${c.agentes}). Meta MTD al día hábil ${c.diaDelMes} de ${c.diasDelMes}.`
+            : `Meta por agente: ${val(c.metaPorAgente)} · HC ${c.agentes}`
         }
       >
         <DataTable
@@ -1643,7 +1643,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
     money
       ? { key: "monto", title: `Monto de ventas${alDia}`, value: montoDe, format: fmtMoney, axis: (n) => `$${fmtNum(n / 1000, 0)}k`, upIsGood: true, note: sameDay ? `Del 1 al ${corte} de cada mes` : undefined }
       : { key: "ventas", title: sameDay ? `Ventas al día ${corte}` : "Ventas de la sábana", value: ventasDe, format: intOf, upIsGood: true, note: sameDay ? `Del 1 al ${corte} de cada mes` : undefined },
-    { key: "aprobacion", title: N.aprobacion, value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true, note: `${N.aprobadas} ÷ evaluadas` },
+    { key: "aprobacion", title: N.aprobacion, value: (m) => m.aprobacion, format: pct1, axis: pctAxis, rate: true },
     {
       key: "rechazo",
       title: N.rechazo,
@@ -1652,7 +1652,6 @@ function HistoricoTab({ a, setMonth }: Ctx) {
       axis: pctAxis,
       rate: true,
       upIsGood: false,
-      note: `${N.rechazadas} ÷ evaluadas`,
     },
     ...(nd
       ? [
@@ -1664,7 +1663,6 @@ function HistoricoTab({ a, setMonth }: Ctx) {
             axis: pctAxis,
             rate: true,
             upIsGood: false,
-            note: "No desembolsadas ÷ evaluadas",
           } satisfies Trend,
         ]
       : []),
@@ -1675,13 +1673,11 @@ function HistoricoTab({ a, setMonth }: Ctx) {
       format: pct1,
       axis: pctAxis,
       rate: true,
-      note:
-        (live ? `Logrado ÷ meta del mes; ${monthLabel(live.month).split(" ")[0]} al corte` : "Logrado ÷ meta del mes") +
-        (meses.some((m) => m.oficial) ? ". Meses cerrados: archivo de cumplimientos" : ""),
+      note: [live ? `${monthLabel(live.month).split(" ")[0]} al corte` : null, meses.some((m) => m.oficial) ? "meses cerrados: archivo de cumplimientos" : null].filter(Boolean).join(" · ") || undefined,
     },
     { key: "base", title: "Clientes en la base", value: (m) => m.base, format: intOf, upIsGood: null, note: "Base original y adicionales, clientes únicos" },
     { key: "contactabilidad", title: "Contactabilidad", value: (m) => m.contactabilidad, format: pct1, axis: pctAxis, rate: true },
-    { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true, note: "Clientes de la base con venta en la sábana ÷ base" },
+    { key: "penetracion", title: "Penetración de la base", value: (m) => m.penetracion, format: pct2, axis: pctAxis, rate: true },
   ];
   type R = MonthSummary;
   const opt = <T,>(v: T | null, f: (x: T) => string) => (v === null ? "—" : f(v));
@@ -2000,14 +1996,14 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
           { sec: "", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true },
         ] as (Fila & { abrir?: () => void })[])
       : []),
-    { sec: "", label: N.aprobacion, a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true, nota: `${N.aprobadas.toLowerCase()} ÷ evaluadas` },
-    { sec: "", label: N.rechazo, a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false, nota: `${N.rechazadas.toLowerCase()} ÷ evaluadas` },
+    { sec: "", label: N.aprobacion, a: v(a)?.aprobacion ?? null, b: v(b)?.aprobacion ?? null, tipo: "pct", upIsGood: true },
+    { sec: "", label: N.rechazo, a: sh(v(a)?.rechazadas, ev(a)), b: sh(v(b)?.rechazadas, ev(b)), tipo: "pct", upIsGood: false },
     ...(nd
-      ? ([{ sec: "", label: "% No desembolso", a: sh(ndDe(a), ev(a)), b: sh(ndDe(b), ev(b)), tipo: "pct", upIsGood: false, nota: "no desembolsadas ÷ evaluadas" }] as (Fila & { abrir?: () => void })[])
+      ? ([{ sec: "", label: "% No desembolso", a: sh(ndDe(a), ev(a)), b: sh(ndDe(b), ev(b)), tipo: "pct", upIsGood: false }] as (Fila & { abrir?: () => void })[])
       : []),
     ...(money
       ? ([
-          { sec: "", label: "Ticket promedio", a: ticket(v(a)?.monto.total, v(a)?.total), b: ticket(v(b)?.monto.total, v(b)?.total), tipo: "money", upIsGood: true, nota: "monto ÷ ventas" },
+          { sec: "", label: "Ticket promedio", a: ticket(v(a)?.monto.total, v(a)?.total), b: ticket(v(b)?.monto.total, v(b)?.total), tipo: "money", upIsGood: true },
           {
             sec: "",
             label: "Ticket promedio aprobado",
@@ -2015,13 +2011,12 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
             b: ticket(v(b)?.monto.aprobado, v(b)?.aprobadas),
             tipo: "money",
             upIsGood: true,
-            nota: "monto aprobado ÷ aprobadas",
           },
         ] as (Fila & { abrir?: () => void })[])
       : []),
     ...((tl(a) || tl(b)
       ? [
-          { sec: "", label: "Procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true, nota: "ventas del mes procesadas en TL" },
+          { sec: "", label: "Procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true },
           {
             sec: "",
             label: "Promedio diario en TL",
@@ -2029,7 +2024,6 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
             b: tl(b) ? ticket(tl(b)!.procesadas, tl(b)!.dias) : null,
             tipo: "dec",
             upIsGood: true,
-            nota: "procesadas ÷ días con ventas ingresadas",
           },
           ...(money && (tl(a)?.monto || tl(b)?.monto)
             ? [
@@ -2040,7 +2034,6 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
                   b: tl(b)?.monto ? ticket(tl(b)!.monto, tl(b)!.procesadas) : null,
                   tipo: "money",
                   upIsGood: true,
-                  nota: "monto ÷ procesadas en TL",
                 },
               ]
             : []),
