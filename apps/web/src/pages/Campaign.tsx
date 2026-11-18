@@ -1918,16 +1918,6 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       ? ([
           { sec: "Ventas", label: "Monto", a: v(a)?.monto.total ?? null, b: v(b)?.monto.total ?? null, tipo: "money", upIsGood: true },
           { sec: "Ventas", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true },
-          { sec: "Ventas", label: "Ticket promedio", a: ticket(v(a)?.monto.total, v(a)?.total), b: ticket(v(b)?.monto.total, v(b)?.total), tipo: "money", upIsGood: true, nota: "monto ÷ ventas" },
-          {
-            sec: "Ventas",
-            label: "Ticket promedio aprobado",
-            a: ticket(v(a)?.monto.aprobado, v(a)?.aprobadas),
-            b: ticket(v(b)?.monto.aprobado, v(b)?.aprobadas),
-            tipo: "money",
-            upIsGood: true,
-            nota: "monto aprobado ÷ aprobadas",
-          },
         ] as Fila[])
       : []),
     {
@@ -1950,29 +1940,6 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
     { sec: "Base", label: "Recorrido de la base", a: a.base?.recorridos?.recorrido ?? null, b: b?.base?.recorridos?.recorrido ?? null, tipo: "pct", upIsGood: true },
     { sec: "Base", label: "Promedio de toques", a: a.base?.recorridos?.promedioToques ?? null, b: b?.base?.recorridos?.promedioToques ?? null, tipo: "dec", upIsGood: null },
     { sec: "CRM", label: "Ventas capturadas en el CRM", a: a.crm?.total ?? null, b: b?.crm?.total ?? null, tipo: "n", upIsGood: true },
-    { sec: "CRM", label: "Ventas procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true },
-    {
-      sec: "CRM",
-      label: "Promedio diario procesadas en TL",
-      a: tl(a) ? ticket(tl(a)!.procesadas, tl(a)!.dias) : null,
-      b: tl(b) ? ticket(tl(b)!.procesadas, tl(b)!.dias) : null,
-      tipo: "dec",
-      upIsGood: true,
-      nota: "por día con ventas ingresadas",
-    },
-    ...(money
-      ? ([
-          {
-            sec: "CRM",
-            label: "Ticket promedio TL",
-            a: tl(a)?.monto ? ticket(tl(a)!.monto, tl(a)!.procesadas) : null,
-            b: tl(b)?.monto ? ticket(tl(b)!.monto, tl(b)!.procesadas) : null,
-            tipo: "money",
-            upIsGood: true,
-            nota: "monto ÷ procesadas en TL",
-          },
-        ] as Fila[])
-      : []),
     ] as Fila[]
   ).filter((f) => f.a !== null || f.b !== null);
 
@@ -2038,6 +2005,47 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
     ...(nd
       ? ([{ sec: "", label: "% No desembolso", a: sh(ndDe(a), ev(a)), b: sh(ndDe(b), ev(b)), tipo: "pct", upIsGood: false, nota: "no desembolsadas ÷ evaluadas" }] as (Fila & { abrir?: () => void })[])
       : []),
+    ...(money
+      ? ([
+          { sec: "", label: "Ticket promedio", a: ticket(v(a)?.monto.total, v(a)?.total), b: ticket(v(b)?.monto.total, v(b)?.total), tipo: "money", upIsGood: true, nota: "monto ÷ ventas" },
+          {
+            sec: "",
+            label: "Ticket promedio aprobado",
+            a: ticket(v(a)?.monto.aprobado, v(a)?.aprobadas),
+            b: ticket(v(b)?.monto.aprobado, v(b)?.aprobadas),
+            tipo: "money",
+            upIsGood: true,
+            nota: "monto aprobado ÷ aprobadas",
+          },
+        ] as (Fila & { abrir?: () => void })[])
+      : []),
+    ...((tl(a) || tl(b)
+      ? [
+          { sec: "", label: "Procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true, nota: "ventas del mes procesadas en TL" },
+          {
+            sec: "",
+            label: "Promedio diario en TL",
+            a: tl(a) ? ticket(tl(a)!.procesadas, tl(a)!.dias) : null,
+            b: tl(b) ? ticket(tl(b)!.procesadas, tl(b)!.dias) : null,
+            tipo: "dec",
+            upIsGood: true,
+            nota: "procesadas ÷ días con ventas ingresadas",
+          },
+          ...(money && (tl(a)?.monto || tl(b)?.monto)
+            ? [
+                {
+                  sec: "",
+                  label: "Ticket promedio TL",
+                  a: tl(a)?.monto ? ticket(tl(a)!.monto, tl(a)!.procesadas) : null,
+                  b: tl(b)?.monto ? ticket(tl(b)!.monto, tl(b)!.procesadas) : null,
+                  tipo: "money",
+                  upIsGood: true,
+                  nota: "monto ÷ procesadas en TL",
+                },
+              ]
+            : []),
+        ]
+      : []) as (Fila & { abrir?: () => void })[]),
   ];
 
   return (
