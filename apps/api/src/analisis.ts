@@ -989,6 +989,7 @@ async function pendienteDeActualizacion(
         `SELECT c.niu AS niu, ${p.agente("c.agent")} AS agente,
                 COALESCE(json_extract(c.extra, '$.Fecha'), substr(c.entered_at, 1, 10)) AS fecha,
                 json_extract(c.extra, '$.EstadoBackoffice') AS estado, json_extract(c.extra, '$.Nombre') AS cliente,
+                CAST(json_extract(c.extra, '$.Monto') AS REAL) AS monto,
                 c.niu IN (SELECT niu FROM bank_sales WHERE upload_id IN (${sabanas}) AND COALESCE(substr(sale_date, 1, 7), ?) = ?) AS en_sabana
            FROM crm_sales c WHERE c.upload_id = ?${p.filtro} AND ${PROCESADA}
             AND COALESCE(json_extract(c.extra, '$.Fecha'), substr(c.entered_at, 1, 10)) LIKE ?
@@ -997,7 +998,7 @@ async function pendienteDeActualizacion(
       .bind(p.campaign, p.month, p.month, p.month, p.crmId, ...p.binds, `${p.month}%`),
   ]);
   const corte = (corteR!.results[0] as { corte: string | null } | undefined)?.corte ?? null;
-  type F = { niu: string; agente: string; fecha: string | null; estado: string | null; cliente: string | null; en_sabana: number };
+  type F = { niu: string; agente: string; fecha: string | null; estado: string | null; cliente: string | null; monto: number | null; en_sabana: number };
   const todas = filas!.results as F[];
   const faltan = todas.filter((f) => !n(f.en_sabana));
 
@@ -1040,6 +1041,8 @@ async function pendienteDeActualizacion(
   return {
     corte,
     procesadas: todas.length,
+    monto: todas.reduce((t, f) => t + (Number.isFinite(Number(f.monto)) ? Number(f.monto) : 0), 0),
+    dias: new Set(todas.map((f) => f.fecha).filter(Boolean)).size,
     enSabana: todas.length - faltan.length,
     pendientes: lista.filter((x) => x.situacion === "pendiente").length,
     noAparecen: lista.filter((x) => x.situacion === "no_aparece").length,

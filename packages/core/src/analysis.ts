@@ -231,6 +231,10 @@ export interface CampaignAnalysis {
       /** Último día con ventas en la sábana del mes; null si no hay sábana. */
       corte: string | null;
       procesadas: number;
+      /** Monto de las procesadas (columna monto de TL; 0 si no trae). */
+      monto: number;
+      /** Días con ventas procesadas ingresadas (para el promedio diario). */
+      dias: number;
       enSabana: number;
       /** Vendidas después del corte: la sábana todavía no llega a esa fecha. */
       pendientes: number;

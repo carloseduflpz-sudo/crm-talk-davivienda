@@ -280,7 +280,7 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
       { niu: "508", saleDate: "2026-05-28", executive: "Ana", statusRaw: "Activo" },
       { niu: "509", saleDate: "2026-05-15", executive: "Ana", statusRaw: "Activo" },
     ]);
-    const tl = (niu: string, d: string, estado: string) => ({ niu, agent: "Ana", enteredAt: `${d}T09:00:00`, product: null, extra: { Fecha: d, EstadoBackoffice: estado, Nombre: `Cliente ${niu}` } });
+    const tl = (niu: string, d: string, estado: string) => ({ niu, agent: "Ana", enteredAt: `${d}T09:00:00`, product: null, extra: { Fecha: d, EstadoBackoffice: estado, Nombre: `Cliente ${niu}`, Monto: 100 } });
     await load("seguros:ventas", "2026-06", [
       tl("501", "2026-06-02", "PROCESADO"),
       tl("504", "2026-06-04", "Procesada"),
@@ -293,6 +293,7 @@ describe("análisis TDC septiembre (datos de prueba)", () => {
     const act = async () => ((await call("GET", "/analisis/seguros?mes=2026-06")).data.analysis as CampaignAnalysis).crm!.actualizacion;
     let a = await act();
     expect(a).toMatchObject({ corte: "2026-06-05", procesadas: 5, enSabana: 1, pendientes: 1, noAparecen: 3 });
+    expect(a).toMatchObject({ dias: 4, monto: 500 }); // días con ventas: 02, 03, 04 y 10 de junio
     expect(a.lista.map((x) => [x.niu, x.situacion])).toEqual([
       ["507", "no_aparece"],
       ["504", "no_aparece"],

@@ -1896,6 +1896,8 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
   const rango = (x: CampaignAnalysis | undefined) => (x?.dias ? (x.dias.desde === x.dias.hasta ? `día ${x.dias.desde}` : `del ${x.dias.desde} al ${x.dias.hasta}`) : "mes completo");
   const v = (x: CampaignAnalysis | undefined) => x?.ventas ?? null;
   const ev = (x: CampaignAnalysis | undefined) => (v(x) ? evaluadasN(v(x)!) : null);
+  const tl = (x: CampaignAnalysis | undefined) => x?.crm?.actualizacion ?? null;
+  const ticket = (monto: number | null | undefined, n: number | null | undefined) => (monto !== null && monto !== undefined && n ? monto / n : null);
   const nd = conNoDesembolso(a.campaign);
   const ndDe = (x: CampaignAnalysis | undefined) => (v(x) ? (v(x)!.noDesembolsadas ?? 0) : null);
   const sh = (n: number | null | undefined, d: number | null | undefined) => (n === null || n === undefined || !d ? null : share(n, d));
@@ -1916,6 +1918,16 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       ? ([
           { sec: "Ventas", label: "Monto", a: v(a)?.monto.total ?? null, b: v(b)?.monto.total ?? null, tipo: "money", upIsGood: true },
           { sec: "Ventas", label: "Monto aprobado", a: v(a)?.monto.aprobado ?? null, b: v(b)?.monto.aprobado ?? null, tipo: "money", upIsGood: true },
+          { sec: "Ventas", label: "Ticket promedio", a: ticket(v(a)?.monto.total, v(a)?.total), b: ticket(v(b)?.monto.total, v(b)?.total), tipo: "money", upIsGood: true, nota: "monto ÷ ventas" },
+          {
+            sec: "Ventas",
+            label: "Ticket promedio aprobado",
+            a: ticket(v(a)?.monto.aprobado, v(a)?.aprobadas),
+            b: ticket(v(b)?.monto.aprobado, v(b)?.aprobadas),
+            tipo: "money",
+            upIsGood: true,
+            nota: "monto aprobado ÷ aprobadas",
+          },
         ] as Fila[])
       : []),
     {
@@ -1938,6 +1950,29 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
     { sec: "Base", label: "Recorrido de la base", a: a.base?.recorridos?.recorrido ?? null, b: b?.base?.recorridos?.recorrido ?? null, tipo: "pct", upIsGood: true },
     { sec: "Base", label: "Promedio de toques", a: a.base?.recorridos?.promedioToques ?? null, b: b?.base?.recorridos?.promedioToques ?? null, tipo: "dec", upIsGood: null },
     { sec: "CRM", label: "Ventas capturadas en el CRM", a: a.crm?.total ?? null, b: b?.crm?.total ?? null, tipo: "n", upIsGood: true },
+    { sec: "CRM", label: "Ventas procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true },
+    {
+      sec: "CRM",
+      label: "Promedio diario procesadas en TL",
+      a: tl(a) ? ticket(tl(a)!.procesadas, tl(a)!.dias) : null,
+      b: tl(b) ? ticket(tl(b)!.procesadas, tl(b)!.dias) : null,
+      tipo: "dec",
+      upIsGood: true,
+      nota: "por día con ventas ingresadas",
+    },
+    ...(money
+      ? ([
+          {
+            sec: "CRM",
+            label: "Ticket promedio TL",
+            a: tl(a)?.monto ? ticket(tl(a)!.monto, tl(a)!.procesadas) : null,
+            b: tl(b)?.monto ? ticket(tl(b)!.monto, tl(b)!.procesadas) : null,
+            tipo: "money",
+            upIsGood: true,
+            nota: "monto ÷ procesadas en TL",
+          },
+        ] as Fila[])
+      : []),
     ] as Fila[]
   ).filter((f) => f.a !== null || f.b !== null);
 
