@@ -90,6 +90,8 @@ export interface FilaDocumentacion {
   notas: NotaDocumentacion[];
 }
 export interface SeguimientoDocumentacion {
+  /** Solo el dueño del CRM puede eliminar comentarios. */
+  puedeEliminar: boolean;
   sabana: { month: string; archivo: string; cargada: number; corte: string | null } | null;
   filas: FilaDocumentacion[];
   historial: (NotaDocumentacion & { nombre: string | null; subetapa: string | null })[];
@@ -321,6 +323,7 @@ export const api = {
   seguimientoDocumentacion: () => get<SeguimientoDocumentacion>("/seguimiento-documentacion"),
   gestionDocumentacion: (b: { niu: string; venta: string; status: string; comentario: string }) =>
     post<{ nota: NotaDocumentacion }>("/seguimiento-documentacion/notas", b).then((r) => r.nota),
+  eliminarGestionDocumentacion: (id: number) => post(`/seguimiento-documentacion/notas/${id}/eliminar`),
   setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null; countedStatuses: string[] | null; workDays: number[]; holidays: string[] }) =>
     request("PUT", "/metas", b),
 };

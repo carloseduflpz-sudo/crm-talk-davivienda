@@ -66,20 +66,27 @@ interface NotaRow {
 const nota = (r: NotaRow): NotaDocumentacion => ({ id: r.id, niu: r.niu, venta: r.sale_date, status: r.status, comentario: r.comment, por: r.created_by, fecha: r.created_at });
 const llave = (niu: string, venta: string | null) => `${niu}|${venta ?? ""}`;
 
+/** Solo el dueño del CRM (el usuario que lo configuró: el primero creado) puede eliminar comentarios. */
+async function esDueno(env: { DB: D1Database }, userId: number): Promise<boolean> {
+  const r = await env.DB.prepare("SELECT MIN(id) AS id FROM users").first<{ id: number | null }>();
+  return r?.id === userId;
+}
+
 export function registerSeguimientoDoc(r: Router): void {
-  r.on("GET", "/seguimiento-documentacion", "datos:ver", async ({ env }) => {
+  r.on("GET", "/seguimiento-documentacion", "datos:ver", async ({ env, user }) => {
+    const puedeEliminar = await esDueno(env, user.id);
     const sab = await env.DB.prepare(
       `SELECT id, month, file_name, created_at FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 ORDER BY month DESC LIMIT 1`,
     )
       .bind(CAMPAIGN)
       .first<{ id: string; month: string; file_name: string; created_at: number }>();
     const { results: todas } = await env.DB.prepare(
-      "SELECT id, niu, sale_date, status, comment, created_by, created_at FROM doc_followup_notes WHERE campaign = ? ORDER BY created_at DESC, id DESC LIMIT 20000",
+      "SELECT id, niu, sale_date, status, comment, created_by, created_at FROM doc_followup_notes WHERE campaign = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 20000",
     )
       .bind(CAMPAIGN)
       .all<NotaRow>();
     const notas = todas.map(nota);
-    if (!sab) return json({ ok: true, sabana: null, filas: [], historial: notas.map((n) => ({ ...n, nombre: null, subetapa: null })) });
+    if (!sab) return json({ ok: true, puedeEliminar, sabana: null, filas: [], historial: notas.map((n) => ({ ...n, nombre: null, subetapa: null })) });
 
     const { results: ventas } = await env.DB.prepare("SELECT id, niu, sale_date, executive, status_raw, extra FROM bank_sales WHERE upload_id = ? ORDER BY sale_date, niu, id")
       .bind(sab.id)
@@ -139,7 +146,7 @@ export function registerSeguimientoDoc(r: Router): void {
     });
 
     const historial = notas.map((n) => ({ ...n, ...(actual.get(llave(n.niu, n.venta)) ?? actual.get(llave(n.niu, null)) ?? { nombre: null, subetapa: null }) }));
-    return json({ ok: true, sabana: { month: sab.month, archivo: sab.file_name, cargada: sab.created_at, corte }, filas, historial });
+    return json({ ok: true, puedeEliminar, sabana: { month: sab.month, archivo: sab.file_name, cargada: sab.created_at, corte }, filas, historial });
   });
 
   r.on("POST", "/seguimiento-documentacion/notas", "datos:cargar", async ({ env, req, user }) => {
@@ -167,5 +174,17 @@ export function registerSeguimientoDoc(r: Router): void {
       .first<NotaRow>();
     await audit(env, user.username, "seguimiento_documentacion_gestion", `${CAMPAIGN}:seguimiento-documentacion`, { status: body.status });
     return json({ ok: true, nota: nota(row!) }, 201);
+  });
+
+  r.on("POST", "/seguimiento-documentacion/notas/:id/eliminar", "datos:cargar", async ({ env, params, user }) => {
+    const id = Number(params.id);
+    if (!Number.isInteger(id) || id < 1) throw new HttpError(404, "Ese comentario no existe.");
+    if (!(await esDueno(env, user.id))) throw new HttpError(403, "Solo el dueño del CRM puede eliminar comentarios.");
+    const res = await env.DB.prepare("UPDATE doc_followup_notes SET deleted_at = ?, deleted_by = ? WHERE id = ? AND campaign = ? AND deleted_at IS NULL")
+      .bind(Date.now(), user.displayName, id, CAMPAIGN)
+      .run();
+    if (!res.meta.changes) throw new HttpError(404, "Ese comentario no existe o ya se eliminó.");
+    await audit(env, user.username, "seguimiento_documentacion_eliminada", `${CAMPAIGN}:seguimiento-documentacion`, { id });
+    return json({ ok: true });
   });
 }

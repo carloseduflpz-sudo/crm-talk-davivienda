@@ -3,7 +3,7 @@
    comentario) que se registra aquí. Se descarga como el consolidado que se envía al banco. */
 import { GRUPOS_DOCUMENTACION, STATUS_DOCUMENTACION, type GrupoDocumentacion } from "@crm/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Download, LoaderCircle, Search, X } from "lucide-react";
+import { ClipboardList, Download, LoaderCircle, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Card, EmptyState, PageHeader } from "../components/ui";
 import { api, type FilaDocumentacion, type SeguimientoDocumentacion as Datos } from "../lib/api";
@@ -181,7 +181,7 @@ export function SeguimientoDocumentacion() {
         </>
       )}
       {actual && d && (
-        <Gestion item={actual} puedeGestionar={puedeGestionar} onClose={() => setAbierto(null)} onSiguiente={siguiente} hayOtro={lista.findIndex((i) => i.key === abierto) < lista.length - 1} />
+        <Gestion item={actual} puedeGestionar={puedeGestionar} puedeEliminar={Boolean(d.puedeEliminar)} onClose={() => setAbierto(null)} onSiguiente={siguiente} hayOtro={lista.findIndex((i) => i.key === abierto) < lista.length - 1} />
       )}
     </>
   );
@@ -269,26 +269,66 @@ function Dato({ label, children }: { label: string; children: string | number | 
   );
 }
 
-function Gestion({ item, puedeGestionar, onClose, onSiguiente, hayOtro }: { item: Item; puedeGestionar: boolean; onClose: () => void; onSiguiente: () => void; hayOtro: boolean }) {
+/** Si el CRM no responde en este tiempo, se avisa en vez de quedarse esperando. */
+const ESPERA_MAX = 20_000;
+function conEspera<T>(p: Promise<T>): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error("El CRM no respondió en 20 segundos. Revisa tu conexión y vuelve a intentar.")), ESPERA_MAX)),
+  ]);
+}
+
+function Gestion({
+  item,
+  puedeGestionar,
+  puedeEliminar,
+  onClose,
+  onSiguiente,
+  hayOtro,
+}: {
+  item: Item;
+  puedeGestionar: boolean;
+  puedeEliminar: boolean;
+  onClose: () => void;
+  onSiguiente: () => void;
+  hayOtro: boolean;
+}) {
   const qc = useQueryClient();
   const f = item.f;
-  const [status, setStatus] = useState("");
+  // El STATUS arranca en el último guardado del cliente.
+  const [status, setStatus] = useState(f.notas[0]?.status ?? "");
   const [comentario, setComentario] = useState("");
+  const [guardado, setGuardado] = useState("");
+  const [borrar, setBorrar] = useState<number | null>(null);
   const siguienteRef = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    setStatus("");
+    setStatus(f.notas[0]?.status ?? "");
     setComentario("");
-  }, [item.key]);
+    setGuardado("");
+    setBorrar(null);
+  }, [item.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Solo al abrir: el foco va al botón de cerrar (no en cada cambio de la pantalla, para no cerrar la lista de STATUS).
   useEffect(() => {
     closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCloseRef.current();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
+
+  const quitar = (lista: (typeof f.notas)[number][], id: number) => lista.filter((n) => n.id !== id);
+  const eliminar = useMutation({
+    mutationFn: (id: number) => conEspera(api.eliminarGestionDocumentacion(id)),
+    onSuccess: (_, id) => {
+      qc.setQueryData<Datos>(["seguimiento-doc"], (old) => old && { ...old, filas: old.filas.map((x) => ({ ...x, notas: quitar(x.notas, id) })), historial: old.historial.filter((n) => n.id !== id) });
+      setBorrar(null);
+    },
+  });
 
   const guardar = useMutation({
-    mutationFn: () => api.gestionDocumentacion({ niu: f.niu, venta: f.venta ?? "", status, comentario }),
+    mutationFn: () => conEspera(api.gestionDocumentacion({ niu: f.niu, venta: f.venta ?? "", status, comentario })),
     onSuccess: (nota) => {
       // La gestión queda al frente de la venta y del historial, sin volver a pedir toda la cola.
       qc.setQueryData<Datos>(["seguimiento-doc"], (old) =>
@@ -298,8 +338,8 @@ function Gestion({ item, puedeGestionar, onClose, onSiguiente, hayOtro }: { item
           historial: [{ ...nota, nombre: f.nombre, subetapa: f.subetapa }, ...old.historial],
         },
       );
-      setStatus("");
       setComentario("");
+      setGuardado(`Guardado: ${nota.status}`);
       if (siguienteRef.current) onSiguiente();
     },
   });
@@ -358,7 +398,10 @@ function Gestion({ item, puedeGestionar, onClose, onSiguiente, hayOtro }: { item
                 <span className="text-[12px] text-ink-faint">STATUS</span>
                 <select
                   value={status}
-                  onChange={(e) => setStatus(e.target.value)}
+                  onChange={(e) => {
+                    setStatus(e.target.value);
+                    setGuardado("");
+                  }}
                   required
                   className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900"
                 >
@@ -381,6 +424,7 @@ function Gestion({ item, puedeGestionar, onClose, onSiguiente, hayOtro }: { item
                 />
               </label>
               {guardar.isError && <p className="mt-2 text-[13px] text-[var(--st-critical)]">{guardar.error.message}</p>}
+              {guardado && !guardar.isError && !guardar.isPending && <p className="mt-2 text-[13px] text-emerald-600" aria-live="polite">{guardado}</p>}
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 <button
                   type="submit"
@@ -408,11 +452,33 @@ function Gestion({ item, puedeGestionar, onClose, onSiguiente, hayOtro }: { item
                 <li key={n.id} className="px-4 py-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <span className="text-[13px] font-medium text-ink">{n.status}</span>
-                    <span className="text-[12px] text-ink-faint">
+                    <span className="flex items-center gap-2 text-[12px] text-ink-faint">
                       {fechaHora(n.fecha)} · {n.por}
+                      {puedeEliminar && borrar !== n.id && (
+                        <button type="button" onClick={() => setBorrar(n.id)} className="rounded-full p-1 text-ink-faint hover:bg-paper hover:text-[var(--st-critical)]" aria-label="Eliminar comentario" title="Eliminar">
+                          <Trash2 className="size-3.5" aria-hidden />
+                        </button>
+                      )}
                     </span>
                   </div>
                   {n.comentario && <p className="mt-1 text-[13px] text-ink/80">{n.comentario}</p>}
+                  {borrar === n.id && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
+                      <span className="text-ink-soft">¿Eliminar este comentario?</span>
+                      <button
+                        type="button"
+                        onClick={() => eliminar.mutate(n.id)}
+                        disabled={eliminar.isPending}
+                        className="rounded-lg bg-red-600 px-3 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                      >
+                        {eliminar.isPending ? "Eliminando…" : "Eliminar"}
+                      </button>
+                      <button type="button" onClick={() => setBorrar(null)} className="rounded-lg border border-hair px-3 py-1 text-ink hover:bg-paper">
+                        Cancelar
+                      </button>
+                      {eliminar.isError && <span className="text-[var(--st-critical)]">{eliminar.error.message}</span>}
+                    </div>
+                  )}
                 </li>
               ))}
             </ol>

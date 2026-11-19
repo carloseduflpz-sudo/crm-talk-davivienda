@@ -351,6 +351,8 @@ export const docFollowupNotes = sqliteTable(
     comment: text("comment"),
     createdBy: text("created_by").notNull(),
     createdAt: integer("created_at").notNull().default(now),
+    deletedAt: integer("deleted_at"),
+    deletedBy: text("deleted_by"),
   },
   (t) => [index("doc_followup_niu_idx").on(t.campaign, t.niu, t.saleDate, t.createdAt)],
 );

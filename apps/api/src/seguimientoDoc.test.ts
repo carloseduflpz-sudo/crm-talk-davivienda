@@ -114,4 +114,26 @@ describe("seguimiento de documentación", () => {
     await load("tdc:tipif", "2026-10", [{ niu: "201", agent: "Ana", calledAt: "2026-10-20T08:30:00", category: "No contacto", tipologia: "No contesta" }]);
     expect(revisiones).toBeGreaterThan(antes);
   });;
+
+  it("solo el dueño del CRM elimina un comentario; deja de mostrarse y de descargarse", async () => {
+    const d0 = await cola();
+    expect((d0 as unknown as { puedeEliminar: boolean }).puedeEliminar).toBe(true);
+    const nota = d0.filas.find((x) => x.niu === "101")!.notas[0]!;
+    // Otro administrador no puede.
+    expect((await call("POST", "/usuarios", { username: "ana", displayName: "Ana", role: "admin", password: "Davivienda2026b" })).status).toBe(201);
+    const dueno = cookie;
+    cookie = "";
+    expect((await call("POST", "/auth/entrar", { username: "ana", password: "Davivienda2026b" })).status).toBe(200);
+    if ((await call("GET", "/me")).data.mustChangePassword) {
+      expect((await call("POST", "/auth/cambiar-clave", { currentPassword: "Davivienda2026b", newPassword: "OtraClave2026x" })).status).toBe(200);
+    }
+    expect(((await call("GET", "/seguimiento-documentacion")).data as { puedeEliminar: boolean }).puedeEliminar).toBe(false);
+    expect((await call("POST", `/seguimiento-documentacion/notas/${nota.id}/eliminar`, {})).status).toBe(403);
+    cookie = dueno;
+    expect((await call("POST", `/seguimiento-documentacion/notas/${nota.id}/eliminar`, {})).status).toBe(200);
+    expect((await call("POST", `/seguimiento-documentacion/notas/${nota.id}/eliminar`, {})).status).toBe(404);
+    const d = await cola();
+    expect(d.filas.find((x) => x.niu === "101")!.notas.map((n) => n.id)).not.toContain(nota.id);
+    expect(d.historial.map((n) => n.id)).not.toContain(nota.id);
+  });
 });
