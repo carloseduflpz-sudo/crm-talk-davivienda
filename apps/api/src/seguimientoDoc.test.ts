@@ -76,7 +76,7 @@ describe("seguimiento de documentación", () => {
     expect(d.sabana.month).toBe("2026-11");
     expect(d.sabana.corte).toBe("2026-11-18");
     const por = (g: string) => d.filas.filter((f) => f.grupo === g).map((f) => f.niu).sort();
-    expect(por("seguimiento")).toEqual(["101", "101", "102", "103"]);
+    expect(por("seguimiento")).toEqual(["101", "101", "102"]); // 103 está vencido: no aplica
     expect(por("productivas")).toEqual(["201", "202"]);
     const dev = d.filas.find((f) => f.niu === "201")!;
     expect(dev).toMatchObject({ nombre: "Cliente 201", telefono: "7000201", digitos: "3503", detalle: "no llegó al trabajo", etapa: "2EN DISTRIBUCION", subetapa: "DEVOLUCION" });

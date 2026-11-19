@@ -28,13 +28,14 @@ export const esStatusDocumentacion = (v: unknown): v is StatusDocumentacion =>
 
 /**
  * Grupo según la SUBETAPA de la sábana TDC:
- * - Etapas en seguimiento: pendiente por requisito, pendiente documento (incluye /VENCIDO) y extrarrequisito.
+ * - Etapas en seguimiento: pendiente por requisito, pendiente documento y extrarrequisito.
+ *   Los vencidos (PENDIENTE DOCUMENTO/VENCIDO, …/VENCIDOS) no aplican.
  * - Etapas productivas: en proceso, en distribución y devolución.
  * Cualquier otra subetapa no entra a la cola.
  */
 export function grupoDocumentacion(subetapa: unknown): GrupoDocumentacion | null {
   const s = matchKey(subetapa).replace(/\s*\/\s*/g, "/");
-  if (!s) return null;
+  if (!s || s.includes("VENCID")) return null;
   if (s.startsWith("PENDIENTE POR REQUISITO") || s.startsWith("PENDIENTE DOCUMENT") || s.startsWith("PENDIENTE POR DOCUMENT")) return "seguimiento";
   if (/^EXTRA ?R?REQUISITO/.test(s)) return "seguimiento";
   if (s === "EN PROCESO" || s.startsWith("EN DISTRIBU") || s.startsWith("DEVOLUCION")) return "productivas";

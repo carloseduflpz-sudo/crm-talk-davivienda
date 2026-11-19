@@ -4,7 +4,9 @@ import { grupoDocumentacion, toquesDespuesDeVenta } from "./seguimientoDoc";
 describe("seguimiento de documentación", () => {
   it("agrupa por subetapa de la sábana TDC", () => {
     expect(grupoDocumentacion("PENDIENTE DOCUMENTO")).toBe("seguimiento");
-    expect(grupoDocumentacion("PENDIENTE DOCUMENTO/VENCIDO")).toBe("seguimiento");
+    expect(grupoDocumentacion("PENDIENTE DOCUMENTO/VENCIDO")).toBeNull();
+    expect(grupoDocumentacion("PENDIENTE POR REQUISITO/VENCIDOS")).toBeNull();
+    expect(grupoDocumentacion("Pendiente documento / vencido")).toBeNull();
     expect(grupoDocumentacion("PENDIENTE POR REQUISITO")).toBe("seguimiento");
     expect(grupoDocumentacion("EXTRARREQUISITO")).toBe("seguimiento");
     expect(grupoDocumentacion("Extra requisito")).toBe("seguimiento");
