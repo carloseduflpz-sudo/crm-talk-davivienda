@@ -7,6 +7,7 @@ import { registerClientes } from "./clientes";
 import { registerOficial } from "./oficial";
 import { registerPresentacion } from "./presentacion";
 import { registerDetalle } from "./detalle";
+import { registerSeguimientoDoc } from "./seguimientoDoc";
 import {
   LOCK_MINUTES,
   MAX_FAILED_ATTEMPTS,
@@ -330,6 +331,7 @@ export function createApp(): Router {
   registerAnalisis(r);
   registerDetalle(r);
   registerClientes(r);
+  registerSeguimientoDoc(r);
   registerPresentacion(r);
   registerOficial(r);
 

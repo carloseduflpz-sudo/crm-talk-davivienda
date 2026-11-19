@@ -14,6 +14,7 @@ import { Client } from "./pages/Client";
 import { Home } from "./pages/Home";
 import { Login } from "./pages/Login";
 import { Presentation } from "./pages/Presentation";
+import { SeguimientoDocumentacion } from "./pages/SeguimientoDocumentacion";
 import { Settings } from "./pages/Settings";
 import { Upload } from "./pages/Upload";
 import { Users } from "./pages/Users";
@@ -88,6 +89,7 @@ const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: "campanas/:code/:tab?", element: <Campaign /> },
       { path: "cliente", element: <Client /> },
+      { path: "seguimiento-documentacion", element: <SeguimientoDocumentacion /> },
       { path: "carga", element: <Upload /> },
       { path: "carga/zip", element: <BulkUpload /> },
       { path: "carga/metas", element: <Metas /> },

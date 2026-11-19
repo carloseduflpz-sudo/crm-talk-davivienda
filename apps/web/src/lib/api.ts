@@ -21,7 +21,8 @@ export const esperaReintento = (i: number, e: unknown) => (baseOcupada(e) ? 4000
 let alEscribir: (() => void) | null = null;
 export const avisarEscrituras = (f: () => void) => void (alEscribir = f);
 /** Entrar/salir y los lotes de filas de una carga sin confirmar no cambian ninguna cifra. */
-const cambiaCifras = (method: string, path: string) => method !== "GET" && !path.startsWith("/auth/") && !/\/filas$/.test(path);
+/** La gestión del seguimiento de documentación tampoco (no entra en ningún cálculo). */
+const cambiaCifras = (method: string, path: string) => method !== "GET" && !path.startsWith("/auth/") && !/\/filas$/.test(path) && !path.startsWith("/seguimiento-documentacion/");
 
 /** Cuándo se envió la última escritura (cargas, metas…): mientras se está cargando, la precarga espera. */
 let ultimaEscritura = 0;
@@ -57,6 +58,42 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const get = <T>(path: string) => request<T>("GET", path);
 const post = <T>(path: string, body: unknown = {}) => request<T>("POST", path, body);
 const patch = <T>(path: string, body: unknown) => request<T>("PATCH", path, body);
+
+/** Seguimiento de documentación TDC (ver apps/api/src/seguimientoDoc.ts). */
+export interface NotaDocumentacion {
+  id: number;
+  niu: string;
+  venta: string;
+  status: string;
+  comentario: string | null;
+  por: string;
+  fecha: number;
+}
+export interface FilaDocumentacion {
+  id: number;
+  grupo: "seguimiento" | "productivas";
+  niu: string;
+  venta: string | null;
+  nombre: string | null;
+  digitos: string | null;
+  requisito: string | null;
+  subetapa: string | null;
+  etapa: string | null;
+  detalle: string | null;
+  motivo: string | null;
+  telefono: string | null;
+  ejecutivo: string | null;
+  llamadas: number;
+  dias: number;
+  ultimaLlamada: string | null;
+  tipificacion: string | null;
+  notas: NotaDocumentacion[];
+}
+export interface SeguimientoDocumentacion {
+  sabana: { month: string; archivo: string; cargada: number; corte: string | null } | null;
+  filas: FilaDocumentacion[];
+  historial: (NotaDocumentacion & { nombre: string | null; subetapa: string | null })[];
+}
 
 export interface DetailResult {
   total: number;
@@ -281,6 +318,9 @@ export const api = {
     }
     return get<DetailResult>(`/analisis/${campaign}/detalle?${q}`);
   },
+  seguimientoDocumentacion: () => get<SeguimientoDocumentacion>("/seguimiento-documentacion"),
+  gestionDocumentacion: (b: { niu: string; venta: string; status: string; comentario: string }) =>
+    post<{ nota: NotaDocumentacion }>("/seguimiento-documentacion/notas", b).then((r) => r.nota),
   setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null; countedStatuses: string[] | null; workDays: number[]; holidays: string[] }) =>
     request("PUT", "/metas", b),
 };

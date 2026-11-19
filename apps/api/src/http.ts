@@ -139,10 +139,10 @@ export class Router {
         }
         ctx.user = user;
       }
-      // Toda escritura (salvo entrar/salir y los lotes de filas de una carga aún sin confirmar) cambia la revisión
-      // (la de su campaña si la ruta lo indicó, si no la general): así ningún resultado guardado de antes se vuelve
-      // a mostrar (ver resultados.ts).
-      const escribe = req.method !== "GET" && req.method !== "HEAD" && !/^\/auth\/|\/filas$/.test(path);
+      // Toda escritura (salvo entrar/salir, los lotes de filas de una carga aún sin confirmar y la gestión del
+      // seguimiento de documentación, que no cambia ninguna cifra) cambia la revisión (la de su campaña si la ruta
+      // lo indicó, si no la general): así ningún resultado guardado de antes se vuelve a mostrar (ver resultados.ts).
+      const escribe = req.method !== "GET" && req.method !== "HEAD" && !/^\/auth\/|\/filas$|^\/seguimiento-documentacion\//.test(path);
       try {
         return await route.handler(ctx);
       } finally {

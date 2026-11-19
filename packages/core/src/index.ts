@@ -18,3 +18,4 @@ export * from "./segmentos";
 export * from "./oficial";
 export * from "./control";
 export * from "./hojaLigera";
+export * from "./seguimientoDoc";

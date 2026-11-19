@@ -1,6 +1,6 @@
 import { CAMPAIGNS } from "@crm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pin, PinOff, Presentation, Search, Settings, Sun, Upload, Users, X } from "lucide-react";
+import { ChevronDown, ClipboardList, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pin, PinOff, Presentation, Search, Settings, Sun, Upload, Users, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { api, type Me } from "../lib/api";
@@ -46,6 +46,9 @@ function Nav({ onNavigate }: { onNavigate: () => void }) {
       <Section title="Herramientas">
         <NavLink to="/cliente" className={linkClass}>
           <Search className="size-4" aria-hidden /> Buscar cliente
+        </NavLink>
+        <NavLink to="/seguimiento-documentacion" className={linkClass}>
+          <ClipboardList className="size-4" aria-hidden /> Seguimiento de documentación
         </NavLink>
         <NavLink to="/carga" className={linkClass}>
           <Upload className="size-4" aria-hidden /> Centro de carga

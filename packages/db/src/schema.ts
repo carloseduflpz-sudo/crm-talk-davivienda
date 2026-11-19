@@ -338,3 +338,19 @@ export const basePhonesListas = sqliteTable("base_phones_listas", {
     .primaryKey()
     .references(() => uploads.id, { onDelete: "cascade" }),
 });
+
+/** Seguimiento de documentación (TDC): cada gestión de una venta de la cola de trabajo (la más reciente va al consolidado). */
+export const docFollowupNotes = sqliteTable(
+  "doc_followup_notes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaign: text("campaign").notNull().references(() => campaigns.code),
+    niu: text("niu").notNull(),
+    saleDate: text("sale_date").notNull().default(""),
+    status: text("status").notNull(),
+    comment: text("comment"),
+    createdBy: text("created_by").notNull(),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [index("doc_followup_niu_idx").on(t.campaign, t.niu, t.saleDate, t.createdAt)],
+);
