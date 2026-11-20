@@ -66,9 +66,12 @@ function hojaProductivas(filas: FilaDocumentacion[]): HojaEstilo {
 
 export async function descargarConsolidado(d: SeguimientoDocumentacion): Promise<void> {
   const hoy = new Date();
+  // Solo la cola de trabajo: las ventas con el documento recibido no van en el consolidado.
+  const recibidas = new Set(d.filas.filter((f) => f.recibido).map((f) => `${f.niu}|${f.venta ?? ""}`));
+  const filas = d.filas.filter((f) => !f.recibido);
   const libro = libroConEstilos([
-    hojaSeguimiento(d.filas.filter((f) => f.grupo === "seguimiento")),
-    hojaProductivas(d.filas.filter((f) => f.grupo === "productivas")),
+    hojaSeguimiento(filas.filter((f) => f.grupo === "seguimiento")),
+    hojaProductivas(filas.filter((f) => f.grupo === "productivas")),
     {
       nombre: "HISTORIAL DE GESTIÓN",
       fuente: { nombre: "Calibri Light", tamano: 11 },
@@ -82,7 +85,7 @@ export async function descargarConsolidado(d: SeguimientoDocumentacion): Promise
         c("STATUS", 20, AMARILLO, { negrita: true }),
         c("COMENTARIO", 80, AMARILLO, { negrita: true }),
       ],
-      filas: d.historial.map((n) => [fechaHora(n.fecha), n.por, n.niu, n.venta, n.nombre, n.subetapa, n.status, n.comentario]),
+      filas: d.historial.filter((n) => !recibidas.has(`${n.niu}|${n.venta ?? ""}`)).map((n) => [fechaHora(n.fecha), n.por, n.niu, n.venta, n.nombre, n.subetapa, n.status, n.comentario]),
     },
   ]);
   const url = URL.createObjectURL(new Blob([libro as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
