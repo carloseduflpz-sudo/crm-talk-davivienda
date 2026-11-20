@@ -47,7 +47,7 @@ beforeAll(async () => {
   // Una sábana vieja (octubre) que ya no es la vigente más reciente.
   await load("tdc:sabana", "2026-10", [venta("999", "2026-10-02", "PENDIENTE DOCUMENTO")]);
   await load("tdc:sabana", "2026-11", [
-    venta("101", "2026-11-18", "PENDIENTE DOCUMENTO", { "PENDIENTE POR REQUISITO": "BOLETAS DE PAGO", DIGITOS: "-" }),
+    venta("101", "2026-11-18", "PENDIENTE DOCUMENTO", { "PENDIENTE POR REQUISITO": "BOLETAS DE PAGO", DIGITOS: "-", Departamento: "CUSCATLÁN" }),
     venta("101", "2026-11-18", "PENDIENTE DOCUMENTO", { "PENDIENTE POR REQUISITO": "BOLETAS DE PAGO", DIGITOS: "-" }), // doble TC
     venta("102", "2026-11-10", "EXTRARREQUISITO"),
     venta("103", "2026-11-05", "PENDIENTE DOCUMENTO/VENCIDO"),
@@ -152,5 +152,30 @@ describe("seguimiento de documentación", () => {
     // la marca de "recibido" de la doble TC aplica a las dos tarjetas de la misma venta
     await call("POST", "/seguimiento-documentacion/recibido", { niu: "101", venta: "2026-11-18", recibido: true });
     expect((await cola()).filas.filter((x) => x.niu === "101").every((x) => x.recibido)).toBe(true);
+  });
+
+  it("agenda la cita de entrega: queda la gestión SE REALIZA CITA y la fila del archivo de visita", async () => {
+    const f0 = (await cola()).filas.find((x) => x.niu === "201")!;
+    expect(f0.citas).toEqual([]);
+    expect((await cola()).filas.find((x) => x.niu === "101")!.departamento).toBe("CUSCATLAN");
+    const base = { niu: "201", venta: "2026-10-16", telefono: "7400 7694", departamento: "CUSCATLAN", lugar: "RESIDENCIA", direccion: "brisa santa cruz  nichapa", fechaCita: "2099-11-11", hora: "AM O PM", comentarioCita: "cliente desea recibir en su lugar de residencia", comentario: "Se agenda visita" };
+    expect((await call("POST", "/seguimiento-documentacion/citas", { ...base, departamento: "GUATEMALA" })).status).toBe(400);
+    expect((await call("POST", "/seguimiento-documentacion/citas", { ...base, fechaCita: "2020-01-01" })).status).toBe(400);
+    expect((await call("POST", "/seguimiento-documentacion/citas", { ...base, direccion: " " })).status).toBe(400);
+    expect((await call("POST", "/seguimiento-documentacion/citas", { ...base, niu: "777" })).status).toBe(404);
+    const r = await call("POST", "/seguimiento-documentacion/citas", base);
+    expect(r.status, String(r.data.error)).toBe(201);
+    expect(r.data.nota).toMatchObject({ status: "SE REALIZA CITA", comentario: "Se agenda visita" });
+    expect(r.data.cita).toMatchObject({ niu: "201", cliente: "Cliente 201", telefono: "74007694", departamento: "CUSCATLAN", lugarEntrega: "RESIDENCIA/CUSCATLAN", direccion: "BRISA SANTA CRUZ NICHAPA", fechaCita: "2099-11-11", hora: "AM O PM", comentario: "CLIENTE DESEA RECIBIR EN SU LUGAR DE RESIDENCIA", por: "Carlos" });
+    expect((r.data.cita as { fechaGestion: string }).fechaGestion).toMatch(/^20\d{2}-\d{2}-\d{2}$/);
+    const d = (await call("GET", "/seguimiento-documentacion")).data as { filas: FilaDocumentacion[]; citas: unknown[] };
+    const f = d.filas.find((x) => x.niu === "201")!;
+    expect(f.citas).toHaveLength(1);
+    expect(f.notas[0]!.status).toBe("SE REALIZA CITA");
+    expect(d.citas).toHaveLength(1);
+    // Solo el dueño la elimina, y deja de mostrarse.
+    const id = (r.data.cita as { id: number }).id;
+    expect((await call("POST", `/seguimiento-documentacion/citas/${id}/eliminar`, {})).status).toBe(200);
+    expect(((await call("GET", "/seguimiento-documentacion")).data as { citas: unknown[] }).citas).toHaveLength(0);
   });
 });

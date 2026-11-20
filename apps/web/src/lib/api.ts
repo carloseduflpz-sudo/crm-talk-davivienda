@@ -89,6 +89,39 @@ export interface FilaDocumentacion {
   tipificacion: string | null;
   notas: NotaDocumentacion[];
   recibido: { por: string; fecha: number } | null;
+  /** Departamento de la sábana, ya en la lista de departamentos (para la cita). */
+  departamento: string | null;
+  citas: CitaDocumentacion[];
+}
+/** Cita de entrega: una fila del archivo VISITA TDC. */
+export interface CitaDocumentacion {
+  id: number;
+  niu: string;
+  venta: string;
+  fechaGestion: string;
+  cliente: string | null;
+  telefono: string;
+  departamento: string;
+  lugarEntrega: string;
+  direccion: string;
+  fechaCita: string;
+  hora: string;
+  comentario: string | null;
+  por: string;
+  fecha: number;
+}
+export interface NuevaCitaDocumentacion {
+  niu: string;
+  venta: string;
+  telefono: string;
+  departamento: string;
+  lugar: string;
+  direccion: string;
+  fechaCita: string;
+  hora: string;
+  comentarioCita: string;
+  /** Comentario de la gestión (STATUS SE REALIZA CITA). */
+  comentario: string;
 }
 export interface SeguimientoDocumentacion {
   /** Solo el dueño del CRM puede eliminar comentarios. */
@@ -96,6 +129,7 @@ export interface SeguimientoDocumentacion {
   sabana: { month: string; archivo: string; cargada: number; corte: string | null } | null;
   filas: FilaDocumentacion[];
   historial: (NotaDocumentacion & { nombre: string | null; subetapa: string | null })[];
+  citas: CitaDocumentacion[];
 }
 
 export interface DetailResult {
@@ -327,6 +361,8 @@ export const api = {
   recibidoDocumentacion: (b: { niu: string; venta: string; recibido: boolean }) =>
     post<{ recibido: { por: string; fecha: number } | null }>("/seguimiento-documentacion/recibido", b).then((r) => r.recibido),
   eliminarGestionDocumentacion: (id: number) => post(`/seguimiento-documentacion/notas/${id}/eliminar`),
+  agendarCitaDocumentacion: (b: NuevaCitaDocumentacion) => post<{ nota: NotaDocumentacion; cita: CitaDocumentacion }>("/seguimiento-documentacion/citas", b),
+  eliminarCitaDocumentacion: (id: number) => post(`/seguimiento-documentacion/citas/${id}/eliminar`),
   setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null; countedStatuses: string[] | null; workDays: number[]; holidays: string[] }) =>
     request("PUT", "/metas", b),
 };

@@ -1,18 +1,26 @@
 /* Seguimiento de documentación (TDC): cola de trabajo con los clientes de la sábana vigente en etapas de
    seguimiento y productivas, las llamadas de VICI después de la venta, y la gestión (STATUS homologado +
    comentario) que se registra aquí. Se descarga como el consolidado que se envía al banco. */
-import { GRUPOS_DOCUMENTACION, STATUS_DOCUMENTACION, type GrupoDocumentacion } from "@crm/core";
+import { DEPARTAMENTOS_SV, GRUPOS_DOCUMENTACION, HORARIOS_CITA, LUGARES_ENTREGA, STATUS_DOCUMENTACION, type GrupoDocumentacion } from "@crm/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Download, LoaderCircle, Search, Trash2, X } from "lucide-react";
+import { CalendarCheck, ClipboardList, Download, LoaderCircle, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Card, EmptyState, PageHeader } from "../components/ui";
-import { api, type FilaDocumentacion, type SeguimientoDocumentacion as Datos } from "../lib/api";
+import { api, type CitaDocumentacion, type FilaDocumentacion, type SeguimientoDocumentacion as Datos } from "../lib/api";
+import { citasDelDia, descargarCitas } from "../lib/citasDoc";
 import { descargarConsolidado, fechaDMY } from "../lib/consolidadoDoc";
 
 const fmtInt = new Intl.NumberFormat("es-SV");
 const pct = (n: number, d: number) => (d ? `${((n / d) * 100).toFixed(1)}%` : "0.0%");
 const fechaHora = (ms: number) =>
   new Date(ms).toLocaleString("es-SV", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+/** Hoy (AAAA-MM-DD) en la hora de la computadora. */
+const hoyLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const campo =
+  "mt-1 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-paper disabled:text-ink-soft dark:border-slate-700 dark:bg-slate-900";
 const llamadaFecha = (iso: string | null) => (iso ? `${fechaDMY(iso)} ${iso.slice(11, 16)}`.trim() : "");
 
 /** Una fila por venta de la sábana, como cuenta el banco (la doble TC son 2 ventas). */
@@ -50,6 +58,7 @@ export function SeguimientoDocumentacion() {
   const [subetapa, setSubetapa] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
   const [bajando, setBajando] = useState(false);
+  const [diaCitas, setDiaCitas] = useState(hoyLocal);
   const [error, setError] = useState("");
   // Última venta marcada como recibida, para poder deshacerlo al momento.
   const [marcada, setMarcada] = useState<FilaDocumentacion | null>(null);
@@ -118,15 +127,35 @@ export function SeguimientoDocumentacion() {
         subtitle={subtitulo}
         actions={
           d?.sabana ? (
-            <button
-              type="button"
-              onClick={descargar}
-              disabled={bajando || !d.filas.length}
-              className="inline-flex items-center gap-2 rounded-full border border-hair px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint disabled:opacity-50"
-            >
-              {bajando ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Download className="size-4 text-ink-soft" aria-hidden />}
-              Descargar consolidado
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1 rounded-full border border-hair py-1 pr-1 pl-3">
+                <CalendarCheck className="size-4 text-ink-soft" aria-hidden />
+                <input
+                  type="date"
+                  value={diaCitas}
+                  onChange={(e) => setDiaCitas(e.target.value || hoyLocal())}
+                  aria-label="Fecha de gestión de las citas"
+                  className="bg-transparent px-1 text-[13px] text-ink outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => descargarCitas(d.citas ?? [], diaCitas)}
+                  disabled={!citasDelDia(d.citas ?? [], diaCitas).length}
+                  className="rounded-full bg-paper px-3 py-1 text-[13px] font-medium text-ink transition-colors hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800"
+                >
+                  Descargar citas ({fmtInt.format(citasDelDia(d.citas ?? [], diaCitas).length)})
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={descargar}
+                disabled={bajando || !d.filas.length}
+                className="inline-flex items-center gap-2 rounded-full border border-hair px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink-faint disabled:opacity-50"
+              >
+                {bajando ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Download className="size-4 text-ink-soft" aria-hidden />}
+                Descargar consolidado
+              </button>
+            </div>
           ) : undefined
         }
       />
@@ -427,6 +456,14 @@ function Gestion({
   const [comentario, setComentario] = useState("");
   const [guardado, setGuardado] = useState("");
   const [borrar, setBorrar] = useState<number | null>(null);
+  const [borrarCita, setBorrarCita] = useState<number | null>(null);
+  const citaVacia = () => ({ telefono: (f.telefono ?? "").replace(/\D/g, ""), departamento: f.departamento ?? "", lugar: "", direccion: "", fechaCita: "", hora: "", comentarioCita: "" });
+  const [conCita, setConCita] = useState(false);
+  const [cita, setCita] = useState(citaVacia);
+  const setC = (k: keyof ReturnType<typeof citaVacia>) => (e: { target: { value: string } }) => {
+    setCita((c) => ({ ...c, [k]: e.target.value }));
+    setGuardado("");
+  };
   const siguienteRef = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -436,6 +473,9 @@ function Gestion({
     setComentario("");
     setGuardado("");
     setBorrar(null);
+    setBorrarCita(null);
+    setConCita(false);
+    setCita(citaVacia());
   }, [item.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // Solo al abrir: el foco va al botón de cerrar (no en cada cambio de la pantalla, para no cerrar la lista de STATUS).
   useEffect(() => {
@@ -451,6 +491,35 @@ function Gestion({
     onSuccess: (_, id) => {
       qc.setQueryData<Datos>(["seguimiento-doc"], (old) => old && { ...old, filas: old.filas.map((x) => ({ ...x, notas: quitar(x.notas, id) })), historial: old.historial.filter((n) => n.id !== id) });
       setBorrar(null);
+    },
+  });
+
+  const eliminarCita = useMutation({
+    mutationFn: (id: number) => conEspera(api.eliminarCitaDocumentacion(id)),
+    onSuccess: (_, id) => {
+      const sin = (l: CitaDocumentacion[]) => l.filter((x) => x.id !== id);
+      qc.setQueryData<Datos>(["seguimiento-doc"], (old) => old && { ...old, filas: old.filas.map((x) => ({ ...x, citas: sin(x.citas ?? []) })), citas: sin(old.citas ?? []) });
+      setBorrarCita(null);
+    },
+  });
+
+  const agendar = useMutation({
+    mutationFn: () => conEspera(api.agendarCitaDocumentacion({ niu: f.niu, venta: f.venta ?? "", ...cita, comentario })),
+    onSuccess: ({ nota, cita: nueva }) => {
+      qc.setQueryData<Datos>(["seguimiento-doc"], (old) =>
+        old && {
+          ...old,
+          filas: old.filas.map((x) => (x.niu === f.niu && (x.venta ?? "") === nota.venta ? { ...x, notas: [nota, ...x.notas], citas: [nueva, ...(x.citas ?? [])] } : x)),
+          historial: [{ ...nota, nombre: f.nombre, subetapa: f.subetapa }, ...old.historial],
+          citas: [nueva, ...(old.citas ?? [])],
+        },
+      );
+      setComentario("");
+      setStatus(nota.status);
+      setConCita(false);
+      setCita(citaVacia());
+      setGuardado(`Cita agendada: ${fechaDMY(nueva.fechaCita)} · ${nueva.hora} · ${nueva.lugarEntrega}`);
+      if (siguienteRef.current) onSiguiente();
     },
   });
 
@@ -470,11 +539,16 @@ function Gestion({
       if (siguienteRef.current) onSiguiente();
     },
   });
+  const citaLista = Boolean(cita.telefono && cita.departamento && cita.lugar && cita.direccion.trim() && cita.fechaCita && cita.hora);
+  const listo = conCita ? citaLista : Boolean(status);
+  const ocupado = guardar.isPending || agendar.isPending;
+  const fallo = conCita ? agendar : guardar;
   const submit = (e: FormEvent, siguiente: boolean) => {
     e.preventDefault();
-    if (!status) return;
+    if (!listo) return;
     siguienteRef.current = siguiente;
-    guardar.mutate();
+    if (conCita) agendar.mutate();
+    else guardar.mutate();
   };
 
   return (
@@ -533,10 +607,88 @@ function Gestion({
           {puedeGestionar && (
             <form onSubmit={(e) => submit(e, false)} className="mt-6 rounded-2xl border border-hair p-4">
               <p className="text-[13px] font-medium text-ink">Registrar gestión</p>
+              <label className={`mt-3 flex items-center gap-3 rounded-xl border px-3.5 py-2.5 ${conCita ? "border-brand-500/50 bg-brand-500/5" : "border-hair"}`}>
+                <input
+                  type="checkbox"
+                  checked={conCita}
+                  onChange={(e) => {
+                    setConCita(e.target.checked);
+                    setGuardado("");
+                  }}
+                  className="size-4 cursor-pointer accent-[var(--color-brand-500,#2563eb)]"
+                />
+                <span className="text-[13.5px] text-ink">Agendar cita</span>
+              </label>
+              {conCita && (
+                <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 rounded-xl bg-paper/60 p-3.5 sm:grid-cols-2 dark:bg-slate-800/40">
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">Fecha gestión</span>
+                    <input value={fechaDMY(hoyLocal())} disabled className={campo} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">NIU</span>
+                    <input value={f.niu} disabled className={campo} />
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-[12px] text-ink-faint">Cliente</span>
+                    <input value={f.nombre ?? ""} disabled className={campo} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">Teléfono</span>
+                    <input value={cita.telefono} onChange={setC("telefono")} inputMode="tel" maxLength={15} required className={campo} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">Departamento</span>
+                    <select value={cita.departamento} onChange={setC("departamento")} required className={campo}>
+                      <option value="">Elige el departamento</option>
+                      {DEPARTAMENTOS_SV.map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-[12px] text-ink-faint">Lugar de entrega</span>
+                    <select value={cita.lugar} onChange={setC("lugar")} required className={campo}>
+                      <option value="">Elige el lugar</option>
+                      {LUGARES_ENTREGA.map((x) => (
+                        <option key={x} value={x}>
+                          {cita.departamento ? `${x}/${cita.departamento}` : x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-[12px] text-ink-faint">Dirección</span>
+                    <textarea value={cita.direccion} onChange={setC("direccion")} maxLength={300} rows={2} required className={`${campo} resize-y uppercase`} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">Fecha cita</span>
+                    <input type="date" value={cita.fechaCita} min={hoyLocal()} onChange={setC("fechaCita")} required className={campo} />
+                  </label>
+                  <label className="block">
+                    <span className="text-[12px] text-ink-faint">Hora</span>
+                    <select value={cita.hora} onChange={setC("hora")} required className={campo}>
+                      <option value="">Elige la hora</option>
+                      {HORARIOS_CITA.map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-[12px] text-ink-faint">Comentario de la cita</span>
+                    <textarea value={cita.comentarioCita} onChange={setC("comentarioCita")} maxLength={500} rows={2} className={`${campo} resize-y uppercase`} />
+                  </label>
+                </div>
+              )}
               <label className="mt-3 block">
                 <span className="text-[12px] text-ink-faint">STATUS</span>
                 <select
-                  value={status}
+                  disabled={conCita}
+                  value={conCita ? "SE REALIZA CITA" : status}
                   onChange={(e) => {
                     setStatus(e.target.value);
                     setGuardado("");
@@ -562,12 +714,12 @@ function Gestion({
                   className="mt-1 w-full resize-y rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900"
                 />
               </label>
-              {guardar.isError && <p className="mt-2 text-[13px] text-[var(--st-critical)]">{guardar.error.message}</p>}
-              {guardado && !guardar.isError && !guardar.isPending && <p className="mt-2 text-[13px] text-emerald-600" aria-live="polite">{guardado}</p>}
+              {fallo.isError && <p className="mt-2 text-[13px] text-[var(--st-critical)]">{fallo.error.message}</p>}
+              {guardado && !fallo.isError && !ocupado && <p className="mt-2 text-[13px] text-emerald-600" aria-live="polite">{guardado}</p>}
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 <button
                   type="submit"
-                  disabled={!status || guardar.isPending}
+                  disabled={!listo || ocupado}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                 >
                   Guardar
@@ -575,13 +727,59 @@ function Gestion({
                 <button
                   type="button"
                   onClick={(e) => submit(e, true)}
-                  disabled={!status || guardar.isPending || !hayOtro}
+                  disabled={!listo || ocupado || !hayOtro}
                   className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
                 >
-                  {guardar.isPending ? "Guardando…" : "Guardar y siguiente"}
+                  {ocupado ? "Guardando…" : "Guardar y siguiente"}
                 </button>
               </div>
             </form>
+          )}
+
+          {(f.citas ?? []).length > 0 && (
+            <>
+              <p className="mt-6 text-[13px] font-medium text-ink">Citas agendadas</p>
+              <ol className="mt-2 divide-y divide-hair rounded-2xl border border-hair">
+                {f.citas.map((x) => (
+                  <li key={x.id} className="px-4 py-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <span className="text-[13px] font-medium text-ink">
+                        {fechaDMY(x.fechaCita)} · {x.hora} · {x.lugarEntrega}
+                      </span>
+                      <span className="flex items-center gap-2 text-[12px] text-ink-faint">
+                        {fechaHora(x.fecha)} · {x.por}
+                        {puedeEliminar && borrarCita !== x.id && (
+                          <button type="button" onClick={() => setBorrarCita(x.id)} className="rounded-full p-1 text-ink-faint hover:bg-paper hover:text-[var(--st-critical)]" aria-label="Eliminar cita" title="Eliminar">
+                            <Trash2 className="size-3.5" aria-hidden />
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[13px] text-ink/80">
+                      {x.direccion} · Tel. {x.telefono}
+                    </p>
+                    {x.comentario && <p className="mt-0.5 text-[12.5px] text-ink-soft">{x.comentario}</p>}
+                    {borrarCita === x.id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
+                        <span className="text-ink-soft">¿Eliminar esta cita?</span>
+                        <button
+                          type="button"
+                          onClick={() => eliminarCita.mutate(x.id)}
+                          disabled={eliminarCita.isPending}
+                          className="rounded-lg bg-red-600 px-3 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                        >
+                          {eliminarCita.isPending ? "Eliminando…" : "Eliminar"}
+                        </button>
+                        <button type="button" onClick={() => setBorrarCita(null)} className="rounded-lg border border-hair px-3 py-1 text-ink hover:bg-paper">
+                          Cancelar
+                        </button>
+                        {eliminarCita.isError && <span className="text-[var(--st-critical)]">{eliminarCita.error.message}</span>}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </>
           )}
 
           <p className="mt-6 text-[13px] font-medium text-ink">Historial de gestión</p>

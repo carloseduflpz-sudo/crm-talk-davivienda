@@ -40,7 +40,7 @@ class Statement {
     return { success: true, results: rows.map((r) => ({ ...r })), meta: { changes: 0, last_row_id: 0 } };
   }
   get isQuery() {
-    return /^\s*(SELECT|WITH)\b/i.test(this.sql);
+    return /^\s*(SELECT|WITH)\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql);
   }
   runSync() {
     const r = this.db.prepare(this.sql).run(...this.args);

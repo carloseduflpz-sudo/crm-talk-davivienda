@@ -68,3 +68,39 @@ export function toquesDespuesDeVenta(venta: string | null, llamadas: { fecha: st
     tipificacion: ultima?.tipologia?.trim() || null,
   };
 }
+
+/* ===== Citas de entrega (archivo VISITA TDC) ===== */
+
+/** Departamentos de El Salvador, como van en el archivo de visita. */
+export const DEPARTAMENTOS_SV = [
+  "AHUACHAPAN",
+  "SANTA ANA",
+  "SONSONATE",
+  "CHALATENANGO",
+  "LA LIBERTAD",
+  "SAN SALVADOR",
+  "CUSCATLAN",
+  "LA PAZ",
+  "CABAÑAS",
+  "SAN VICENTE",
+  "USULUTAN",
+  "SAN MIGUEL",
+  "MORAZAN",
+  "LA UNION",
+] as const;
+
+/** Lugar de entrega; en el archivo va con el departamento: RESIDENCIA/CUSCATLAN. */
+export const LUGARES_ENTREGA = ["RESIDENCIA", "TRABAJO", "AGENCIA"] as const;
+
+/** Horario de la cita. */
+export const HORARIOS_CITA = ["AM", "PM", "AM O PM"] as const;
+
+/** Departamento de la sábana ("CUSCATLÁN", "San Salvador") → el de la lista, o null. */
+export function departamentoSV(v: unknown): (typeof DEPARTAMENTOS_SV)[number] | null {
+  const s = matchKey(v);
+  if (!s) return null;
+  return DEPARTAMENTOS_SV.find((d) => matchKey(d) === s) ?? null;
+}
+
+/** "RESIDENCIA" + "CUSCATLAN" → "RESIDENCIA/CUSCATLAN". */
+export const lugarEntregaCita = (lugar: string, departamento: string) => `${lugar}/${departamento}`;

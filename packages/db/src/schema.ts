@@ -372,3 +372,31 @@ export const docFollowupReceived = sqliteTable(
   },
   (t) => [index("doc_followup_received_idx").on(t.campaign, t.niu, t.saleDate, t.undoneAt)],
 );
+
+/** Seguimiento de documentación: citas de entrega (archivo VISITA TDC). */
+export const docFollowupAppointments = sqliteTable(
+  "doc_followup_appointments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaign: text("campaign").notNull().references(() => campaigns.code),
+    niu: text("niu").notNull(),
+    saleDate: text("sale_date").notNull().default(""),
+    managedOn: text("managed_on").notNull(),
+    clientName: text("client_name"),
+    phone: text("phone").notNull(),
+    department: text("department").notNull(),
+    place: text("place").notNull(),
+    address: text("address").notNull(),
+    appointmentOn: text("appointment_on").notNull(),
+    timeSlot: text("time_slot").notNull(),
+    comment: text("comment"),
+    createdBy: text("created_by").notNull(),
+    createdAt: integer("created_at").notNull().default(now),
+    deletedBy: text("deleted_by"),
+    deletedAt: integer("deleted_at"),
+  },
+  (t) => [
+    index("doc_followup_appointments_idx").on(t.campaign, t.managedOn, t.deletedAt),
+    index("doc_followup_appointments_niu_idx").on(t.campaign, t.niu, t.saleDate),
+  ],
+);
