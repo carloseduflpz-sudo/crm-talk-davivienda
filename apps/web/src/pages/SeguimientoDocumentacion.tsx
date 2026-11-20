@@ -15,30 +15,30 @@ const fechaHora = (ms: number) =>
   new Date(ms).toLocaleString("es-SV", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const llamadaFecha = (iso: string | null) => (iso ? `${fechaDMY(iso)} ${iso.slice(11, 16)}`.trim() : "");
 
-/** Un cliente de la cola: las filas de la sábana de la misma venta (doble TC) van juntas. */
+/** Una fila por venta de la sábana, como cuenta el banco (la doble TC son 2 ventas). */
 interface Item {
   key: string;
   f: FilaDocumentacion;
+  /** Tarjetas de la misma venta (mismo NIU y fecha): la gestión y el "recibido" aplican a todas. */
   tarjetas: number;
   digitos: string;
 }
 
-function agrupar(filas: FilaDocumentacion[]): Item[] {
-  const out = new Map<string, Item>();
+function filasDe(filas: FilaDocumentacion[]): Item[] {
+  const porVenta = new Map<string, FilaDocumentacion[]>();
   for (const f of filas) {
-    const key = `${f.grupo}|${f.niu}|${f.venta ?? ""}`;
-    const it = out.get(key);
-    if (!it) out.set(key, { key, f, tarjetas: 1, digitos: f.digitos ?? "" });
-    else {
-      it.tarjetas++;
-      if (f.digitos && !it.digitos.split(" / ").includes(f.digitos)) it.digitos = it.digitos ? `${it.digitos} / ${f.digitos}` : f.digitos;
-    }
+    const k = `${f.grupo}|${f.niu}|${f.venta ?? ""}`;
+    porVenta.set(k, [...(porVenta.get(k) ?? []), f]);
   }
-  return [...out.values()];
+  return filas.map((f) => {
+    const misma = porVenta.get(`${f.grupo}|${f.niu}|${f.venta ?? ""}`)!;
+    return { key: String(f.id), f, tarjetas: misma.length, digitos: f.digitos ?? "" };
+  });
 }
 
 const SIN_GESTION = "__sin_gestion";
 const SIN_LLAMADAS = "__sin_llamadas";
+const RECIBIDO = "__recibido";
 
 export function SeguimientoDocumentacion() {
   const datos = useQuery({ queryKey: ["seguimiento-doc"], queryFn: api.seguimientoDocumentacion, staleTime: 30_000 });
@@ -47,29 +47,39 @@ export function SeguimientoDocumentacion() {
   const [grupo, setGrupo] = useState<GrupoDocumentacion>("seguimiento");
   const [buscar, setBuscar] = useState("");
   const [filtro, setFiltro] = useState("");
+  const [subetapa, setSubetapa] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
   const [bajando, setBajando] = useState(false);
   const [error, setError] = useState("");
 
   const d = datos.data;
-  const items = useMemo(() => agrupar(d?.filas ?? []), [d]);
+  const todas = useMemo(() => filasDe(d?.filas ?? []), [d]);
+  // La cola de trabajo: sin las ventas con el documento recibido.
+  const items = useMemo(() => todas.filter((i) => !i.f.recibido), [todas]);
+  const recibidas = todas.length - items.length;
   const delGrupo = (g: GrupoDocumentacion) => items.filter((i) => i.f.grupo === g);
+  const subetapas = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of items) if (i.f.grupo === grupo) m.set(i.f.subetapa ?? "", (m.get(i.f.subetapa ?? "") ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [items, grupo]);
   const lista = useMemo(() => {
     const t = buscar.trim().toLowerCase();
-    return items.filter((i) => {
+    return (filtro === RECIBIDO ? todas.filter((i) => i.f.recibido) : items).filter((i) => {
       if (i.f.grupo !== grupo) return false;
+      if (subetapa && (i.f.subetapa ?? "") !== subetapa) return false;
       if (filtro === SIN_GESTION && i.f.notas.length) return false;
       if (filtro === SIN_LLAMADAS && i.f.llamadas) return false;
-      if (filtro && filtro !== SIN_GESTION && filtro !== SIN_LLAMADAS && i.f.notas[0]?.status !== filtro) return false;
+      if (filtro && filtro !== SIN_GESTION && filtro !== SIN_LLAMADAS && filtro !== RECIBIDO && i.f.notas[0]?.status !== filtro) return false;
       if (t && !`${i.f.niu} ${i.f.nombre ?? ""} ${i.f.telefono ?? ""}`.toLowerCase().includes(t)) return false;
       return true;
     });
-  }, [items, grupo, filtro, buscar]);
+  }, [todas, items, grupo, subetapa, filtro, buscar]);
 
   const total = items.length;
   const conGestion = items.filter((i) => i.f.notas.length).length;
   const sinLlamadas = items.filter((i) => !i.f.llamadas).length;
-  const actual = abierto ? (lista.find((i) => i.key === abierto) ?? items.find((i) => i.key === abierto) ?? null) : null;
+  const actual = abierto ? (lista.find((i) => i.key === abierto) ?? todas.find((i) => i.key === abierto) ?? null) : null;
   const siguiente = () => {
     const idx = lista.findIndex((i) => i.key === abierto);
     setAbierto(lista[idx + 1]?.key ?? null);
@@ -127,12 +137,13 @@ export function SeguimientoDocumentacion() {
       )}
       {d?.sabana && (
         <>
-          <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             {GRUPOS_DOCUMENTACION.map((g) => (
-              <Kpi key={g.id} label={g.label} valor={delGrupo(g.id).length} pie={`${pct(delGrupo(g.id).length, total)} de ${fmtInt.format(total)} clientes`} />
+              <Kpi key={g.id} label={g.label} valor={delGrupo(g.id).length} pie={`${pct(delGrupo(g.id).length, total)} de ${fmtInt.format(total)} ventas en la cola`} />
             ))}
-            <Kpi label="Con gestión" valor={conGestion} pie={`${pct(conGestion, total)} de ${fmtInt.format(total)} clientes`} />
-            <Kpi label="Sin llamadas después de la venta" valor={sinLlamadas} pie={`${pct(sinLlamadas, total)} de ${fmtInt.format(total)} clientes`} />
+            <Kpi label="Documento recibido" valor={recibidas} pie={`${pct(recibidas, todas.length)} de ${fmtInt.format(todas.length)} ventas`} />
+            <Kpi label="Con gestión" valor={conGestion} pie={`${pct(conGestion, total)} de ${fmtInt.format(total)} ventas en la cola`} />
+            <Kpi label="Sin llamadas después de la venta" valor={sinLlamadas} pie={`${pct(sinLlamadas, total)} de ${fmtInt.format(total)} ventas en la cola`} />
           </div>
 
           <Card className="p-0!">
@@ -143,7 +154,10 @@ export function SeguimientoDocumentacion() {
                     key={g.id}
                     role="tab"
                     aria-selected={grupo === g.id}
-                    onClick={() => setGrupo(g.id)}
+                    onClick={() => {
+                      setGrupo(g.id);
+                      setSubetapa("");
+                    }}
                     className={`rounded-full px-4 py-1.5 text-[13px] font-medium transition-colors ${grupo === g.id ? "bg-brand-500 text-white" : "text-ink-soft hover:text-ink"}`}
                   >
                     {g.label} <span className="tabular-nums opacity-80">{fmtInt.format(delGrupo(g.id).length)}</span>
@@ -169,6 +183,7 @@ export function SeguimientoDocumentacion() {
                 <option value="">Todos los STATUS</option>
                 <option value={SIN_GESTION}>Sin gestión</option>
                 <option value={SIN_LLAMADAS}>Sin llamadas después de la venta</option>
+                <option value={RECIBIDO}>Documento recibido ({fmtInt.format(recibidas)})</option>
                 {STATUS_DOCUMENTACION.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -176,7 +191,20 @@ export function SeguimientoDocumentacion() {
                 ))}
               </select>
             </div>
-            <Tabla grupo={grupo} lista={lista} onAbrir={setAbierto} />
+            <div className="flex flex-wrap items-center gap-2 border-b border-hair px-5 py-3" aria-label="Subetapa">
+              {[["", subetapas.reduce((a, [, n]) => a + n, 0)] as [string, number], ...subetapas].map(([sub, n]) => (
+                <button
+                  key={sub || "todas"}
+                  type="button"
+                  aria-pressed={subetapa === sub}
+                  onClick={() => setSubetapa(sub)}
+                  className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${subetapa === sub ? "border-brand-500 bg-brand-500/10 font-medium text-brand-600" : "border-hair text-ink-soft hover:text-ink"}`}
+                >
+                  {sub || "Todas"} <span className="tabular-nums">{fmtInt.format(n)}</span>
+                </button>
+              ))}
+            </div>
+            <Tabla grupo={grupo} lista={lista} onAbrir={setAbierto} puedeGestionar={puedeGestionar} />
           </Card>
         </>
       )}
@@ -197,8 +225,37 @@ function Kpi({ label, valor, pie }: { label: string; valor: number; pie: string 
   );
 }
 
-function Tabla({ grupo, lista, onAbrir }: { grupo: GrupoDocumentacion; lista: Item[]; onAbrir: (k: string) => void }) {
-  if (!lista.length) return <p className="p-6 text-sm text-ink-soft">No hay clientes con este filtro.</p>;
+/** Marca o desmarca "documento recibido" de una venta (todas sus tarjetas). */
+function useRecibido() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ f, recibido }: { f: FilaDocumentacion; recibido: boolean }) => conEspera(api.recibidoDocumentacion({ niu: f.niu, venta: f.venta ?? "", recibido })),
+    onSuccess: (r, { f }) =>
+      qc.setQueryData<Datos>(["seguimiento-doc"], (old) =>
+        old && { ...old, filas: old.filas.map((x) => (x.niu === f.niu && (x.venta ?? "") === (f.venta ?? "") ? { ...x, recibido: r } : x)) },
+      ),
+  });
+}
+
+function CheckRecibido({ f, disabled }: { f: FilaDocumentacion; disabled?: boolean }) {
+  const m = useRecibido();
+  return (
+    <input
+      type="checkbox"
+      checked={Boolean(f.recibido)}
+      disabled={disabled || m.isPending}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      onChange={(e) => m.mutate({ f, recibido: e.target.checked })}
+      aria-label={`Documento recibido de NIU ${f.niu}`}
+      title={m.isError ? m.error.message : f.recibido ? `Recibido · ${fechaHora(f.recibido.fecha)} · ${f.recibido.por}` : "Marcar documento recibido"}
+      className="size-4 cursor-pointer accent-[var(--color-brand-500,#2563eb)] disabled:cursor-default disabled:opacity-50"
+    />
+  );
+}
+
+function Tabla({ grupo, lista, onAbrir, puedeGestionar }: { grupo: GrupoDocumentacion; lista: Item[]; onAbrir: (k: string) => void; puedeGestionar: boolean }) {
+  if (!lista.length) return <p className="p-6 text-sm text-ink-soft">No hay ventas con este filtro.</p>;
   const cols: { label: string; cell: (i: Item) => string | number }[] = [
     { label: "NIU", cell: (i) => i.f.niu },
     { label: "Venta", cell: (i) => fechaDMY(i.f.venta) },
@@ -223,8 +280,9 @@ function Tabla({ grupo, lista, onAbrir }: { grupo: GrupoDocumentacion; lista: It
       <table className="w-full text-[13px]">
         <thead className="sticky top-0 z-10 bg-white dark:bg-slate-900">
           <tr className="text-[12px] text-ink-faint">
+            <th className="border-b border-hair py-3 pl-5 text-left font-normal whitespace-nowrap">Doc. recibido</th>
             {cols.map((c) => (
-              <th key={c.label} className={`border-b border-hair px-3 py-3 font-normal whitespace-nowrap first:pl-5 last:pr-5 ${num(c.label) ? "text-right" : "text-left"}`}>
+              <th key={c.label} className={`border-b border-hair px-3 py-3 font-normal whitespace-nowrap last:pr-5 ${num(c.label) ? "text-right" : "text-left"}`}>
                 {c.label}
               </th>
             ))}
@@ -239,12 +297,15 @@ function Tabla({ grupo, lista, onAbrir }: { grupo: GrupoDocumentacion; lista: It
               onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onAbrir(i.key))}
               className="cursor-pointer border-b border-hair outline-none last:border-0 hover:bg-paper/60 focus-visible:bg-paper dark:hover:bg-slate-800/40"
             >
+              <td className="py-2.5 pl-5 text-center" onClick={(e) => e.stopPropagation()}>
+                <CheckRecibido f={i.f} disabled={!puedeGestionar} />
+              </td>
               {cols.map((c, j) => {
                 const v = c.cell(i);
                 return (
                   <td
                     key={c.label}
-                    className={`max-w-44 truncate px-3 py-2.5 whitespace-nowrap first:pl-5 last:pr-5 ${j === 0 ? "font-medium text-ink tabular-nums" : "text-ink/80"} ${num(c.label) ? "text-right tabular-nums" : ""}`}
+                    className={`max-w-44 truncate px-3 py-2.5 whitespace-nowrap last:pr-5 ${j === 0 ? "font-medium text-ink tabular-nums" : "text-ink/80"} ${num(c.label) ? "text-right tabular-nums" : ""}`}
                     title={String(v)}
                   >
                     {v === "" ? <span className="text-ink-faint">—</span> : v}
@@ -390,6 +451,18 @@ function Gestion({
               <Dato label="Motivo devolución / observaciones extrarrequisito / comentario general">{f.motivo}</Dato>
             </div>
           )}
+
+          <label className={`mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3 ${f.recibido ? "border-emerald-500/40 bg-emerald-500/5" : "border-hair"}`}>
+            <CheckRecibido f={f} disabled={!puedeGestionar} />
+            <span className="text-[13.5px] text-ink">
+              Documento recibido
+              {f.recibido && (
+                <span className="block text-[12px] text-ink-soft">
+                  {fechaHora(f.recibido.fecha)} · {f.recibido.por} · fuera de la cola de trabajo
+                </span>
+              )}
+            </span>
+          </label>
 
           {puedeGestionar && (
             <form onSubmit={(e) => submit(e, false)} className="mt-6 rounded-2xl border border-hair p-4">

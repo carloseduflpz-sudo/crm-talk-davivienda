@@ -88,6 +88,7 @@ export interface FilaDocumentacion {
   ultimaLlamada: string | null;
   tipificacion: string | null;
   notas: NotaDocumentacion[];
+  recibido: { por: string; fecha: number } | null;
 }
 export interface SeguimientoDocumentacion {
   /** Solo el dueño del CRM puede eliminar comentarios. */
@@ -323,6 +324,8 @@ export const api = {
   seguimientoDocumentacion: () => get<SeguimientoDocumentacion>("/seguimiento-documentacion"),
   gestionDocumentacion: (b: { niu: string; venta: string; status: string; comentario: string }) =>
     post<{ nota: NotaDocumentacion }>("/seguimiento-documentacion/notas", b).then((r) => r.nota),
+  recibidoDocumentacion: (b: { niu: string; venta: string; recibido: boolean }) =>
+    post<{ recibido: { por: string; fecha: number } | null }>("/seguimiento-documentacion/recibido", b).then((r) => r.recibido),
   eliminarGestionDocumentacion: (id: number) => post(`/seguimiento-documentacion/notas/${id}/eliminar`),
   setGoal: (b: { campaign: string; month: string; salesGoal: number; agents: number | null; countedStatuses: string[] | null; workDays: number[]; holidays: string[] }) =>
     request("PUT", "/metas", b),

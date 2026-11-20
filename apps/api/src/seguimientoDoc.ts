@@ -52,6 +52,8 @@ export interface FilaDocumentacion {
   ultimaLlamada: string | null;
   tipificacion: string | null;
   notas: NotaDocumentacion[];
+  /** Documento recibido: la venta sale de la cola de trabajo. */
+  recibido: { por: string; fecha: number } | null;
 }
 
 interface NotaRow {
@@ -121,6 +123,14 @@ export function registerSeguimientoDoc(r: Router): void {
     const notasDe = new Map<string, NotaDocumentacion[]>();
     for (const n of notas) (notasDe.get(llave(n.niu, n.venta)) ?? notasDe.set(llave(n.niu, n.venta), []).get(llave(n.niu, n.venta))!).push(n);
 
+    const { results: rec } = await env.DB.prepare(
+      "SELECT niu, sale_date, received_by, received_at FROM doc_followup_received WHERE campaign = ? AND undone_at IS NULL ORDER BY received_at DESC",
+    )
+      .bind(CAMPAIGN)
+      .all<{ niu: string; sale_date: string; received_by: string; received_at: number }>();
+    const recibidos = new Map<string, { por: string; fecha: number }>();
+    for (const x of rec) if (!recibidos.has(llave(x.niu, x.sale_date))) recibidos.set(llave(x.niu, x.sale_date), { por: x.received_by, fecha: x.received_at });
+
     const filas: FilaDocumentacion[] = cola.map(({ v, e, grupo, nombre }) => {
       const t = toquesDespuesDeVenta(v.sale_date, porNiu.get(v.niu) ?? []);
       return {
@@ -142,6 +152,7 @@ export function registerSeguimientoDoc(r: Router): void {
         ultimaLlamada: t.ultima,
         tipificacion: t.tipificacion,
         notas: notasDe.get(llave(v.niu, v.sale_date)) ?? [],
+        recibido: recibidos.get(llave(v.niu, v.sale_date)) ?? null,
       };
     });
 
@@ -186,5 +197,38 @@ export function registerSeguimientoDoc(r: Router): void {
     if (!res.meta.changes) throw new HttpError(404, "Ese comentario no existe o ya se eliminó.");
     await audit(env, user.username, "seguimiento_documentacion_eliminada", `${CAMPAIGN}:seguimiento-documentacion`, { id });
     return json({ ok: true });
+  });
+
+  r.on("POST", "/seguimiento-documentacion/recibido", "datos:cargar", async ({ env, req, user }) => {
+    const body = await readJson(req);
+    const niu = typeof body.niu === "string" ? body.niu.replace(/[\s.-]/g, "").replace(/^0+(?=\d)/, "") : "";
+    if (!/^\d{1,30}$/.test(niu)) throw new HttpError(400, "NIU inválido.");
+    const venta = typeof body.venta === "string" ? body.venta.trim() : "";
+    if (venta && !DAY.test(venta)) throw new HttpError(400, "Fecha de venta inválida.");
+    if (typeof body.recibido !== "boolean") throw new HttpError(400, "Indica si el documento se recibió.");
+    const ahora = Date.now();
+    if (body.recibido) {
+      const existe = await env.DB.prepare(
+        `SELECT 1 FROM bank_sales WHERE campaign = ? AND niu = ? AND COALESCE(sale_date, '') = ?
+           AND upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1) LIMIT 1`,
+      )
+        .bind(CAMPAIGN, niu, venta, CAMPAIGN)
+        .first();
+      if (!existe) throw new HttpError(404, "Esa venta no está en la sábana vigente.");
+      const ya = await env.DB.prepare("SELECT received_by, received_at FROM doc_followup_received WHERE campaign = ? AND niu = ? AND sale_date = ? AND undone_at IS NULL LIMIT 1")
+        .bind(CAMPAIGN, niu, venta)
+        .first<{ received_by: string; received_at: number }>();
+      if (ya) return json({ ok: true, recibido: { por: ya.received_by, fecha: ya.received_at } });
+      await env.DB.prepare("INSERT INTO doc_followup_received (campaign, niu, sale_date, received_by, received_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(CAMPAIGN, niu, venta, user.displayName, ahora)
+        .run();
+      await audit(env, user.username, "seguimiento_documentacion_recibido", `${CAMPAIGN}:seguimiento-documentacion`, {});
+      return json({ ok: true, recibido: { por: user.displayName, fecha: ahora } });
+    }
+    await env.DB.prepare("UPDATE doc_followup_received SET undone_at = ?, undone_by = ? WHERE campaign = ? AND niu = ? AND sale_date = ? AND undone_at IS NULL")
+      .bind(ahora, user.displayName, CAMPAIGN, niu, venta)
+      .run();
+    await audit(env, user.username, "seguimiento_documentacion_no_recibido", `${CAMPAIGN}:seguimiento-documentacion`, {});
+    return json({ ok: true, recibido: null });
   });
 }

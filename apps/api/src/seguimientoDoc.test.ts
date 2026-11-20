@@ -136,4 +136,21 @@ describe("seguimiento de documentación", () => {
     expect(d.filas.find((x) => x.niu === "101")!.notas.map((n) => n.id)).not.toContain(nota.id);
     expect(d.historial.map((n) => n.id)).not.toContain(nota.id);
   });
+
+  it("documento recibido saca la venta de la cola (y se puede desmarcar)", async () => {
+    expect((await call("POST", "/seguimiento-documentacion/recibido", { niu: "102", venta: "2026-11-10" })).status).toBe(400);
+    expect((await call("POST", "/seguimiento-documentacion/recibido", { niu: "777", venta: "2026-11-10", recibido: true })).status).toBe(404);
+    const a = await call("POST", "/seguimiento-documentacion/recibido", { niu: "102", venta: "2026-11-10", recibido: true });
+    expect(a.status).toBe(200);
+    expect((await call("POST", "/seguimiento-documentacion/recibido", { niu: "102", venta: "2026-11-10", recibido: true })).status).toBe(200); // no se duplica
+    let f = (await cola()).filas.find((x) => x.niu === "102")!;
+    expect(f.recibido).toMatchObject({ por: "Carlos" });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM doc_followup_received WHERE undone_at IS NULL").first<{ n: number }>())!.n).toBe(1);
+    expect((await call("POST", "/seguimiento-documentacion/recibido", { niu: "102", venta: "2026-11-10", recibido: false })).status).toBe(200);
+    f = (await cola()).filas.find((x) => x.niu === "102")!;
+    expect(f.recibido).toBeNull();
+    // la marca de "recibido" de la doble TC aplica a las dos tarjetas de la misma venta
+    await call("POST", "/seguimiento-documentacion/recibido", { niu: "101", venta: "2026-11-18", recibido: true });
+    expect((await cola()).filas.filter((x) => x.niu === "101").every((x) => x.recibido)).toBe(true);
+  });
 });

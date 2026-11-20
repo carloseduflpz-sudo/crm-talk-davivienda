@@ -356,3 +356,19 @@ export const docFollowupNotes = sqliteTable(
   },
   (t) => [index("doc_followup_niu_idx").on(t.campaign, t.niu, t.saleDate, t.createdAt)],
 );
+
+/** Seguimiento de documentación: venta con el documento recibido (sale de la cola). Desmarcar no borra la fila. */
+export const docFollowupReceived = sqliteTable(
+  "doc_followup_received",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaign: text("campaign").notNull().references(() => campaigns.code),
+    niu: text("niu").notNull(),
+    saleDate: text("sale_date").notNull().default(""),
+    receivedBy: text("received_by").notNull(),
+    receivedAt: integer("received_at").notNull().default(now),
+    undoneBy: text("undone_by"),
+    undoneAt: integer("undone_at"),
+  },
+  (t) => [index("doc_followup_received_idx").on(t.campaign, t.niu, t.saleDate, t.undoneAt)],
+);
