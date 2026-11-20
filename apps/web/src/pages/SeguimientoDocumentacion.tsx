@@ -51,6 +51,14 @@ export function SeguimientoDocumentacion() {
   const [abierto, setAbierto] = useState<string | null>(null);
   const [bajando, setBajando] = useState(false);
   const [error, setError] = useState("");
+  // Última venta marcada como recibida, para poder deshacerlo al momento.
+  const [marcada, setMarcada] = useState<FilaDocumentacion | null>(null);
+  useEffect(() => {
+    if (!marcada) return;
+    const t = setTimeout(() => setMarcada(null), 12_000);
+    return () => clearTimeout(t);
+  }, [marcada]);
+  const alMarcar = (f: FilaDocumentacion, recibido: boolean) => setMarcada(recibido ? f : null);
 
   const d = datos.data;
   const todas = useMemo(() => filasDe(d?.filas ?? []), [d]);
@@ -60,9 +68,10 @@ export function SeguimientoDocumentacion() {
   const delGrupo = (g: GrupoDocumentacion) => items.filter((i) => i.f.grupo === g);
   const subetapas = useMemo(() => {
     const m = new Map<string, number>();
-    for (const i of items) if (i.f.grupo === grupo) m.set(i.f.subetapa ?? "", (m.get(i.f.subetapa ?? "") ?? 0) + 1);
+    const base = filtro === RECIBIDO ? todas.filter((i) => i.f.recibido) : items;
+    for (const i of base) if (i.f.grupo === grupo) m.set(i.f.subetapa ?? "", (m.get(i.f.subetapa ?? "") ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [items, grupo]);
+  }, [todas, items, grupo, filtro]);
   const lista = useMemo(() => {
     const t = buscar.trim().toLowerCase();
     return (filtro === RECIBIDO ? todas.filter((i) => i.f.recibido) : items).filter((i) => {
@@ -141,7 +150,16 @@ export function SeguimientoDocumentacion() {
             {GRUPOS_DOCUMENTACION.map((g) => (
               <Kpi key={g.id} label={g.label} valor={delGrupo(g.id).length} pie={`${pct(delGrupo(g.id).length, total)} de ${fmtInt.format(total)} ventas en la cola`} />
             ))}
-            <Kpi label="Documento recibido" valor={recibidas} pie={`${pct(recibidas, todas.length)} de ${fmtInt.format(todas.length)} ventas`} />
+            <Kpi
+              label="Documento recibido"
+              valor={recibidas}
+              pie={`${pct(recibidas, todas.length)} de ${fmtInt.format(todas.length)} ventas`}
+              activo={filtro === RECIBIDO}
+              onClick={() => {
+                setFiltro(filtro === RECIBIDO ? "" : RECIBIDO);
+                setSubetapa("");
+              }}
+            />
             <Kpi label="Con gestión" valor={conGestion} pie={`${pct(conGestion, total)} de ${fmtInt.format(total)} ventas en la cola`} />
             <Kpi label="Sin llamadas después de la venta" valor={sinLlamadas} pie={`${pct(sinLlamadas, total)} de ${fmtInt.format(total)} ventas en la cola`} />
           </div>
@@ -204,24 +222,55 @@ export function SeguimientoDocumentacion() {
                 </button>
               ))}
             </div>
-            <Tabla grupo={grupo} lista={lista} onAbrir={setAbierto} puedeGestionar={puedeGestionar} />
+            <Tabla grupo={grupo} lista={lista} onAbrir={setAbierto} puedeGestionar={puedeGestionar} onRecibido={alMarcar} />
           </Card>
         </>
       )}
       {actual && d && (
-        <Gestion item={actual} puedeGestionar={puedeGestionar} puedeEliminar={Boolean(d.puedeEliminar)} onClose={() => setAbierto(null)} onSiguiente={siguiente} hayOtro={lista.findIndex((i) => i.key === abierto) < lista.length - 1} />
+        <Gestion item={actual} puedeGestionar={puedeGestionar} puedeEliminar={Boolean(d.puedeEliminar)} onClose={() => setAbierto(null)} onSiguiente={siguiente} hayOtro={lista.findIndex((i) => i.key === abierto) < lista.length - 1} onRecibido={alMarcar} />
       )}
+      {marcada && <Deshacer f={marcada} onListo={() => setMarcada(null)} />}
     </>
   );
 }
 
-function Kpi({ label, valor, pie }: { label: string; valor: number; pie: string }) {
-  return (
-    <Card>
+function Kpi({ label, valor, pie, activo, onClick }: { label: string; valor: number; pie: string; activo?: boolean; onClick?: () => void }) {
+  const cuerpo = (
+    <>
       <p className="text-[12.5px] text-ink-soft">{label}</p>
       <p className="mt-1 text-[26px] leading-tight font-semibold text-ink tabular-nums">{fmtInt.format(valor)}</p>
       <p className="mt-1 text-[12px] text-ink-faint">{pie}</p>
-    </Card>
+    </>
+  );
+  if (!onClick) return <Card>{cuerpo}</Card>;
+  return (
+    <button type="button" onClick={onClick} aria-pressed={activo} className={`rounded-[20px] text-left transition-shadow ${activo ? "ring-2 ring-brand-500" : "hover:ring-1 hover:ring-hair"}`}>
+      <Card>{cuerpo}</Card>
+    </button>
+  );
+}
+
+/** Aviso al marcar "documento recibido", con la opción de deshacerlo. */
+function Deshacer({ f, onListo }: { f: FilaDocumentacion; onListo: () => void }) {
+  const m = useRecibido();
+  return (
+    <div role="status" className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-full bg-slate-900 px-5 py-3 text-[13px] text-white shadow-lg dark:bg-slate-700">
+      <span>
+        NIU {f.niu} · documento recibido, fuera de la cola
+        {m.isError && <span className="ml-2 text-red-300">{m.error.message}</span>}
+      </span>
+      <button
+        type="button"
+        disabled={m.isPending}
+        onClick={() => m.mutate({ f, recibido: false }, { onSuccess: onListo })}
+        className="rounded-full px-2 py-0.5 font-semibold text-sky-300 hover:text-sky-200 disabled:opacity-50"
+      >
+        {m.isPending ? "Deshaciendo…" : "Deshacer"}
+      </button>
+      <button type="button" onClick={onListo} aria-label="Cerrar aviso" className="text-white/60 hover:text-white">
+        <X className="size-4" aria-hidden />
+      </button>
+    </div>
   );
 }
 
@@ -237,7 +286,7 @@ function useRecibido() {
   });
 }
 
-function CheckRecibido({ f, disabled }: { f: FilaDocumentacion; disabled?: boolean }) {
+function CheckRecibido({ f, disabled, onCambio }: { f: FilaDocumentacion; disabled?: boolean; onCambio?: (f: FilaDocumentacion, recibido: boolean) => void }) {
   const m = useRecibido();
   return (
     <input
@@ -246,7 +295,10 @@ function CheckRecibido({ f, disabled }: { f: FilaDocumentacion; disabled?: boole
       disabled={disabled || m.isPending}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
-      onChange={(e) => m.mutate({ f, recibido: e.target.checked })}
+      onChange={(e) => {
+        const recibido = e.target.checked;
+        m.mutate({ f, recibido }, { onSuccess: () => onCambio?.(f, recibido) });
+      }}
       aria-label={`Documento recibido de NIU ${f.niu}`}
       title={m.isError ? m.error.message : f.recibido ? `Recibido · ${fechaHora(f.recibido.fecha)} · ${f.recibido.por}` : "Marcar documento recibido"}
       className="size-4 cursor-pointer accent-[var(--color-brand-500,#2563eb)] disabled:cursor-default disabled:opacity-50"
@@ -254,7 +306,19 @@ function CheckRecibido({ f, disabled }: { f: FilaDocumentacion; disabled?: boole
   );
 }
 
-function Tabla({ grupo, lista, onAbrir, puedeGestionar }: { grupo: GrupoDocumentacion; lista: Item[]; onAbrir: (k: string) => void; puedeGestionar: boolean }) {
+function Tabla({
+  grupo,
+  lista,
+  onAbrir,
+  puedeGestionar,
+  onRecibido,
+}: {
+  grupo: GrupoDocumentacion;
+  lista: Item[];
+  onAbrir: (k: string) => void;
+  puedeGestionar: boolean;
+  onRecibido: (f: FilaDocumentacion, recibido: boolean) => void;
+}) {
   if (!lista.length) return <p className="p-6 text-sm text-ink-soft">No hay ventas con este filtro.</p>;
   const cols: { label: string; cell: (i: Item) => string | number }[] = [
     { label: "NIU", cell: (i) => i.f.niu },
@@ -298,7 +362,7 @@ function Tabla({ grupo, lista, onAbrir, puedeGestionar }: { grupo: GrupoDocument
               className="cursor-pointer border-b border-hair outline-none last:border-0 hover:bg-paper/60 focus-visible:bg-paper dark:hover:bg-slate-800/40"
             >
               <td className="py-2.5 pl-5 text-center" onClick={(e) => e.stopPropagation()}>
-                <CheckRecibido f={i.f} disabled={!puedeGestionar} />
+                <CheckRecibido f={i.f} disabled={!puedeGestionar} onCambio={onRecibido} />
               </td>
               {cols.map((c, j) => {
                 const v = c.cell(i);
@@ -346,6 +410,7 @@ function Gestion({
   onClose,
   onSiguiente,
   hayOtro,
+  onRecibido,
 }: {
   item: Item;
   puedeGestionar: boolean;
@@ -353,6 +418,7 @@ function Gestion({
   onClose: () => void;
   onSiguiente: () => void;
   hayOtro: boolean;
+  onRecibido: (f: FilaDocumentacion, recibido: boolean) => void;
 }) {
   const qc = useQueryClient();
   const f = item.f;
@@ -453,7 +519,7 @@ function Gestion({
           )}
 
           <label className={`mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3 ${f.recibido ? "border-emerald-500/40 bg-emerald-500/5" : "border-hair"}`}>
-            <CheckRecibido f={f} disabled={!puedeGestionar} />
+            <CheckRecibido f={f} disabled={!puedeGestionar} onCambio={onRecibido} />
             <span className="text-[13.5px] text-ink">
               Documento recibido
               {f.recibido && (
