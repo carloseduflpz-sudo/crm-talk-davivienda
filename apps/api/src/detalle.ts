@@ -4,7 +4,7 @@
    los archivos VIGENTES del mes. */
 import { isCampaignCode } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
-import { contactFrom, parseExtra } from "./clientes";
+import { comentariosDe, contactFrom, motivoEsComentario, parseExtra } from "./clientes";
 import { HttpError, json, type Router } from "./http";
 
 interface Source {
@@ -99,7 +99,13 @@ export function registerDetalle(r: Router): void {
       .bind(campaign, mes, src.kind)
       .all<{ id: string }>();
     // Datos para dar seguimiento: nombre y teléfono junto al NIU; DUI y correo al final.
-    const [first, ...rest] = src.columns.map(([key, label]) => ({ key, label }));
+    // Ventas: el motivo y los comentarios de la sábana de cada campaña (en CDC, Seguros y DOMI el motivo es la columna COMENTARIOS).
+    const conComentarios = src.table === "bank_sales" && ["tdc", "upin"].includes(campaign);
+    const [first, ...rest] = src.columns.flatMap(([key, label]) => {
+      if (key !== "reason") return [{ key, label }];
+      const motivo = { key, label: motivoEsComentario(campaign) ? "Comentarios" : label };
+      return conComentarios ? [motivo, { key: "comentarios", label: "Comentarios" }] : [motivo];
+    });
     const columns = [first!, { key: "cliente", label: "Cliente" }, { key: "telefono", label: "Teléfono" }, ...rest, { key: "dui", label: "DUI" }, { key: "correo", label: "Correo" }];
     if (!ups.length) return json({ ok: true, total: 0, rows: [], columns });
 
@@ -179,8 +185,9 @@ export function registerDetalle(r: Router): void {
       env.DB.prepare(`SELECT ${src.columns.map(([k]) => k).join(", ")}, extra AS __extra, ${baseExtra} AS __base FROM ${src.table} WHERE ${w} ORDER BY ${src.order} LIMIT ?`).bind(...binds, limit),
     ]);
     const out = (rows!.results as Record<string, unknown>[]).map(({ __extra, __base, ...r }) => {
-      const k = contactFrom(parseExtra(__extra), parseExtra(__base));
-      return { ...r, cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
+      const extra = parseExtra(__extra);
+      const k = contactFrom(extra, parseExtra(__base));
+      return { ...r, ...(conComentarios ? { comentarios: comentariosDe(campaign, extra) } : {}), cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
     });
     return json({ ok: true, total: Number((count!.results[0] as { n: number } | undefined)?.n ?? 0), rows: out, columns });
   });

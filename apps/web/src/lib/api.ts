@@ -111,7 +111,7 @@ export interface ClientFile {
     campaign: string;
     /** Sábana vigente más reciente de la campaña: con ella está al día la ficha. */
     sabana: { month: string; cargada: number } | null;
-    ventas: { month: string; fecha: string | null; agente: string; estatus: string | null; clase: string; motivo: string | null; monto: number | null; proceso: string | null; dias: number | null; extra: Record<string, string | number> }[];
+    ventas: { month: string; fecha: string | null; agente: string; estatus: string | null; clase: string; motivo: string | null; comentarios: string | null; motivoEsComentario: boolean; monto: number | null; proceso: string | null; dias: number | null; extra: Record<string, string | number> }[];
     bases: { month: string; dataset: string; perfil: string | null; oferta: string | null; adicional: boolean; nombreBase: string | null; extra: Record<string, string | number> }[];
     llamadas: { month: string; fecha: string | null; agente: string; categoria: string | null; tipologia: string | null; clase: string }[];
     crm: { month: string; fecha: string | null; agente: string; producto: string | null; extra: Record<string, string | number> }[];

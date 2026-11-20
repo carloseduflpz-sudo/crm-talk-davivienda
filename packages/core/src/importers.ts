@@ -399,7 +399,14 @@ export const PROFILES: Record<string, Profile> = {
     ],
     fields: {
       Fecha: ["FECHA", "iso"], Nombre: ["NOMBRE DE CLIENTE"], Ejecutivo: ["EJECUTIVO"],
-      Limite: ["LIMITE A OTORGAR", "num"], Status: ["STATUS TALK AMERICA", "upper"], Base: ["BASE"], Comentarios: ["COMENTARIOS"],
+      Limite: ["LIMITE A OTORGAR", "num"], Status: ["STATUS TALK AMERICA", "upper"], Base: ["BASE"],
+      // La sábana de UPIN no trae COMENTARIOS: el motivo es "MOTIVO PENDIENTE/ RECHAZO" y los
+      // comentarios, "MOTIVO DEVOLUCION COMENTARIO GENERAL".
+      Motivo: ["MOTIVO PENDIENTE/ RECHAZO", "str"], Comentarios: ["MOTIVO DEVOLUCION COMENTARIO GENERAL", "str"],
+    },
+    // Las celdas en cero (se ven como 0 o 00:00:00) son celdas vacías.
+    transform: (rec) => {
+      for (const k of ["Motivo", "Comentarios"]) if (/^\s*0*(:00)*\s*$|^\s*0?0:00:00\s*$/.test(String(rec[k] ?? ""))) rec[k] = null;
     },
     monthField: "Fecha",
   },
@@ -941,7 +948,7 @@ const SALE_MAP: Record<CampaignCode, SaleMap> = {
   extrafin: { status: "Etapa", date: "Fecha", executive: "Ejecutivo", reason: "Motivo", days: "Dias", amount: "Monto", process: "Proceso" },
   // reason: el comentario de por qué se rechazó (Motivos de rechazo).
   cdc: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Monto", reason: "Comentarios" },
-  upin: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Limite", process: "Proceso", reason: "Comentarios" },
+  upin: { status: "Status", date: "Fecha", executive: "Ejecutivo", amount: "Limite", process: "Proceso", reason: "Motivo" },
   seguros: { status: "Status", date: "Fecha", executive: "Ejecutivo", reason: "Comentarios" },
   domi: { status: "Status", date: "Fecha", dateDMY: true, executive: "Usuario", reason: "Comentarios" },
 };

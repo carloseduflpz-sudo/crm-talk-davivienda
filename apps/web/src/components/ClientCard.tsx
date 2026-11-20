@@ -126,7 +126,16 @@ function Campaign({ c, multi }: { c: ClientFile["campanas"][number]; multi: bool
                       ))}
                     </ol>
                   )}
-                  {v.motivo && <p className="mt-3 text-[13px] text-[var(--st-critical)]">Motivo: {v.motivo}</p>}
+                  {v.motivo && (
+                    <p className={`mt-3 text-[13px] ${v.clase === "rechazado" ? "text-[var(--st-critical)]" : "text-ink"}`}>
+                      <span className="text-ink-soft">{v.motivoEsComentario ? "Comentarios" : "Motivo"}:</span> {v.motivo}
+                    </p>
+                  )}
+                  {v.comentarios && (
+                    <p className="mt-1.5 text-[13px] text-ink">
+                      <span className="text-ink-soft">Comentarios:</span> {v.comentarios}
+                    </p>
+                  )}
                   {v.dias !== null && <p className="mt-1 text-[12.5px] text-ink-soft">{fmtInt.format(v.dias)} días en proceso</p>}
                   <div className="mt-4 border-t border-hair pt-4">
                     <Fields data={v.extra} />

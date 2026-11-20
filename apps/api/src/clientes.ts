@@ -8,6 +8,34 @@ import { HttpError, json, type Router } from "./http";
 
 type Extra = Record<string, unknown>;
 
+/* Comentarios de la sábana de cada campaña. El motivo va aparte (columna reason):
+   TDC = RECHAZO HOMOLOGADO, UPIN = MOTIVO PENDIENTE/ RECHAZO, Extrafinanciamiento = MOTIVO.
+   En CDC, Seguros y DOMI la columna que se guarda como motivo es COMENTARIOS. */
+const COLUMNAS_COMENTARIO: Partial<Record<string, string[]>> = {
+  tdc: ["MOTIVO DEVOLUCION/OBSERVACIONES EXTRARREQUISITO/COMENTARIO GENERAL", "DETALLE DE LA DEVOLUCIÓN"],
+  upin: ["Comentarios"],
+};
+export const motivoEsComentario = (campaign: string): boolean => campaign === "cdc" || campaign === "seguros" || campaign === "domi";
+const claveComentario = (k: string) =>
+  k
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+export function comentariosDe(campaign: string, extra: Record<string, unknown>): string | null {
+  const cols = COLUMNAS_COMENTARIO[campaign];
+  if (!cols) return null;
+  const idx = new Map(Object.keys(extra).map((k) => [claveComentario(k), k]));
+  const out: string[] = [];
+  for (const c of cols) {
+    const k = idx.get(claveComentario(c));
+    const v = k === undefined ? "" : String(extra[k] ?? "").trim();
+    if (v && !/^0?0:00:00$|^0$/.test(v) && !out.includes(v)) out.push(v);
+  }
+  return out.length ? out.join(" · ") : null;
+}
+
 export function parseExtra(v: unknown): Extra {
   if (typeof v !== "string" || !v) return {};
   try {
@@ -315,6 +343,8 @@ async function clientInCampaign(env: Env, campaign: string, niu: string) {
       estatus: x.status_raw,
       clase: x.status_class,
       motivo: x.reason,
+      comentarios: comentariosDe(campaign, parseExtra(x.extra)),
+      motivoEsComentario: motivoEsComentario(campaign),
       monto: x.amount,
       proceso: x.process,
       dias: x.days_in_process,
