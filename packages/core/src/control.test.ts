@@ -92,7 +92,7 @@ describe("Excel de control", () => {
   });
 
   it("la presentación toma del Excel la M, la R y el contacto; lo demás sigue siendo de la app", () => {
-    const d = aplicarControl({ tdc }, ctrl).tdc!;
+    const d = aplicarControl({ tdc: { ...tdc, diasHabiles: { transcurridos: 15, total: 22 } } }, ctrl).tdc!;
     expect(d).toMatchObject({ meta: 253, hc: 7, esperado: 172.5, resultado: 69, diasHabiles: { transcurridos: 15, total: 22 } });
     expect(d.contactoExcel).toEqual({ "*": [{ label: "No contacto", n: 6 }, { label: "Sin Tipificar", n: 4 }] });
     // Recorridos de cada base: de la hoja de esa base (1CTS); la hoja general no se reparte entre dos bases.
@@ -106,7 +106,7 @@ describe("Excel de control", () => {
     expect(cuadrarControl(ctrl, { tdc: d }).find((x) => x.dato === "Meta MTD")!.cuadra).toBe(true);
   });
 
-  it("si el Excel es de la semana pasada (la sábana va 3+ días hábiles adelante), M, R y contacto salen de lo cargado y se avisa", () => {
+  it("si la sábana va más días hábiles adelante que el Excel, M, R y contacto salen de lo cargado y se avisa", () => {
     const nuevo = { ...tdc, diasHabiles: { transcurridos: 20, total: 22 }, esperado: 230, resultado: 140 };
     const d = aplicarControl({ tdc: nuevo }, ctrl).tdc!;
     // La meta del mes y el HC siguen siendo los del Excel; la M es esa meta a los 20 días que lleva la sábana.
@@ -114,7 +114,12 @@ describe("Excel de control", () => {
     expect(d.esperado!).toBeCloseTo((253 / 22) * 20, 6);
     expect(d.contactoExcel).toBe(nuevo.contactoExcel);
     expect(d.avisoExcel).toContain("día hábil 15");
-    // 1 día de diferencia (16 contra 15) es normal: se respeta el Excel.
-    expect(aplicarControl({ tdc }, ctrl).tdc!.avisoExcel).toBe(undefined);
+    // Con 1 día de diferencia (16 contra 15) también: el MTD va a los días de la sábana.
+    const unDia = aplicarControl({ tdc }, ctrl).tdc!;
+    expect(unDia.diasHabiles.transcurridos).toBe(16);
+    expect(unDia.esperado!).toBeCloseTo((253 / 22) * 16, 6);
+    expect(unDia.avisoExcel).toContain("día hábil 15");
+    // Al mismo día, se respeta el Excel.
+    expect(aplicarControl({ tdc: { ...tdc, diasHabiles: { transcurridos: 15, total: 22 } } }, ctrl).tdc!.avisoExcel).toBe(undefined);
   });
 });

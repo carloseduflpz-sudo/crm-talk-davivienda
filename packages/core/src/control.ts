@@ -249,8 +249,8 @@ function hojaPrincipal(ctrl: ControlExcel, code: CampaignCode): ControlHoja | un
  * de contacto. Con la M y la R salen también el cumplimiento y la fila del trimestre del gap; el HC del Excel
  * reparte la M entre los agentes. Todo lo demás sigue saliendo de la sábana, las bases y las tipificaciones.
  */
-/** Días hábiles de atraso desde los que el Excel de las gráficas se considera de otra semana. */
-export const EXCEL_ATRASADO = 3;
+/** Días hábiles de atraso desde los que el Excel de las gráficas ya no está al día con la sábana. */
+export const EXCEL_ATRASADO = 1;
 
 export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos {
   const out: PresDatos = {};
@@ -263,10 +263,9 @@ export function aplicarControl(datos: PresDatos, ctrl: ControlExcel): PresDatos 
     }
     const meta = c?.meta ?? d.meta;
     const hc = c?.hc ?? d.hc;
-    /* ¿El Excel está al día? Si la sábana ya va 3 o más días hábiles adelante del Excel (el Excel es de la semana
-       pasada), su M, su R y su contacto ya no son los de hoy: se calculan con lo cargado y se avisa. Una diferencia de
-       1 o 2 días es normal (cómo se cuenta el día del corte) y se respeta el Excel. La meta del mes y el HC sí se
-       toman del Excel (no cambian en la semana). */
+    /* ¿El Excel está al día? Si la sábana ya va más días hábiles adelante que el Excel, su M, su R y su contacto
+       ya no son los de hoy: el MTD se mide a los días que lleva la sábana, con lo cargado, y se avisa. La meta del
+       mes y el HC sí se toman del Excel (no cambian en el mes). */
     if (ctrl.diasMTD !== null && d.diasHabiles.transcurridos - ctrl.diasMTD >= EXCEL_ATRASADO) {
       const { total: t, transcurridos: tr } = d.diasHabiles;
       const esperado = meta !== null && t ? (meta / t) * tr : d.esperado;
