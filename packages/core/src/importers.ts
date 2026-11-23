@@ -8,6 +8,7 @@
    Tipos de archivo: base · sabana · tipif (VICI) · ventas (CRM TALK)
    ================================================================== */
 import { getCampaign, type CampaignCode, type UploadKind } from "./campaigns";
+import { corregirSubtipologia } from "./tipologias";
 
 /* ---------- lo mínimo de SheetJS que se usa (se inyecta, no se importa) ---------- */
 export interface WorkBookLike {
@@ -195,6 +196,7 @@ const VICI: Profile = {
     if (!rec.Categoria) rec.Categoria = "Sin Tipificar";
     if (!rec.Tipologia) rec.Tipologia = "Sin Tipificar";
     if (!rec.Subtipologia) rec.Subtipologia = rec.Tipologia;
+    if (typeof rec.Subtipologia === "string") rec.Subtipologia = corregirSubtipologia(rec.Subtipologia);
   },
   // Una llamada sin NIU se conserva (cuenta para contactabilidad); sin fecha se descarta.
   keyField: "Fecha",

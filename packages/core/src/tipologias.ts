@@ -149,3 +149,25 @@ export const DEFAULT_TIPOLOGIAS: ReadonlyArray<readonly [CampaignCode, string, C
   ["upin", "Sin Asignar a un Agente", "sin_tipificar"],
   ["upin", "Sin Tipificar", "sin_tipificar"],
 ];
+
+/* ---------- Subtipologías de VICI: errores de escritura del marcador, corregidos al mostrarlas ---------- */
+
+/** [texto como viene de VICI, texto corregido]. */
+export const CORRECCIONES_SUBTIPOLOGIA: [string, string][] = [["banajan", "bajan"]];
+
+/** Corrige una subtipología de VICI ("Ingresos banajan del 25%" → "Ingresos bajan del 25%"). */
+export function corregirSubtipologia(v: string): string;
+export function corregirSubtipologia(v: string | null): string | null;
+export function corregirSubtipologia(v: string | null): string | null {
+  if (v == null) return v;
+  return CORRECCIONES_SUBTIPOLOGIA.reduce((s, [mal, bien]) => s.split(mal).join(bien), v);
+}
+
+/**
+ * SQL de la subtipología de una llamada (tabla calls): la de VICI ya corregida; sin ella, la tipificación.
+ * La corrección también va en SQL para que los datos ya cargados se vean y se filtren bien.
+ */
+export const SUBTIPOLOGIA_SQL = CORRECCIONES_SUBTIPOLOGIA.reduce(
+  (sql, [mal, bien]) => `REPLACE(${sql}, '${mal.replace(/'/g, "''")}', '${bien.replace(/'/g, "''")}')`,
+  "COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar')",
+);

@@ -1,6 +1,6 @@
 /* Presentación semanal: las cifras que lleva cada lámina, calculadas con los archivos vigentes del mes,
    y la plantilla (.pptx) guardada en R2 para que cada semana baste con darle "Descargar". */
-import { datasetsPrincipales, isCampaignCode, semanasDelMes, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
+import { SUBTIPOLOGIA_SQL, datasetsPrincipales, isCampaignCode, semanasDelMes, type CampaignCode, type PresBase, type PresentacionCampania, type PresMesGap, type PresVenta } from "@crm/core";
 import { analyzeCampaign } from "./analisis";
 import { audit } from "./audit";
 import type { Env } from "./env";
@@ -211,7 +211,7 @@ async function calcularPresentacion(env: Env, campaign: CampaignCode, mes: strin
     ? db
         .prepare(
             `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS t,
-                    COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS s, COUNT(*) AS n
+                    ${SUBTIPOLOGIA_SQL} AS s, COUNT(*) AS n
                FROM calls WHERE upload_id = ? AND call_class NOT IN ('no_contacto', 'venta') GROUP BY 1, 2`,
           )
           .bind(tipif.id)

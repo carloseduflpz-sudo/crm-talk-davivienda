@@ -2,13 +2,13 @@
    una tipificación, un día o un perfil, se listan los registros que lo forman.
    Solo filtros de una lista cerrada (nunca SQL armado con texto del usuario) y siempre sobre
    los archivos VIGENTES del mes. */
-import { isCampaignCode } from "@crm/core";
+import { SUBTIPOLOGIA_SQL, corregirSubtipologia, isCampaignCode } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
 import { comentariosDe, contactFrom, motivoEsComentario, parseExtra } from "./clientes";
 import { HttpError, json, type Router } from "./http";
 
-/** Subtipología de VICI (motivo de la tipificación); sin ella, la misma tipificación. */
-export const SUBTIPOLOGIA = "COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar')";
+/** Subtipología de VICI (motivo de la tipificación), corregida; sin ella, la misma tipificación. */
+export const SUBTIPOLOGIA = SUBTIPOLOGIA_SQL;
 
 interface Source {
   kind: string;
@@ -196,7 +196,7 @@ export function registerDetalle(r: Router): void {
       const k = contactFrom(extra, parseExtra(__base));
       return {
         ...r,
-        ...(src.table === "calls" ? { subtipologia: typeof extra.Subtipologia === "string" && extra.Subtipologia.trim() ? extra.Subtipologia.trim() : null } : {}),
+        ...(src.table === "calls" ? { subtipologia: typeof extra.Subtipologia === "string" && extra.Subtipologia.trim() ? corregirSubtipologia(extra.Subtipologia.trim()) : null } : {}),
         ...(conComentarios ? { comentarios: comentariosDe(campaign, extra) } : {}),
         cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
     });

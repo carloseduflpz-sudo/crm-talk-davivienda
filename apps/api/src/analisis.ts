@@ -20,6 +20,7 @@ import {
   type Count,
   type MonthSummary,
   type SaleClass,
+  SUBTIPOLOGIA_SQL,
 } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
@@ -29,8 +30,8 @@ import { leerOficial } from "./oficial";
 import type { Oficial } from "@crm/core";
 import { parteClave, Resultados } from "./resultados";
 
-/** Subtipología de VICI (el motivo de la tipificación); sin ella, la misma tipificación. */
-const SUBTIPOLOGIA = "COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar')";
+/** Subtipología de VICI (el motivo de la tipificación), corregida; sin ella, la misma tipificación. */
+const SUBTIPOLOGIA = SUBTIPOLOGIA_SQL;
 
 interface CurrentUpload {
   id: string;
