@@ -1377,6 +1377,8 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
             </ChartCard>
           </Pair>
 
+          {(l.motivosNegativo ?? []).length > 0 && <MotivosNegativo filas={l.motivosNegativo} open={open} />}
+
           <Pair>
             <ChartCard title="Primer contacto o seguimiento" note={undefined}>
               <ShareBar
@@ -1425,6 +1427,50 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
         l && <Aside>Sin consolidado de ventas del mes.</Aside>
       )}
     </Stack>
+  );
+}
+
+/** Contacto efectivo negativo: por qué no le interesa al cliente (tipificación → subtipología de VICI). */
+function MotivosNegativo({ filas, open }: { filas: Llamadas["motivosNegativo"]; open: Ctx["open"] }) {
+  const grupos = [...new Set(filas.map((f) => f.tipologia))]
+    .map((t) => {
+      const subs = filas.filter((f) => f.tipologia === t);
+      return { tipologia: t, subs, llamadas: subs.reduce((a, f) => a + f.llamadas, 0), clientes: subs.reduce((a, f) => a + f.clientes, 0) };
+    })
+    .sort((a, b) => b.clientes - a.clientes);
+  const [tip, setTip] = useState(grupos[0]!.tipologia);
+  const g = grupos.find((x) => x.tipologia === tip) ?? grupos[0]!;
+  const totalClientes = grupos.reduce((a, x) => a + x.clientes, 0);
+  return (
+    <ChartCard
+      title="Motivos del contacto efectivo negativo"
+      note={`Subtipología de VICI por tipificación. Clientes distintos y llamadas del mes. ${g.tipologia}: ${fmtInt.format(g.clientes)} ${g.clientes === 1 ? "cliente" : "clientes"} (${fmtPct(share(g.clientes, totalClientes))} del negativo), ${fmtInt.format(g.llamadas)} llamadas.`}
+    >
+      {grupos.length > 1 && (
+        <div className="mb-6 flex flex-wrap gap-2" role="group" aria-label="Tipificación">
+          {grupos.map((x) => (
+            <button
+              key={x.tipologia}
+              type="button"
+              aria-pressed={x.tipologia === g.tipologia}
+              onClick={() => setTip(x.tipologia)}
+              className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${x.tipologia === g.tipologia ? "border-brand-500 bg-brand-500/10 font-medium text-brand-600" : "border-hair text-ink-soft hover:text-ink"}`}
+            >
+              {x.tipologia} <span className="tabular-nums">{fmtInt.format(x.clientes)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <BarList
+        rows={g.subs
+          .slice()
+          .sort((a, b) => b.clientes - a.clientes)
+          .map((f) => ({ label: f.subtipologia, value: f.clientes, note: `${fmtPct(share(f.clientes, g.clientes))} · ${fmtInt.format(f.llamadas)} ${f.llamadas === 1 ? "llamada" : "llamadas"}`, color: "var(--viz-2)" }))}
+        total={g.clientes}
+        max={12}
+        onSelect={(r) => open({ fuente: "llamadas", title: `${g.tipologia}: ${lower(r.label)}`, filters: { tipologia: g.tipologia, subtipologia: r.label } })}
+      />
+    </ChartCard>
   );
 }
 

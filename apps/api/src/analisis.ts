@@ -29,6 +29,9 @@ import { leerOficial } from "./oficial";
 import type { Oficial } from "@crm/core";
 import { parteClave, Resultados } from "./resultados";
 
+/** Subtipología de VICI (el motivo de la tipificación); sin ella, la misma tipificación. */
+const SUBTIPOLOGIA = "COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar')";
+
 interface CurrentUpload {
   id: string;
   dataset: string;
@@ -678,7 +681,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
   const llamadasP = (async () => {
     if (tipif) {
       const id = tipif.id;
-      const [clases, unicos, agentes, tipologias, dias, intentos, estructura, ventasSeq] = await db.batch([
+      const [clases, unicos, agentes, tipologias, dias, intentos, estructura, ventasSeq, motivos] = await db.batch([
         db.prepare(`SELECT call_class AS label, COUNT(*) AS n FROM calls WHERE upload_id = ?${fl("")} GROUP BY call_class ORDER BY n DESC`).bind(id, ...fb),
         db.prepare(`SELECT COUNT(DISTINCT niu) AS n, COUNT(DISTINCT CASE WHEN call_class = 'venta' THEN niu END) AS ventas FROM calls WHERE upload_id = ?${fl("")} AND niu <> ''`).bind(id, ...fb),
         db
@@ -720,6 +723,14 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
                ) WHERE call_class = 'venta' GROUP BY niu)`,
           )
           .bind(id, ...fb),
+        // Motivos del contacto efectivo negativo (no le interesa, mal servicio...): tipificación → subtipología,
+        // en llamadas y en clientes distintos.
+        db
+          .prepare(
+            `SELECT COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS t, ${SUBTIPOLOGIA} AS s, COUNT(*) AS n, COUNT(DISTINCT NULLIF(niu, '')) AS clientes
+               FROM calls WHERE upload_id = ?${fl("")} AND call_class = 'negativo' GROUP BY 1, 2 ORDER BY n DESC LIMIT 300`,
+          )
+          .bind(id, ...fb),
       ]);
       const clasesRows = (clases!.results as { label: string; n: number }[]).map((r) => ({ label: r.label, value: n(r.n) }));
       const total = clasesRows.reduce((s, r) => s + r.value, 0);
@@ -746,6 +757,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
           contactabilidad: pct(n(r.efectivos), n(r.llamadas)),
         })),
         tipologias: (tipologias!.results as { label: string; c: string; n: number }[]).map((r) => ({ label: r.label, class: r.c, value: n(r.n) })),
+        motivosNegativo: (motivos!.results as { t: string; s: string; n: number; clientes: number }[]).map((r) => ({ tipologia: r.t, subtipologia: r.s, llamadas: n(r.n), clientes: n(r.clientes) })),
         porDia: (dias!.results as { d: string; llamadas: number; efectivos: number }[]).map((r) => ({ date: r.d, llamadas: n(r.llamadas), efectivos: n(r.efectivos) })),
         intentos: (intentos!.results as { intentos: string; clientes: number }[]).map((r) => ({ intentos: r.intentos, clientes: n(r.clientes) })),
         primerContacto: n(est?.primeros),

@@ -242,12 +242,15 @@ const CONSOLIDADO: Record<CampaignCode, Profile> = {
     },
   }),
   upin: consolidado({
-    label: "Consolidado de ventas UPIN (anexos)",
-    sheets: ["VENTAS INCREMENTOS", "VENTAS UPGRADE"],
-    required: ["NIU", "FECHA", "Tarjeta que solicita", "Condiciones que requiere"],
+    // CONSOLIDADO GENERAL INCREMENTO y CONSOLIDADO GENERAL UPGRADE (hoja AÑO 2026 y las de campañas especiales).
+    // También lee los anexos diarios (VENTAS INCREMENTOS / VENTAS UPGRADE), que no traen ejecutivo.
+    label: "Consolidado de ventas UPIN (Incremento y Upgrade)",
+    sheets: ["AÑO 2026", "VENTAS INCREMENTOS", "VENTAS UPGRADE"],
+    required: ["NIU", "FECHA", ["CONDICION", "Condiciones que requiere"]],
     fields: {
-      NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: [["EJECUTIVO", "AGENTE", "OPERADOR"]], Nombre: ["Nombre del solicitante"],
-      Producto: ["Tarjeta que solicita"], Proceso: ["Condiciones que requiere"], Limite: ["LIMITE", "num"], Canal: ["CANAL"],
+      NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: [["EJECUTIVO", "AGENTE", "OPERADOR"]], Nombre: [["NOMBRE DE CLIENTE", "Nombre del solicitante"]],
+      Producto: [["TDC QUE SOLICITA", "Tarjeta que solicita"]], Proceso: [["CONDICION", "Condiciones que requiere"]], Limite: [["LIMITE A OTORGAR", "LIMITE"], "num"],
+      Base: ["BASE"], Documentacion: ["DOCUMENTO"], Canal: ["CANAL"],
     },
   }),
   seguros: consolidado({

@@ -7,6 +7,9 @@ import { loadAgentNaming } from "./agentes";
 import { comentariosDe, contactFrom, motivoEsComentario, parseExtra } from "./clientes";
 import { HttpError, json, type Router } from "./http";
 
+/** Subtipología de VICI (motivo de la tipificación); sin ella, la misma tipificación. */
+export const SUBTIPOLOGIA = "COALESCE(NULLIF(TRIM(json_extract(extra, '$.Subtipologia')), ''), NULLIF(TRIM(tipologia), ''), 'Sin Tipificar')";
+
 interface Source {
   kind: string;
   table: string;
@@ -102,6 +105,8 @@ export function registerDetalle(r: Router): void {
     // Ventas: el motivo y los comentarios de la sábana de cada campaña (en CDC, Seguros y DOMI el motivo es la columna COMENTARIOS).
     const conComentarios = src.table === "bank_sales" && ["tdc", "upin"].includes(campaign);
     const [first, ...rest] = src.columns.flatMap(([key, label]) => {
+      // Llamadas: la subtipología de VICI (el motivo, p. ej. por qué no le interesa) junto a la tipificación.
+      if (key === "tipologia") return [{ key, label }, { key: "subtipologia", label: "Subtipología" }];
       if (key !== "reason") return [{ key, label }];
       const motivo = { key, label: motivoEsComentario(campaign) ? "Comentarios" : label };
       return conComentarios ? [motivo, { key: "comentarios", label: "Comentarios" }] : [motivo];
@@ -154,6 +159,8 @@ export function registerDetalle(r: Router): void {
       if (clase) add("call_class = ?", clase);
       const tip = text("tipologia");
       if (tip) add("COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') = ?", tip);
+      const sub = text("subtipologia");
+      if (sub) add(`${SUBTIPOLOGIA} = ?`, sub);
     }
     if (src.table === "base_records") {
       // Una carga de base en particular (la original o una adicional).
@@ -187,7 +194,11 @@ export function registerDetalle(r: Router): void {
     const out = (rows!.results as Record<string, unknown>[]).map(({ __extra, __base, ...r }) => {
       const extra = parseExtra(__extra);
       const k = contactFrom(extra, parseExtra(__base));
-      return { ...r, ...(conComentarios ? { comentarios: comentariosDe(campaign, extra) } : {}), cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
+      return {
+        ...r,
+        ...(src.table === "calls" ? { subtipologia: typeof extra.Subtipologia === "string" && extra.Subtipologia.trim() ? extra.Subtipologia.trim() : null } : {}),
+        ...(conComentarios ? { comentarios: comentariosDe(campaign, extra) } : {}),
+        cliente: k.nombre, telefono: k.telefono, dui: k.dui, correo: k.correo };
     });
     return json({ ok: true, total: Number((count!.results[0] as { n: number } | undefined)?.n ?? 0), rows: out, columns });
   });

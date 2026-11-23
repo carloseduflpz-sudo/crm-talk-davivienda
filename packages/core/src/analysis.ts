@@ -207,6 +207,8 @@ export interface CampaignAnalysis {
     porClase: Count[];
     porAgente: CallAgentRow[];
     tipologias: (Count & { class: string })[];
+    /** Contacto efectivo negativo por tipificación y subtipología (el motivo): llamadas y clientes distintos. */
+    motivosNegativo: { tipologia: string; subtipologia: string; llamadas: number; clientes: number }[];
     porDia: { date: string; llamadas: number; efectivos: number }[];
     intentos: { intentos: string; clientes: number }[];
     primerContacto: number;
