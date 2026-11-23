@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { XLSX, workbookBytes } from "../test/libros";
 import { CAMPAIGNS } from "./campaigns";
 import { WorkbookReader, detectDatasets, dominantMonth, normalizeRow, parseWorkbook } from "./importers";
-import { chunkEnds, onlyMonth, peekWorkbook, readDataset, readDatasetAsync, rowMonth, rowsByMonth, type XLSXReader } from "./lectura";
+import { chunkEnds, diasTranscurridosResumen, onlyMonth, peekWorkbook, readDataset, readDatasetAsync, rowMonth, rowsByMonth, type XLSXReader } from "./lectura";
 
 const X = XLSX as unknown as XLSXReader;
 
@@ -254,3 +254,25 @@ describe("TDC: base de primeras vs. segundas cuentas", () => {
   });
 });
 
+
+describe("diasTranscurridosResumen", () => {
+  const XLSXfalso = { utils: { sheet_to_json: () => [] } } as never;
+  const lector = (resumen: unknown[][]) =>
+    WorkbookReader.desdeFilas(["RESUMEN", "TALK AMERICAS"], new Map([["RESUMEN", resumen], ["TALK AMERICAS", []]]), XLSXfalso);
+  it("lee los días transcurridos de la hoja RESUMEN del banco", () => {
+    expect(
+      diasTranscurridosResumen(
+        lector([
+          ["REPORTE DOMICILIACIONES (TALK AMERICAS)", null, "INICIO"],
+          [null, null, "META DIA", "REAL"],
+          ["Días laborales del mes", 20, 474.7, 148],
+          ["Días transcurridos", 13],
+        ]),
+      ),
+    ).toBe(13);
+  });
+  it("sin hoja RESUMEN o sin el dato, no hay corte del banco", () => {
+    expect(diasTranscurridosResumen(lector([["COSECHA", null, "TUBERIA"]]))).toBe(null);
+    expect(diasTranscurridosResumen(WorkbookReader.desdeFilas(["BASE"], new Map([["BASE", []]]), XLSXfalso))).toBe(null);
+  });
+});

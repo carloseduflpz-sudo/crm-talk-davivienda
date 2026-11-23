@@ -3,7 +3,7 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { GOAL_UNIT, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type SaleClass } from "@crm/core";
+import { GOAL_UNIT, businessDays, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type SaleClass } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Columns2, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -45,7 +45,7 @@ export const CAMPAIGN_TABS = [
   { slug: "ventas", label: "Ventas", icon: TrendingUp, needs: "sabana", about: "Evaluadas, pendientes, estatus del banco, rechazo por motivo, ejecutivos y comparativo mensual." },
   { slug: "base", label: "Base", icon: Database, needs: "base", about: "Clientes de la base, perfiles y penetración contra la sábana." },
   { slug: "efectividad", label: "Efectividad", icon: BarChart3, needs: "tipif", about: "Contactabilidad, registros y penetración, general y por agente." },
-  { slug: "llamadas", label: "Llamadas", icon: PhoneCall, needs: "tipif", about: "Tipificaciones, intentos por cliente y ventas capturadas en el CRM." },
+  { slug: "llamadas", label: "Llamadas", icon: PhoneCall, needs: "tipif", about: "Tipificaciones, intentos por cliente y ventas reportadas al banco (consolidado)." },
   { slug: "cumplimiento", label: "Cumplimiento", icon: Target, needs: "sabana", about: "Meta, avance, ritmo, proyección y gap por agente." },
   { slug: "historico", label: "Histórico", icon: History, needs: "sabana", about: "Mes a mes: ventas, base, contactabilidad, penetración y cumplimiento." },
   { slug: "comparativo", label: "Comparativo", icon: Columns2, needs: "sabana", about: "Mes contra mes al mismo corte de días." },
@@ -322,33 +322,7 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
         <TablaDesglose etapas={etapasDe(["en_proceso"])} vacio="Sin ventas pendientes." />
       </ChartCard>
 
-      <ChartCard
-        title={money ? "Monto por día" : "Ventas por día"}
-        note={cosechaTxt ? "Por fecha de venta, sin cosecha" : "Por fecha de venta"}
-      >
-        <AreaChart
-          seriesLabel={money ? "Monto" : "Ventas"}
-          unit={money ? "monto" : "ventas"}
-          format={money ? fmtMoney : undefined}
-          tickPrefix={money ? "$" : ""}
-          compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
-          data={days.map((d) => ({
-            key: d.date,
-            day: dayNum(d.date),
-            label: String(dayNum(d.date)),
-            title: dayLabel(d.date),
-            value: money ? d.monto : d.ventas,
-            extra: money
-              ? [
-                  { label: "aprobado", value: fmtMoney(d.montoAprobado) },
-                  { label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) },
-                ]
-              : [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }],
-          }))}
-          onOpenDay={(d) => open({ fuente: "ventas", title: `Ventas del ${d.title}`, filters: { dia: d.key } })}
-          onOpenRange={(f, t) => open({ fuente: "ventas", title: `Ventas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
-        />
-      </ChartCard>
+      <VentasPorDia a={a} prev={prev} open={open} money={money} sinCosecha={Boolean(cosechaTxt)} />
 
       <Pair>
         <ChartCard title="Estatus del banco" note="Según la sábana del banco">
@@ -479,7 +453,146 @@ function VentasTab({ a, prev, open, setAgent, setMonth, desglosar }: Ctx) {
   );
 }
 
-/** Pendiente de actualización en sábana: ventas procesadas en TL (ya reportadas al banco) que la sábana aún no trae. */
+/** Pendiente de actualización en sábana: ventas del consolidado (ya reportadas al banco) que la sábana aún no trae. */
+/**
+ * Ventas por día. Por defecto, las del consolidado de ventas reportadas al banco, por fecha de venta: van al
+ * día, sin esperar a la sábana, y con ellas el ritmo y la proyección al cierre. La vista de la sábana sigue disponible.
+ */
+function VentasPorDia({ a, prev, open, money, sinCosecha }: Pick<Ctx, "a" | "prev" | "open"> & { money: boolean; sinCosecha: boolean }) {
+  const crmDias = (a.crm?.porDia ?? []).filter((d) => d.date.startsWith(a.month!));
+  const [vista, setVista] = useState<"crm" | "sabana">("crm");
+  const deCrm = vista === "crm" && crmDias.length > 0;
+  const v = a.ventas!;
+  const p = prev?.ventas;
+  const valor = (d: { ventas: number; monto: number }) => (money ? d.monto : d.ventas);
+
+  // Ritmo y proyección de las ingresadas: días hábiles del mes (los de la meta) hasta el último día con ingresos.
+  const c = a.cumplimiento;
+  const habiles = a.month ? businessDays(a.month, c.config.diasSemana, c.config.feriados) : [];
+  const ultimo = crmDias.length ? crmDias[crmDias.length - 1]!.date : null;
+  const transcurridos = ultimo ? habiles.filter((d) => d <= ultimo).length : 0;
+  const total = crmDias.reduce((t, d) => t + valor(d), 0);
+  const ritmo = transcurridos ? total / transcurridos : 0;
+  const proyeccion = Math.round(ritmo * habiles.length);
+  const fmt = (n: number) => (money ? fmtMoney(n) : fmtInt.format(Math.round(n)));
+  const fmtRitmo = (n: number) => (money ? fmtMoney(n) : fmtNum(n, 1));
+
+  const selector = crmDias.length > 0 && (
+    <div role="group" aria-label="Fuente" className="inline-flex rounded-full border border-hair p-0.5 text-[12.5px]">
+      {(
+        [
+          ["crm", "Reportadas (consolidado)"],
+          ["sabana", "Sábana"],
+        ] as const
+      ).map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          aria-pressed={vista === k}
+          onClick={() => setVista(k)}
+          className={`rounded-full px-3 py-1 transition-colors ${vista === k ? "bg-brand-500/10 font-medium text-brand-600" : "text-ink-soft hover:text-ink"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (deCrm) {
+    const procesadas = crmDias.reduce((t, d) => t + d.procesadas, 0);
+    const noProcesadas = crmDias.reduce((t, d) => t + d.noProcesadas, 0);
+    const n = crmDias.reduce((t, d) => t + d.ventas, 0);
+    const pendientes = n - procesadas - noProcesadas;
+    return (
+      <ChartCard
+        title={money ? "Monto por día" : "Ventas por día"}
+        note={`Ventas reportadas al banco (consolidado) por fecha de venta, al ${dayLabel(ultimo!)}${pendientes || noProcesadas ? `: ${fmtInt.format(procesadas)} procesadas, ${fmtInt.format(pendientes)} pendientes y ${fmtInt.format(noProcesadas)} no procesadas` : ""}.`}
+        actions={
+          <div className="flex flex-col items-end gap-3">
+            {selector}
+            <dl className="flex flex-wrap justify-end gap-x-8 gap-y-2 text-right">
+              <div>
+                <dt className="text-[12px] text-ink-faint">Reportadas</dt>
+                <dd className="text-[22px] leading-tight font-light text-ink tabular-nums">{fmt(total)}</dd>
+              </div>
+              <div>
+                <dt className="text-[12px] text-ink-faint">Ritmo por día hábil</dt>
+                <dd className="text-[22px] leading-tight font-light text-ink tabular-nums">{fmtRitmo(ritmo)}</dd>
+                <dd className="text-[11.5px] text-ink-faint">
+                  {transcurridos} de {habiles.length} días hábiles
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[12px] text-ink-faint">Proyección al cierre</dt>
+                <dd className="text-[22px] leading-tight font-light text-ink tabular-nums">{fmt(proyeccion)}</dd>
+              </div>
+            </dl>
+          </div>
+        }
+      >
+        <AreaChart
+          seriesLabel={money ? "Monto reportado" : "Reportadas"}
+          unit={money ? "monto" : "ventas"}
+          format={money ? fmtMoney : undefined}
+          tickPrefix={money ? "$" : ""}
+          compare={compareOf(prev, prev?.crm?.porDia, (d) => (money ? (d.monto ?? 0) : d.ventas))}
+          data={crmDias.map((d) => ({
+            key: d.date,
+            day: dayNum(d.date),
+            label: String(dayNum(d.date)),
+            title: dayLabel(d.date),
+            value: valor(d),
+            extra: [
+              ...(money ? [{ label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) }] : []),
+              ...(pendientes || noProcesadas
+                ? [
+                    { label: "procesadas", value: fmtInt.format(d.procesadas) },
+                    { label: "pendientes", value: fmtInt.format(d.ventas - d.procesadas - d.noProcesadas) },
+                    { label: "no procesadas", value: fmtInt.format(d.noProcesadas) },
+                  ]
+                : []),
+            ],
+          }))}
+          onOpenDay={(d) => open({ fuente: "crm", title: `Ventas reportadas el ${d.title}`, filters: { dia: d.key } })}
+          onOpenRange={(f, t) => open({ fuente: "crm", title: `Ventas reportadas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
+        />
+      </ChartCard>
+    );
+  }
+
+  const days = v.porDia.filter((d) => d.date.startsWith(a.month!));
+  return (
+      <ChartCard
+        title={money ? "Monto por día" : "Ventas por día"}
+        note={`${sinCosecha ? "Por fecha de venta, sin cosecha" : "Por fecha de venta"}${crmDias.length ? "" : ". Sin consolidado de ventas del mes"}`}
+        actions={selector || undefined}
+      >
+        <AreaChart
+          seriesLabel={money ? "Monto" : "Ventas"}
+          unit={money ? "monto" : "ventas"}
+          format={money ? fmtMoney : undefined}
+          tickPrefix={money ? "$" : ""}
+          compare={compareOf(prev, p?.porDia, (d) => (money ? d.monto : d.ventas))}
+          data={days.map((d) => ({
+            key: d.date,
+            day: dayNum(d.date),
+            label: String(dayNum(d.date)),
+            title: dayLabel(d.date),
+            value: money ? d.monto : d.ventas,
+            extra: money
+              ? [
+                  { label: "aprobado", value: fmtMoney(d.montoAprobado) },
+                  { label: d.ventas === 1 ? "venta" : "ventas", value: fmtInt.format(d.ventas) },
+                ]
+              : [{ label: "aprobadas", value: fmtInt.format(d.aprobadas) }],
+          }))}
+          onOpenDay={(d) => open({ fuente: "ventas", title: `Ventas del ${d.title}`, filters: { dia: d.key } })}
+          onOpenRange={(f, t) => open({ fuente: "ventas", title: `Ventas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
+        />
+      </ChartCard>
+  );
+}
+
 function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAnalysis["crm"]>["actualizacion"]; campana: string; mes: string }) {
   type Fila = (typeof x.lista)[number];
   const [lista, setLista] = useState<{ titulo: string; filas: Fila[] } | null>(null);
@@ -494,8 +607,8 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
           { key: "niu", label: "NIU" },
           { key: "cliente", label: "Cliente" },
           { key: "agente", label: "Ejecutivo" },
-          { key: "fecha", label: "Fecha de venta (TL)" },
-          { key: "estado", label: "Estado en TL" },
+          { key: "fecha", label: "Fecha de venta (consolidado)" },
+          { key: "estado", label: "Estado en consolidado" },
           { key: "situacion", label: "Situación" },
           { key: "causa", label: "Posible causa" },
         ],
@@ -503,8 +616,8 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
       },
     ]);
   const kpis = [
-    { label: "Procesadas en TL", v: x.procesadas, foot: "del mes" },
-    { label: "Ya en sábana", v: x.enSabana, foot: `${fmtPct(share(x.enSabana, x.procesadas))} de las procesadas` },
+    { label: "Reportadas al banco", v: x.procesadas, foot: "del mes, según el consolidado" },
+    { label: "Ya en sábana", v: x.enSabana, foot: `${fmtPct(share(x.enSabana, x.procesadas))} de las reportadas` },
     {
       label: "Pendiente de actualización en sábana",
       v: x.pendientes,
@@ -517,7 +630,7 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
       v: x.noAparecen,
       foot: "hasta el corte",
       color: "var(--st-critical)",
-      abrir: noAparecen.length ? () => setLista({ titulo: "Procesadas en TL que no aparecen en sábana", filas: noAparecen }) : undefined,
+      abrir: noAparecen.length ? () => setLista({ titulo: "Reportadas al banco que no aparecen en sábana", filas: noAparecen }) : undefined,
     },
   ];
   return (
@@ -527,7 +640,7 @@ function PendienteActualizacion({ x, campana, mes }: { x: NonNullable<CampaignAn
       actions={
         x.lista.length ? (
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setLista({ titulo: "Procesadas en TL sin estatus en sábana", filas: x.lista })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
+            <button type="button" onClick={() => setLista({ titulo: "Reportadas al banco sin estatus en sábana", filas: x.lista })} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
               Ver ventas
             </button>
             <button type="button" onClick={() => descargar(x.lista)} className="rounded-full border border-hair bg-white px-4 py-2 text-[13px] font-medium text-ink hover:border-ink-faint dark:bg-slate-900">
@@ -593,7 +706,7 @@ function PanelVentasTL({
           <div className="min-w-0">
             <h2 className="text-[20px] leading-tight font-semibold text-ink">{titulo}</h2>
             <p className="mt-1 text-[13px] text-ink-soft">
-              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta" : "ventas"} procesadas en TL
+              <span className="font-medium text-ink tabular-nums">{fmtInt.format(filas.length)}</span> {filas.length === 1 ? "venta reportada" : "ventas reportadas"} al banco
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1287,10 +1400,10 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
 
       {c ? (
         <ChartCard
-          title="Ventas capturadas en el CRM"
+          title="Ventas reportadas al banco"
           note={c.conEstatusBanco === null ? "Falta la sábana del mes" : `${fmtInt.format(c.conEstatusBanco)} de ${fmtInt.format(c.total)} con estatus del banco`}
           actions={
-            <button type="button" onClick={() => open({ fuente: "crm", title: "Ventas capturadas en el CRM" })} className="group text-right" title="Ver las ventas capturadas">
+            <button type="button" onClick={() => open({ fuente: "crm", title: "Ventas reportadas al banco (consolidado)" })} className="group text-right" title="Ver las ventas reportadas">
               <span className="block text-[26px] leading-none font-light tracking-[-0.02em] text-ink tabular-nums transition-colors group-hover:text-brand-600">{fmtInt.format(c.total)}</span>
             </button>
           }
@@ -1298,18 +1411,18 @@ function LlamadasTab({ a, prev, open, setAgent }: Ctx) {
           <div className="grid gap-12 xl:grid-cols-[1.4fr_1fr]">
             <AreaChart
 
-              seriesLabel="Ventas en el CRM"
+              seriesLabel="Reportadas"
               unit="ventas"
               compare={compareOf(prev, prev?.crm?.porDia, (d) => d.ventas)}
               data={c.porDia.map((d) => ({ key: d.date, day: dayNum(d.date), label: String(dayNum(d.date)), title: dayLabel(d.date), value: d.ventas }))}
-              onOpenDay={(d) => open({ fuente: "crm", title: `Ventas capturadas el ${d.title}`, filters: { dia: d.key } })}
-              onOpenRange={(f, t) => open({ fuente: "crm", title: `Ventas capturadas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
+              onOpenDay={(d) => open({ fuente: "crm", title: `Ventas reportadas el ${d.title}`, filters: { dia: d.key } })}
+              onOpenRange={(f, t) => open({ fuente: "crm", title: `Ventas reportadas del ${f.title} al ${t.title}`, filters: { desde: f.key, hasta: t.key } })}
             />
             <BarList rows={c.porAgente.map((r) => ({ label: r.label, value: r.value }))} total={c.total} max={8} active={a.agente} selectHint="Filtrar por" onSelect={(r) => setAgent(a.agente === r.label ? null : r.label)} />
           </div>
         </ChartCard>
       ) : (
-        l && <Aside>Sin archivo de ventas del CRM del mes.</Aside>
+        l && <Aside>Sin consolidado de ventas del mes.</Aside>
       )}
     </Stack>
   );
@@ -1437,9 +1550,9 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
             label: a.agente ? "Ingresadas" : "Ingresadas por los agentes",
             ...(crm ? { num: crm.total, format: intOf } : { value: "—" }),
             foot: crm
-              ? `En CRM. En sábana: ${fmtInt.format(enSabana)}; logradas: ${fmtInt.format(c.operaciones)}${crm.total ? ` (${fmtPct(share(c.operaciones, crm.total), 0)})` : ""}`
-              : `Falta el archivo del CRM. En sábana: ${fmtInt.format(enSabana)}`,
-            onOpen: crm ? () => open({ fuente: "crm", title: "Ventas ingresadas en el CRM" }) : undefined,
+              ? `En consolidado. En sábana: ${fmtInt.format(enSabana)}; logradas: ${fmtInt.format(c.operaciones)}${crm.total ? ` (${fmtPct(share(c.operaciones, crm.total), 0)})` : ""}`
+              : `Falta el consolidado de ventas. En sábana: ${fmtInt.format(enSabana)}`,
+            onOpen: crm ? () => open({ fuente: "crm", title: "Ventas reportadas al banco (consolidado)" }) : undefined,
           },
           {
             label: "Avance del mes",
@@ -1463,7 +1576,7 @@ function CumplimientoTab({ a, open, setAgent, canEdit, refresh }: Ctx & { canEdi
         <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
           {corte ? (
             <>
-              Corte de sábana: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. Meta MTD: {valInt(metaMTD)}
+              {c.corteBanco ? "Corte del banco (RESUMEN de la sábana)" : "Corte de sábana"}: {corte}, día hábil {c.diaDelMes} de {c.diasDelMes}. Meta MTD: {valInt(metaMTD)}
               {unit}.{" "}
               <span className={adelante ? "text-[var(--st-good)]" : "text-[var(--st-critical)]"}>
                 {adelante ? `+${valInt(c.ventas - metaMTD)} sobre la meta MTD.` : `−${valInt(metaMTD - c.ventas)} bajo la meta MTD.`}
@@ -1935,7 +2048,7 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
     { sec: "Base", label: "Clientes en la base", a: a.base?.total ?? null, b: b?.base?.total ?? null, tipo: "n", upIsGood: null },
     { sec: "Base", label: "Recorrido de la base", a: a.base?.recorridos?.recorrido ?? null, b: b?.base?.recorridos?.recorrido ?? null, tipo: "pct", upIsGood: true },
     { sec: "Base", label: "Promedio de toques", a: a.base?.recorridos?.promedioToques ?? null, b: b?.base?.recorridos?.promedioToques ?? null, tipo: "dec", upIsGood: null },
-    { sec: "CRM", label: "Ventas capturadas en el CRM", a: a.crm?.total ?? null, b: b?.crm?.total ?? null, tipo: "n", upIsGood: true },
+    { sec: "Consolidado", label: "Ventas reportadas al banco", a: a.crm?.total ?? null, b: b?.crm?.total ?? null, tipo: "n", upIsGood: true },
     ] as Fila[]
   ).filter((f) => f.a !== null || f.b !== null);
 
@@ -2016,10 +2129,10 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
       : []),
     ...((tl(a) || tl(b)
       ? [
-          { sec: "", label: "Procesadas en TL", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true },
+          { sec: "", label: "Reportadas al banco", a: tl(a)?.procesadas ?? null, b: tl(b)?.procesadas ?? null, tipo: "n", upIsGood: true },
           {
             sec: "",
-            label: "Promedio diario en TL",
+            label: "Promedio diario reportado",
             a: tl(a) ? ticket(tl(a)!.procesadas, tl(a)!.dias) : null,
             b: tl(b) ? ticket(tl(b)!.procesadas, tl(b)!.dias) : null,
             tipo: "dec",
@@ -2029,7 +2142,7 @@ function ComparativoTab({ a, prev, setDias, open, desglosar }: Ctx) {
             ? [
                 {
                   sec: "",
-                  label: "Ticket promedio TL",
+                  label: "Ticket promedio reportado",
                   a: tl(a)?.monto ? ticket(tl(a)!.monto, tl(a)!.procesadas) : null,
                   b: tl(b)?.monto ? ticket(tl(b)!.monto, tl(b)!.procesadas) : null,
                   tipo: "money",
@@ -2236,7 +2349,7 @@ function MonthStatus({ a }: { a: CampaignAnalysis }) {
   );
 }
 
-const KIND_LABEL = { sabana: "La sábana", tipif: "Las tipificaciones", ventas: "Las ventas del CRM" } as const;
+const KIND_LABEL = { sabana: "La sábana", tipif: "Las tipificaciones", ventas: "El consolidado de ventas" } as const;
 
 /** Aviso si algún archivo vigente del mes trae filas con fecha de otro mes (se están contando en este). */
 function OtherMonthsWarning({ a, code }: { a: CampaignAnalysis; code: string }) {

@@ -222,7 +222,8 @@ export interface CampaignAnalysis {
     total: number;
     conEstatusBanco: number | null;
     porAgente: Count[];
-    porDia: { date: string; ventas: number }[];
+    /** Ventas ingresadas por día de ingreso: todas, y de ellas las procesadas y las no procesadas por backoffice. */
+    porDia: { date: string; ventas: number; monto: number; procesadas: number; noProcesadas: number }[];
     /**
      * Pendiente de actualización en sábana: ventas procesadas en TL (ya reportadas al banco) que la sábana
      * vigente todavía no trae. Cuando llega una sábana nueva con esas ventas, salen solas de aquí (no se duplican).
@@ -268,8 +269,10 @@ export interface CampaignAnalysis {
     aprobadas: number;
     avance: number | null;
     faltan: number | null;
-    /** Último día con ventas en la sábana: hasta ahí se mide el avance. */
+    /** Último día con ventas en la sábana, o el corte del banco si va más adelante: hasta ahí se mide el avance. */
     fechaCorte: string | null;
+    /** true si el corte sale de los "Días transcurridos" de la hoja RESUMEN de la sábana. */
+    corteBanco: boolean;
     /** Ventas del mes con fecha posterior al día en que se cargó la sábana (fechas mal escritas): no mueven el corte. */
     fechasPosteriores: { filas: number; hasta: string } | null;
     /** Días hábiles transcurridos hasta la fecha de corte (incluida). */

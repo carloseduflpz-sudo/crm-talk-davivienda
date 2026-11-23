@@ -44,7 +44,8 @@ export interface CampaignDef {
 }
 
 const tipif = (code: CampaignCode): DatasetDef => ({ id: `${code}:tipif`, kind: "tipif", label: "Tipificaciones", source: "Llamadas VICI" });
-const ventasCrm = (code: CampaignCode, source = "Exportación del CRM"): DatasetDef => ({ id: `${code}:ventas`, kind: "ventas", label: "Ventas (CRM TALK)", source });
+/** Ventas reportadas al banco: el consolidado de ventas de cada campaña (procesadas por backoffice). */
+const ventasCrm = (code: CampaignCode, source = "Consolidado de ventas reportadas al banco"): DatasetDef => ({ id: `${code}:ventas`, kind: "ventas", label: "Consolidado de ventas", source });
 
 export const CAMPAIGNS: readonly CampaignDef[] = [
   {
@@ -61,7 +62,7 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
       { id: "tdc:base:primeras", kind: "base", label: "Base Primeras Cuentas", source: "Base BAU · Tarjeta nueva" },
       { id: "tdc:base:segundas", kind: "base", label: "Base Segundas Cuentas", source: "Base 2a TDC" },
       tipif("tdc"),
-      ventasCrm("tdc", "Ventas Davivienda TC"),
+      ventasCrm("tdc"),
     ],
   },
   {

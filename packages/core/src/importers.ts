@@ -162,6 +162,13 @@ interface Profile {
   fileHint?: RegExp;
   /** Para reconocerlo solo: además de las obligatorias, al menos `min` de estas columnas (evita confundirlo con cualquier archivo con NIU). */
   detectMin?: { min: number; cols: string[] };
+  /**
+   * Se leen TODAS las hojas con las columnas obligatorias y se suman sus filas tal cual (una venta por fila,
+   * aunque el NIU se repita). Una fila idéntica que ya venía en otra hoja no se cuenta dos veces.
+   */
+  allSheets?: boolean;
+  /** Hojas que nunca se leen (p. ej. RECUPERACIONES). */
+  skipSheets?: RegExp;
 }
 
 /* ---------- perfiles ---------- */
@@ -194,29 +201,73 @@ const VICI: Profile = {
   monthField: "Fecha",
 };
 
-const VENTAS_CRM: Profile = {
-  label: "Ventas (CRM TALK)",
-  sheets: ["Ventas"],
+/* Consolidados de ventas que Talk reporta al banco (procesadas por backoffice): una venta por fila, con su fecha
+   de venta, el ejecutivo y el monto. Traen el histórico; cada venta va al mes de su fecha. Las hojas de
+   RECUPERACIONES (ventas de meses anteriores recuperadas) y de PENDIENTES no se leen. */
+const consolidado = (p: Omit<Profile, "anySheet" | "allSheets" | "monthField" | "constants" | "fileHint" | "skipSheets"> & { skipSheets?: RegExp }): Profile => ({
   anySheet: true,
-  required: ["niu", "agente", ["fecha_ingreso", "fecha"]],
-  fields: {
-    NIU: ["niu", "niu"],
-    Nombre: ["nombre_solicitante"],
-    Agente: ["agente"],
-    Fecha: [["fecha_ingreso", "fecha"], "iso"],
-    FechaHora: [["fecha_ingreso"], "isoDateTime"],
-    Producto: [["tarjeta_solicitada", "producto", "tipo_producto"]],
-    Monto: [["monto_tarjeta_credito", "monto"], "num"],
-    Perfil: [["perfil_campania", "perfil"]],
-    Documentacion: [["tipo_documentacion"]],
-    EstadoBackoffice: [["tipologia"]],
-    Backoffice: [["backoffice"]],
-    IdCRM: [["id"]],
-  },
-  transform(rec) {
-    if (!rec.EstadoBackoffice) rec.EstadoBackoffice = "Sin procesar";
-  },
+  allSheets: true,
+  skipSheets: /RECUPERACION|PENDIENTE/i,
   monthField: "Fecha",
+  constants: { EstadoBackoffice: "Procesada" },
+  fileHint: /CONSOLIDADO/i,
+  ...p,
+});
+const CONSOLIDADO: Record<CampaignCode, Profile> = {
+  tdc: consolidado({
+    label: "Consolidado de ventas TDC",
+    sheets: ["CONSOLIDADO DE VENTAS"],
+    required: ["NIU", "VENTA", "EJECUTIVO", "DOCUMENTACION"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["VENTA", "isoDMY"], Agente: ["EJECUTIVO"], Nombre: ["Nombre del cliente"], Producto: ["TIPO DE TARJETA"],
+      Marca: ["MARCA"], Documentacion: ["DOCUMENTACION"], Base: ["BASE"], Segmento: ["SEGMENTO"], Canal: ["CANAL"],
+    },
+  }),
+  extrafin: consolidado({
+    label: "Consolidado de ventas Extrafinanciamiento",
+    sheets: [],
+    required: ["NIU", "FECHA VENTA", "MONTO A DESEMBOLSAR", "EJECUTIVO"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA VENTA", "isoDMY"], Agente: ["EJECUTIVO"], Nombre: ["Nombre del cliente"], Producto: ["TIPO TC"],
+      Monto: ["MONTO A DESEMBOLSAR", "num"], Perfil: [["PERFIL", "Perfil"]], Base: ["BASE"], Plazo: ["PLAZO"],
+    },
+  }),
+  cdc: consolidado({
+    label: "Consolidado de ventas CDC",
+    sheets: ["NOVIEMBRE"],
+    required: ["NIU", "FECHA VENTA", "OPERADOR", "MONTO SOLICITADO"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA VENTA", "isoDMY"], Agente: ["OPERADOR"], Nombre: ["NOMBRE DEL CLIENTE"], Producto: ["TIPO DE CDC"],
+      Monto: ["MONTO SOLICITADO", "num"], Base: ["BASE"], Sabana: ["SABANA"], Canal: ["CANAL"],
+    },
+  }),
+  upin: consolidado({
+    label: "Consolidado de ventas UPIN (anexos)",
+    sheets: ["VENTAS INCREMENTOS", "VENTAS UPGRADE"],
+    required: ["NIU", "FECHA", "Tarjeta que solicita", "Condiciones que requiere"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: [["EJECUTIVO", "AGENTE", "OPERADOR"]], Nombre: ["Nombre del solicitante"],
+      Producto: ["Tarjeta que solicita"], Proceso: ["Condiciones que requiere"], Limite: ["LIMITE", "num"], Canal: ["CANAL"],
+    },
+  }),
+  seguros: consolidado({
+    label: "Consolidado de ventas Seguros",
+    sheets: ["SEGUROS DAVIVIENDA"],
+    required: ["NIU", "EJECUTIVO", "FECHA", "TIPO DE SEGURO"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: ["EJECUTIVO"], Nombre: ["NOMBRE"], Producto: ["PRODUCTO"],
+      TipoSeguro: ["TIPO DE SEGURO"], Plan: ["PLAN"], Canal: ["CANAL"],
+    },
+  }),
+  domi: consolidado({
+    label: "Consolidado de ventas Domiciliaciones",
+    sheets: ["ENVIO CARGA A COLECTORES"],
+    required: ["NIU", "EJECUTIVO", "FECHA", "COLECTOR", "NPE"],
+    fields: {
+      NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: ["EJECUTIVO"], Nombre: ["NOMBRE"], Producto: ["COLECTOR"],
+      Monto: ["MONTO MAXIMO MENSUAL A PAGAR", "num"], Campana: ["CAMPAÑA DE VENTA"],
+    },
+  }),
 };
 
 const cols = (names: string[], niuName = "NIU", types: Record<string, FieldType> = {}): Record<string, FieldSpec> =>
@@ -315,7 +366,7 @@ export const PROFILES: Record<string, Profile> = {
     },
   },
   "tdc:tipif": VICI,
-  "tdc:ventas": VENTAS_CRM,
+  "tdc:ventas": CONSOLIDADO.tdc,
 
   /* ===== Extrafinanciamiento ===== */
   "extrafin:sabana": {
@@ -346,7 +397,7 @@ export const PROFILES: Record<string, Profile> = {
     },
   },
   "extrafin:tipif": VICI,
-  "extrafin:ventas": VENTAS_CRM,
+  "extrafin:ventas": CONSOLIDADO.extrafin,
 
   /* ===== Compra de Cartera ===== */
   "cdc:sabana": {
@@ -387,7 +438,7 @@ export const PROFILES: Record<string, Profile> = {
     ),
   },
   "cdc:tipif": VICI,
-  "cdc:ventas": VENTAS_CRM,
+  "cdc:ventas": CONSOLIDADO.cdc,
 
   /* ===== UPIN ===== */
   "upin:sabana": {
@@ -425,7 +476,7 @@ export const PROFILES: Record<string, Profile> = {
     ),
   },
   "upin:tipif": VICI,
-  "upin:ventas": VENTAS_CRM,
+  "upin:ventas": CONSOLIDADO.upin,
 
   /* ===== Seguros ===== */
   "seguros:sabana": {
@@ -449,7 +500,7 @@ export const PROFILES: Record<string, Profile> = {
     ]),
   },
   "seguros:tipif": VICI,
-  "seguros:ventas": VENTAS_CRM,
+  "seguros:ventas": CONSOLIDADO.seguros,
 
   /* ===== Domiciliaciones ===== */
   "domi:sabana": {
@@ -490,7 +541,7 @@ export const PROFILES: Record<string, Profile> = {
     monthField: "FEmbozo",
   },
   "domi:tipif": VICI,
-  "domi:ventas": VENTAS_CRM,
+  "domi:ventas": CONSOLIDADO.domi,
 };
 
 /* ---------- lectura ---------- */
@@ -612,6 +663,30 @@ function readWithProfile(reader: WorkbookReader, prof: Profile, sheet: string): 
 export function parseWorkbook(reader: WorkbookReader, datasetId: string): ParseOutcome {
   const prof = PROFILES[datasetId];
   if (!prof) return { error: `Tipo de archivo desconocido: ${datasetId}` };
+
+  if (prof.allSheets) {
+    const hojas = reader.sheetNames.filter((sn) => !prof.skipSheets?.test(sn) && findHeader(reader.rows(sn), prof.required));
+    if (!hojas.length) return { error: `No encontré una hoja con las columnas ${prof.required.map(labelOf).join(", ")}. Hojas del archivo: ${reader.sheetNames.join(", ")}.` };
+    const all: RawRecord[] = [];
+    const vistas = new Set<string>();
+    let dropped = 0;
+    let missingOptional: string[] | null = null;
+    for (const sn of hojas) {
+      const r = readWithProfile(reader, prof, sn);
+      if ("error" in r) continue;
+      const propias = new Set<string>();
+      for (const row of r.rows) {
+        const k = JSON.stringify(row);
+        if (vistas.has(k)) continue; // ya venía en otra hoja
+        propias.add(k);
+        all.push(row);
+      }
+      for (const k of propias) vistas.add(k);
+      dropped += r.dropped;
+      missingOptional = missingOptional ? missingOptional.filter((m) => r.missingOptional.includes(m)) : r.missingOptional;
+    }
+    return { rows: all, dropped, sheet: hojas.join(" + "), missingOptional: missingOptional ?? [] };
+  }
 
   if (prof.multiSheet) {
     const all: RawRecord[] = [];
@@ -780,6 +855,7 @@ export function neededSheets(reader: WorkbookReader, datasetId: string): string[
   const prof = PROFILES[datasetId];
   if (!prof) return [];
   if (prof.multiSheet) return prof.multiSheet.map((p) => reader.pickSheet([p.sheet])).filter((s): s is string => Boolean(s));
+  if (prof.allSheets) return reader.sheetNames.filter((sn) => !prof.skipSheets?.test(sn) && findHeader(reader.rows(sn), prof.required));
   return sheetsFor(reader, datasetId);
 }
 
@@ -802,6 +878,7 @@ function bestSheet(reader: WorkbookReader, prof: Profile): string | null {
   let best: string | null = null;
   let bestScore = -1;
   for (const cand of reader.sheetNames) {
+    if (prof.skipSheets?.test(cand)) continue;
     const rows = reader.rows(cand);
     if (!findHeader(rows, prof.required)) continue;
     const score = coverage(rows, prof, prof.required) + markerHits(rows, prof) + (prof.fileHint?.test(cand) ? 2 : 0);

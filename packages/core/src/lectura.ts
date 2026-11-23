@@ -49,6 +49,8 @@ export interface ExcelReading {
   covered: string[];
   /** Cada hoja del libro: cuántas filas tiene (si se sabe) y a qué tipo(s) de archivo va. */
   hojas: { name: string; rows: number | null; tipos: string[] }[];
+  /** "Días transcurridos" de la hoja RESUMEN de la sábana del banco (DOMI, CDC, Extra, Seguros); null si no trae. */
+  diasTranscurridos: number | null;
 }
 
 export type Step = (message: string) => void;
@@ -127,6 +129,27 @@ export function onlyMonth<T extends NormalizedRow>(rows: readonly T[], month: st
   });
 }
 
+/**
+ * "Días transcurridos" que trae la hoja RESUMEN del reporte del banco (el número a la derecha del texto).
+ * Es el corte del banco: la sábana del 19 puede traer ventas solo hasta el 17, pero el banco ya cuenta 13 días.
+ */
+export function diasTranscurridosResumen(reader: WorkbookReader): number | null {
+  const hoja = reader.sheetNames.find((n) => n.trim().toUpperCase() === "RESUMEN");
+  if (!hoja) return null;
+  const filas = reader.rows(hoja).slice(0, 40);
+  for (const fila of filas) {
+    const j = fila.findIndex((c) => typeof c === "string" && /^\s*d[ií]as\s+transcurridos\s*:?\s*$/i.test(c));
+    if (j < 0) continue;
+    for (let k = j + 1; k < fila.length; k++) {
+      const v = fila[k];
+      const n = typeof v === "number" ? v : typeof v === "string" && /^\s*\d+(\.0+)?\s*$/.test(v) ? Number(v) : null;
+      if (n !== null) return Number.isInteger(n) && n >= 1 && n <= 31 ? n : null;
+      if (typeof v === "string" && v.trim()) break;
+    }
+  }
+  return null;
+}
+
 /** Lo que se sabe antes de leer las filas: el resultado ya armado (si no hay nada que leer) o las hojas a leer. */
 function preparar(
   peek: WorkbookReader,
@@ -138,7 +161,21 @@ function preparar(
 ): { listo: ExcelReading } | { base: ExcelReading; sheets: string[]; datasetId: string } {
   const assigned = sheetAssignments(peek, detections);
   const hojas = peek.sheetNames.map((name) => ({ name, rows: countRows ? sheetRowCount(peek.wb, name) : null, tipos: assigned[name] ?? [] }));
-  const base: ExcelReading = { sheetNames: peek.sheetNames, detections, datasetId, error: null, rows: [], chunkEnds: [], dropped: 0, sheet: "", missingOptional: [], month: null, hojas, covered: [] };
+  const base: ExcelReading = {
+    sheetNames: peek.sheetNames,
+    detections,
+    datasetId,
+    error: null,
+    rows: [],
+    chunkEnds: [],
+    dropped: 0,
+    sheet: "",
+    missingOptional: [],
+    month: null,
+    hojas,
+    covered: [],
+    diasTranscurridos: datasetId?.endsWith(":sabana") ? diasTranscurridosResumen(peek) : null,
+  };
   if (!datasetId) {
     return {
       listo: {

@@ -1,4 +1,4 @@
-/* Carga masiva: un ZIP (o varios archivos sueltos) con tipificaciones, ventas del CRM o sábanas de varios meses
+/* Carga masiva: un ZIP (o varios archivos sueltos) con tipificaciones, consolidados de ventas o sábanas de varios meses
    y campañas. Se reconoce cada archivo y cada campaña × mes queda como una carga normal (con versión y todo lo demás).
    - Tipificaciones y ventas: cada fila va al mes de su fecha.
    - Sábanas: cada archivo es la sábana de un mes y se guarda completa, con su cosecha (ver core/bulk.ts). */
@@ -44,11 +44,16 @@ const FREE_DAILY_ROWS = 100_000;
 /** Qué se carga: cada tipo con sus palabras para la pantalla. */
 const TIPOS: Record<BulkKind, { label: string; filas: string; detalle: string }> = {
   tipif: { label: "Tipificaciones", filas: "llamadas", detalle: "cada llamada se guarda en el mes de su fecha" },
-  ventas: { label: "Ventas del CRM", filas: "ventas", detalle: "cada venta se guarda en el mes de su fecha" },
+  ventas: { label: "Consolidados de ventas", filas: "ventas", detalle: "cada venta se guarda en el mes de su fecha de venta (solo los meses que ya tienen datos y el mes en curso)" },
   sabana: { label: "Sábanas", filas: "ventas", detalle: "cada archivo es la sábana de un mes y se guarda completa, con su cosecha" },
   base: { label: "Bases", filas: "registros", detalle: "cada archivo es una base de un mes (el mes sale del nombre del archivo)" },
 };
 const porArchivo = (k: BulkKind) => k === "sabana" || k === "base";
+/** Mes en curso (AAAA-MM). */
+const mesEnCurso = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+})();
 /** Los últimos 13 meses (para corregir el mes de una sábana aunque el archivo no traiga ventas de ese mes). */
 const ultimosMeses = Array.from({ length: 13 }, (_, i) => {
   const d = new Date();
@@ -83,6 +88,8 @@ interface Row {
   dropped: number;
   sha: string;
   note: string;
+  /** Sábanas: "Días transcurridos" de la hoja RESUMEN del banco. */
+  dias?: number | null;
 }
 type UnitStatus = { state: "pendiente" | "guardando" | "listo" | "error" | "saltado"; done: number; message?: string };
 type Phase = "idle" | "listing" | "listed" | "scanning" | "planned" | "uploading" | "done" | "stopped";
@@ -112,6 +119,7 @@ interface Lectura {
   otros: string[];
   /** Duda entre dos bases muy parecidas. */
   duda: boolean;
+  dias: number | null;
 }
 
 /** Lee un archivo (del ZIP o suelto) con las reglas de esa campaña; con `dataset`, como ese tipo. */
@@ -133,6 +141,7 @@ async function readCalls(row: Row, onStep: (s: string) => void, dataset: string 
       mes: result.month?.month ?? null,
       otros: [...new Set((opened.result.hojas ?? []).flatMap((h) => h.tipos))].filter((t) => t !== result.datasetId),
       duda: Boolean(d0 && d1 && esBase(d0.datasetId) && esBase(d1.datasetId) && d0.sheet === d1.sheet && d0.score - d1.score < 3),
+      dias: result.diasTranscurridos ?? null,
     };
   } finally {
     reader.close();
@@ -153,6 +162,8 @@ export function BulkUpload() {
   const [dragging, setDragging] = useState(false);
   // Campaña × mes que ya tiene una carga vigente de este tipo → su id (para comparar sábanas).
   const [existing, setExisting] = useState<Map<string, string>>(new Map());
+  /** Campaña × mes que ya tienen algún archivo vigente (los consolidados traen años de historia: solo se guardan esos meses). */
+  const [conDatos, setConDatos] = useState<Set<string>>(new Set());
   const [replace, setReplace] = useState(false);
   // Bases: qué hacer si el mes ya tiene base.
   const [siExiste, setSiExiste] = useState<SiExiste>("saltar");
@@ -230,6 +241,7 @@ export function BulkUpload() {
       const vigentes = lists.flat().filter((u) => u.isCurrent && u.kind === kind && !u.isAddition);
       // Bases: por tipo de base y mes (una campaña puede tener dos bases); lo demás, por campaña y mes.
       setExisting(new Map(vigentes.map((u) => [kind === "base" ? `${u.dataset}|${u.month}` : unitKey(u.campaign, u.month), u.id] as const)));
+      setConDatos(new Set(lists.flat().filter((u) => u.isCurrent).map((u) => unitKey(u.campaign, u.month))));
     } catch {
       /* sin la lista se trata todo como nuevo; el servidor igual guarda versiones */
     }
@@ -264,7 +276,7 @@ export function BulkUpload() {
           const by = rowsByMonth(res.rows);
           // Sábana: el mes del nombre del archivo (o su carpeta); si no lo dice, el más reciente de sus ventas.
           const month = kind === "sabana" ? (monthFromName(r.entry.path.replace(/\//g, " ")) ?? mesDeSabana(by.byMonth)) : null;
-          next[i] = { ...r, status: "listo", month, byMonth: by.byMonth, rows: res.rows.length, dropped: res.dropped, sha: res.sha, note: by.sinFecha ? `${fmt.format(by.sinFecha)} sin fecha` : "" };
+          next[i] = { ...r, status: "listo", month, byMonth: by.byMonth, rows: res.rows.length, dropped: res.dropped, sha: res.sha, dias: res.dias, note: by.sinFecha ? `${fmt.format(by.sinFecha)} sin fecha` : "" };
         }
       } catch (e) {
         if (e instanceof ReadCancelled) break;
@@ -295,8 +307,8 @@ export function BulkUpload() {
             rows.flatMap((r, index) => (r.status === "listo" && r.campaign ? [{ index, campaign: r.campaign, byMonth: r.byMonth }] : [])),
             existe,
             replace,
-          ),
-    [rows, existe, replace, kind, siExiste],
+          ).filter((u) => kind !== "ventas" || u.month === mesEnCurso || conDatos.has(unitKey(u.campaign, u.month))),
+    [rows, existe, replace, kind, siExiste, conDatos],
   );
   const sinMes = porArchivo(kind) && rows.some((r) => r.status === "listo" && !r.month);
   const conflictos = plan.filter((u) => u.conflicto).length;
@@ -339,6 +351,7 @@ export function BulkUpload() {
             rowsTotal: data.length,
             rowsValid: data.length,
             rowsDiscarded: 0,
+            ...(u.files.length === 1 && rows[u.files[0]!]!.dias ? { diasTranscurridos: rows[u.files[0]!]!.dias! } : {}),
             // Bases: reemplaza a la del mes o se suma como adicional (con el nombre del archivo).
             ...(u.modo === "adicional" ? { mode: "adicional" as const, label: names[0]!.replace(/\.[a-z0-9]+$/i, "").slice(0, 60) } : u.modo === "reemplazar" ? { mode: "reemplazar" as const } : {}),
           }),

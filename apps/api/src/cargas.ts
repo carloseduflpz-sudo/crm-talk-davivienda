@@ -250,6 +250,8 @@ export function registerCargas(r: Router): void {
     if (b.mode !== undefined && b.mode !== "adicional" && b.mode !== "reemplazar") throw new HttpError(400, "Modo de carga inválido.");
     if (addition && def.kind !== "base") throw new HttpError(400, "Solo las bases pueden cargarse como adicionales.");
     const label = addition ? (typeof b.label === "string" && b.label.trim() ? b.label.trim().slice(0, 60) : null) : null;
+    // Sábana: días transcurridos según la hoja RESUMEN del banco (si la trae).
+    const diasBanco = def.kind === "sabana" && Number.isInteger(b.diasTranscurridos) && (b.diasTranscurridos as number) >= 1 && (b.diasTranscurridos as number) <= 31 ? (b.diasTranscurridos as number) : null;
 
     // Cargas abandonadas a medias (más de 24 h) de este mismo archivo: se eliminan.
     await env.DB.prepare("DELETE FROM uploads WHERE dataset = ? AND status = 'validando' AND created_at < ?").bind(dataset, Date.now() - STALE_MS).run();
@@ -257,10 +259,10 @@ export function registerCargas(r: Router): void {
     const id = crypto.randomUUID();
     const v = await env.DB.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS v FROM uploads WHERE dataset = ? AND month = ?").bind(dataset, month).first<{ v: number }>();
     await env.DB.prepare(
-      `INSERT INTO uploads (id, campaign, dataset, kind, month, version, is_current, status, file_name, file_sha256, rows_total, rows_valid, rows_discarded, is_addition, label, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 'validando', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO uploads (id, campaign, dataset, kind, month, version, is_current, status, file_name, file_sha256, rows_total, rows_valid, rows_discarded, is_addition, label, bank_elapsed_days, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 'validando', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(id, campaign, dataset, def.kind, month, v!.v, fileName, sha, rowsTotal, rowsValid, rowsDiscarded, addition ? 1 : 0, label, user.username, Date.now())
+      .bind(id, campaign, dataset, def.kind, month, v!.v, fileName, sha, rowsTotal, rowsValid, rowsDiscarded, addition ? 1 : 0, label, diasBanco, user.username, Date.now())
       .run();
     return json({ ok: true, id, version: v!.v, maxRowsPerChunk: MAX_ROWS_PER_CHUNK }, 201);
   });

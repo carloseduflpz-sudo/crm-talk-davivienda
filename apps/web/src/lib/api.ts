@@ -273,6 +273,8 @@ export const api = {
     rowsDiscarded: number;
     mode?: "adicional" | "reemplazar";
     label?: string | null;
+    /** Sábana: "Días transcurridos" de su hoja RESUMEN. */
+    diasTranscurridos?: number;
   }) =>
     post<{ id: string; version: number; maxRowsPerChunk: number }>("/cargas", b),
   sendRows: (id: string, seq: number, rows: unknown[]) => post<{ duplicate?: boolean }>(`/cargas/${id}/filas`, { seq, rows }),

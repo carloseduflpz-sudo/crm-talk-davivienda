@@ -191,7 +191,7 @@ function Campaign({ c, multi }: { c: ClientFile["campanas"][number]; multi: bool
       )}
 
       {c.crm.length > 0 && (
-        <Section title="Capturado en el CRM" count={c.crm.length}>
+        <Section title="En el consolidado de ventas" count={c.crm.length}>
           <div className="space-y-3">
             {c.crm.map((v, i) => (
               <details key={i} className="rounded-2xl border border-hair bg-white p-4 dark:bg-slate-900">

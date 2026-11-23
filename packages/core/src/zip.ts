@@ -78,11 +78,12 @@ export async function readZipEntry(blob: Blob, e: ZipEntry): Promise<Uint8Array>
 
 const KEYWORDS: [CampaignCode, RegExp][] = [
   ["cdc", /(^|[^a-z])cdc([^a-z]|$)|compra\s*de\s*cartera|cartera/],
-  ["upin", /upin|upgrade|incremento/],
+  ["upin", /upin|(^|[^a-z])up-in([^a-z]|$)|upgrade|incremento/],
   ["seguros", /seguro/],
   ["domi", /domi/],
   ["extrafin", /extra/],
-  ["tdc", /(^|[^a-z])(tdc|tc)([^a-z]|$)|tarjeta|primeras|segundas/],
+  // "CONSOLIDADO DE ESTATUS VENTAS": el consolidado diario de ventas TC.
+  ["tdc", /(^|[^a-z])(tdc|tc)([^a-z]|$)|tarjeta|primeras|segundas|estatus\s*(de\s*)?ventas/],
 ];
 
 /** Campaña según el nombre del archivo o, si no lo dice, de la carpeta donde está. */

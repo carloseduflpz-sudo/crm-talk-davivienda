@@ -40,6 +40,7 @@ interface CurrentUpload {
   created_by: string;
   is_addition: number;
   label: string | null;
+  bank_elapsed_days: number | null;
 }
 
 const pct = (a: number, b: number) => (b ? (a / b) * 100 : 0);
@@ -62,8 +63,10 @@ function parseList(v: string | null | undefined): string[] | null {
   }
 }
 function parseDays(v: string | null | undefined): number[] {
+  // Sin días guardados ("" o null) va la regla por defecto: Number("") es 0 y se leía como "solo domingos".
   const d = (v ?? "")
     .split(",")
+    .filter((x) => x.trim() !== "")
     .map(Number)
     .filter((x) => Number.isInteger(x) && x >= 0 && x <= 6);
   return d.length ? [...new Set(d)].sort() : [...DEFAULT_WORK_DAYS];
@@ -157,7 +160,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
     // Nombre homologado del agente (la herramienta une sola las formas distintas de escribir a la misma persona).
     loadAgentNaming(env, campaign),
     db
-      .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by, is_addition, label FROM uploads WHERE campaign = ? AND is_current = 1")
+      .prepare("SELECT id, dataset, kind, month, rows_valid, version, created_at, created_by, is_addition, label, bank_elapsed_days FROM uploads WHERE campaign = ? AND is_current = 1")
       .bind(campaign)
       .all<CurrentUpload>(),
     db.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>(),
@@ -220,6 +223,7 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
       avance: null,
       faltan: null,
       fechaCorte: null,
+      corteBanco: false,
       fechasPosteriores: null,
       diaDelMes: 0,
       diasDelMes: 0,
@@ -762,7 +766,15 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
       const [tot, agentes, dias, match] = await db.batch([
         db.prepare(`SELECT COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")}`).bind(crm.id, ...fb),
         db.prepare(`SELECT ${agentLabel("agent")} AS label, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")} GROUP BY 1 ORDER BY n DESC`).bind(crm.id, ...fb),
-        db.prepare(`SELECT substr(entered_at, 1, 10) AS d, COUNT(*) AS n FROM crm_sales WHERE upload_id = ?${fc("")} AND entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`).bind(crm.id, ...fb),
+        // Por día de ingreso, todas (procesadas, pendientes y no procesadas), con el monto que trae el CRM.
+        db
+          .prepare(
+            `SELECT substr(c.entered_at, 1, 10) AS d, COUNT(*) AS n, COALESCE(SUM(CAST(json_extract(c.extra, '$.Monto') AS REAL)), 0) AS monto,
+                    SUM(${PROCESADA}) AS procesadas,
+                    SUM(UPPER(COALESCE(json_extract(c.extra, '$.EstadoBackoffice'), '')) LIKE '%NO PROCESAD%') AS no_procesadas
+               FROM crm_sales c WHERE c.upload_id = ?${fc("c.")} AND c.entered_at IS NOT NULL GROUP BY 1 ORDER BY 1`,
+          )
+          .bind(crm.id, ...fb),
         sabana
           ? db.prepare(`SELECT COUNT(DISTINCT c.niu) AS n FROM crm_sales c WHERE c.upload_id = ?${fc("c.")} AND EXISTS (SELECT 1 FROM bank_sales b WHERE b.upload_id = ? AND b.niu = c.niu)`).bind(crm.id, ...fb, sabana.id)
           : db.prepare("SELECT NULL AS n"),
@@ -771,7 +783,13 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         total: n((tot!.results[0] as { n: number } | undefined)?.n),
         conEstatusBanco: sabana ? n((match!.results[0] as { n: number } | undefined)?.n) : null,
         porAgente: (agentes!.results as { label: string; n: number }[]).map((r): Count => ({ label: r.label, value: n(r.n) })),
-        porDia: (dias!.results as { d: string; n: number }[]).map((r) => ({ date: r.d, ventas: n(r.n) })),
+        porDia: (dias!.results as { d: string; n: number; monto: number; procesadas: number; no_procesadas: number }[]).map((r) => ({
+          date: r.d,
+          ventas: n(r.n),
+          monto: n(r.monto),
+          procesadas: n(r.procesadas),
+          noProcesadas: n(r.no_procesadas),
+        })),
         actualizacion: await pendienteDeActualizacion(db, {
           campaign,
           month: crm.month,
@@ -905,6 +923,14 @@ async function calcularAnalisis(env: Env, campaign: string, requestedMonth: stri
         c.fechaCorte = corte?.corte ?? null;
         c.fechasPosteriores = n(corte?.posteriores) > 0 ? { filas: n(corte?.posteriores), hasta: corte!.maxima! } : null;
         c.diaDelMes = c.fechaCorte ? habiles.filter((d) => d <= c.fechaCorte!).length : 0;
+        /* Corte del banco: si la hoja RESUMEN de la sábana trae "Días transcurridos" y va más adelante que la
+           última venta (el banco reporta al 19 aunque las ventas lleguen hasta el 17), el MTD se mide a ese día. */
+        const banco = sabana.bank_elapsed_days ? Math.min(sabana.bank_elapsed_days, habiles.length) : 0;
+        if (banco > c.diaDelMes) {
+          c.diaDelMes = banco;
+          c.fechaCorte = habiles[banco - 1]!;
+          c.corteBanco = true;
+        }
         c.diasRestantes = c.diasDelMes - c.diaDelMes;
         c.ritmoDiario = c.diaDelMes ? c.ventas / c.diaDelMes : 0;
         c.proyeccion = Math.round(c.ventas + c.ritmoDiario * c.diasRestantes);

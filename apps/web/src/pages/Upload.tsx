@@ -486,6 +486,7 @@ export function Upload() {
         rowsTotal: a.rows.length + a.dropped,
         rowsValid: rows.length,
         rowsDiscarded: a.dropped + excluded,
+        ...(a.diasTranscurridos ? { diasTranscurridos: a.diasTranscurridos } : {}),
         ...(needsMode ? { mode: mode!, label: mode === "adicional" ? addLabel : null } : {}),
       });
       uploadId = c.id;

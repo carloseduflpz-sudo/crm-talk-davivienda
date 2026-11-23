@@ -22,7 +22,7 @@ export interface DetailSpec {
 const NOUN: Record<DetailSource, [string, string]> = {
   ventas: ["venta", "ventas"],
   llamadas: ["llamada", "llamadas"],
-  crm: ["venta capturada", "ventas capturadas"],
+  crm: ["venta reportada", "ventas reportadas"],
   base: ["cliente", "clientes"],
 };
 const PAGE = 200;

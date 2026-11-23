@@ -172,6 +172,8 @@ export const uploads = sqliteTable(
     isAddition: integer("is_addition", { mode: "boolean" }).notNull().default(false),
     /** Nombre de la base adicional ("Adicional 15 oct"). */
     label: text("label"),
+    /** Sábana: "Días transcurridos" de la hoja RESUMEN del banco (su corte). */
+    bankElapsedDays: integer("bank_elapsed_days"),
     createdBy: text("created_by").notNull(),
     createdAt: integer("created_at").notNull().default(now),
   },
