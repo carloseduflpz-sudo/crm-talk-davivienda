@@ -21,6 +21,12 @@ import {
   type MonthSummary,
   type SaleClass,
   SUBTIPOLOGIA_SQL,
+  DIMENSIONES_BASE,
+  getCampaign,
+  SIN_DATO,
+  franjaDe,
+  valorDimension,
+  type PerfilMes,
 } from "@crm/core";
 import { loadAgentNaming } from "./agentes";
 import { audit } from "./audit";
@@ -1166,6 +1172,115 @@ function aplicarOficial(campaign: string, summary: MonthSummary[], oficial: Ofic
  * dan ventas, aprobación, monto, base, llamadas, contactabilidad y penetración de los 13 meses a la vez (las mismas
  * definiciones que cada pestaña), en tres viajes a la base sin importar cuántos meses haya.
  */
+/** Composición de la base y efectividad de la llamada de un mes (ver PerfilMes). */
+async function perfilDelMes(env: Env, campaign: string, month: string, agente: string | null): Promise<PerfilMes> {
+  const db = env.DB;
+  const [{ results: ups }, regla] = await Promise.all([
+    db
+      .prepare("SELECT id, kind, dataset, is_addition, label FROM uploads WHERE campaign = ? AND month = ? AND is_current = 1 AND kind IN ('base', 'tipif') ORDER BY is_addition, created_at")
+      .bind(campaign, month)
+      .all<{ id: string; kind: string; dataset: string; is_addition: number; label: string | null }>(),
+    db.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>(),
+  ]);
+  const efectivo = regla?.contact_rule === "sin_no_efectivo" ? "call_class IN ('venta','negativo')" : "call_class IN ('venta','negativo','no_efectivo')";
+  const bases = ups.filter((u) => u.kind === "base");
+  const tipif = ups.find((u) => u.kind === "tipif");
+
+  // Clientes de la base con sus segmentaciones (el primero que aparece manda: la original antes que las adicionales).
+  const etiquetaDataset = (ds: string) => (isCampaignCode(campaign) ? (getCampaign(campaign).datasets.find((x) => x.id === ds)?.label ?? ds) : ds);
+  const variasBases = new Set(bases.map((b) => b.dataset)).size > 1 || bases.some((b) => b.is_addition);
+  const dims: { key: string; label: string }[] = variasBases ? [{ key: "archivo", label: "Archivo de base" }] : [];
+  const clientes = new Map<string, Record<string, string>>();
+  for (const b of bases) {
+    const defs = DIMENSIONES_BASE[b.dataset] ?? [{ key: "perfil", label: "Perfil", campo: "profile" }];
+    for (const dd of defs) if (!dims.some((x) => x.key === dd.key)) dims.push({ key: dd.key, label: dd.label });
+    const sel = defs.map((dd, i) => (dd.campo === "profile" || dd.campo === "offer" ? `${dd.campo} AS c${i}` : `json_extract(extra, '$."${dd.campo.replace(/"/g, '""')}"') AS c${i}`));
+    const { results } = await db.prepare(`SELECT niu${sel.length ? ", " + sel.join(", ") : ""} FROM base_records WHERE upload_id = ? AND niu <> ''`).bind(b.id).all<Record<string, unknown>>();
+    const archivo = b.is_addition ? `${etiquetaDataset(b.dataset)} · ${b.label ?? "adicional"}` : etiquetaDataset(b.dataset);
+    for (const r of results) {
+      const niu = String(r.niu);
+      if (clientes.has(niu)) continue;
+      const v: Record<string, string> = variasBases ? { archivo } : {};
+      defs.forEach((dd, i) => (v[dd.key] = valorDimension(dd, r[`c${i}`])));
+      clientes.set(niu, v);
+    }
+  }
+
+  // Llamadas del mes por cliente, hora y día de la semana.
+  type C = { niu: string; h: number; w: number; n: number; e: number; v: number };
+  let llamadas: C[] = [];
+  if (tipif) {
+    const naming = agente ? await loadAgentNaming(env, campaign) : null;
+    const { results } = await db
+      .prepare(
+        `SELECT niu, CAST(substr(called_at, 12, 2) AS INTEGER) AS h, CAST(strftime('%w', substr(called_at, 1, 10)) AS INTEGER) AS w,
+                COUNT(*) AS n, SUM(${efectivo}) AS e, SUM(call_class = 'venta') AS v
+           FROM calls WHERE upload_id = ? AND called_at IS NOT NULL${naming ? ` AND ${naming.sql("agent")} = ?` : ""} GROUP BY 1, 2, 3`,
+      )
+      .bind(tipif.id, ...(agente ? [agente] : []))
+      .all<C>();
+    llamadas = results.map((r) => ({ niu: String(r.niu ?? ""), h: n(r.h), w: n(r.w), n: n(r.n), e: n(r.e), v: n(r.v) }));
+  }
+
+  const horas = new Map<number, { llamadas: number; efectivos: number; ventas: number }>();
+  const dias = new Map<number, { llamadas: number; efectivos: number; ventas: number }>();
+  const porCliente = new Map<string, { e: number; v: number }>();
+  const cruces = new Map<string, { key: string; valor: string; franja: string; llamadas: number; efectivos: number; ventas: number }>();
+  const suma = (mp: Map<number, { llamadas: number; efectivos: number; ventas: number }>, k: number, c: C) => {
+    const x = mp.get(k) ?? { llamadas: 0, efectivos: 0, ventas: 0 };
+    x.llamadas += c.n;
+    x.efectivos += c.e;
+    x.ventas += c.v;
+    mp.set(k, x);
+  };
+  for (const c of llamadas) {
+    suma(horas, c.h, c);
+    suma(dias, c.w, c);
+    const cli = c.niu ? clientes.get(c.niu) : undefined;
+    if (!cli) continue;
+    const pc = porCliente.get(c.niu) ?? { e: 0, v: 0 };
+    pc.e += c.e;
+    pc.v += c.v;
+    porCliente.set(c.niu, pc);
+    const franja = franjaDe(c.h);
+    for (const [key, valor] of Object.entries(cli)) {
+      const k = `${key}\u0000${valor}\u0000${franja}`;
+      const x = cruces.get(k) ?? { key, valor, franja, llamadas: 0, efectivos: 0, ventas: 0 };
+      x.llamadas += c.n;
+      x.efectivos += c.e;
+      x.ventas += c.v;
+      cruces.set(k, x);
+    }
+  }
+
+  const dimensiones = dims.map((dd) => {
+    const vals = new Map<string, { valor: string; clientes: number; llamados: number; contactados: number; ventas: number }>();
+    for (const [niu, cli] of clientes) {
+      const valor = cli[dd.key] ?? SIN_DATO;
+      const x = vals.get(valor) ?? { valor, clientes: 0, llamados: 0, contactados: 0, ventas: 0 };
+      x.clientes++;
+      const pc = porCliente.get(niu);
+      if (pc) {
+        x.llamados++;
+        if (pc.e > 0) x.contactados++;
+        if (pc.v > 0) x.ventas++;
+      }
+      vals.set(valor, x);
+    }
+    return { key: dd.key, label: dd.label, valores: [...vals.values()].sort((a, b) => b.clientes - a.clientes) };
+  });
+
+  return {
+    month,
+    base: clientes.size,
+    conLlamadas: Boolean(tipif),
+    dimensiones,
+    horas: [...horas].map(([hora, x]) => ({ hora, ...x })).sort((a, b) => a.hora - b.hora),
+    dias: [...dias].map(([dia, x]) => ({ dia, ...x })).sort((a, b) => a.dia - b.dia),
+    cruces: [...cruces.values()].filter((x) => x.efectivos > 0),
+  };
+}
+
 /**
  * Cada mes al mismo día (MTD): lo que cuenta para la meta con ventas del día 1 al `dia` (igual que el logrado del mes:
  * estatus que cuentan y sin la cosecha que ya contó en un mes anterior; la cosecha sin fecha o de meses anteriores
@@ -1502,6 +1617,25 @@ export function registerAnalisis(r: Router): void {
     const diaParam = Number(url.searchParams.get("dia"));
     const mtd = Number.isInteger(diaParam) && diaParam >= 1 && diaParam <= 31 ? await logradoAlDia(env, campaign, meses, diaParam, agente) : [];
     return json({ ok: true, meses, conTipificaciones: ups.map((u) => u.month).sort(), filas, contacto, mtd });
+  });
+
+  /**
+   * Composición de la base y efectividad de la llamada por mes: segmentaciones de la base (clientes, llamados,
+   * contactados y con venta en VICI), llamadas por hora y día de la semana, y perfil × franja horaria.
+   */
+  r.on("GET", "/analisis/:campaign/perfil", "datos:ver", async ({ env, params, url }) => {
+    const campaign = params.campaign!;
+    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
+    const agente = url.searchParams.get("agente")?.trim() || null;
+    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
+    const meses = [...new Set((url.searchParams.get("meses") ?? "").split(",").map((m) => m.trim()))].filter((m) => /^20\d{2}-(0[1-9]|1[0-2])$/.test(m));
+    if (!meses.length) throw new HttpError(400, "Elige al menos un mes.");
+    if (meses.length > 13) throw new HttpError(400, "Elige hasta 13 meses.");
+    const res = new Resultados(env);
+    // Uno a la vez: cada mes son varias consultas sobre miles de llamadas.
+    const out: PerfilMes[] = [];
+    for (const m of meses) out.push(await res.obtener(`perfil/${campaign}/${m}/${parteClave(agente)}.json`, () => perfilDelMes(env, campaign, m, agente), campaign));
+    return json({ ok: true, meses: out });
   });
 
   /** Meta de ventas y número de agentes de una campaña en un mes. */

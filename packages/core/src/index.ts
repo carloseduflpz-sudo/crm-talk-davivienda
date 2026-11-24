@@ -20,3 +20,4 @@ export * from "./control";
 export * from "./hojaLigera";
 export * from "./seguimientoDoc";
 export * from "./xlsxEstilos";
+export * from "./perfilBase";

@@ -3,10 +3,23 @@
    - clic en cualquier cifra, barra o día para ver los clientes que la forman,
    - comparación contra el mes anterior en indicadores y curvas,
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
-import { GOAL_UNIT, businessDays, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type SaleClass } from "@crm/core";
+import {
+  DIAS_SEMANA,
+  GOAL_UNIT,
+  promedioBase,
+  businessDays,
+  getCampaign,
+  isCampaignCode,
+  recomendaciones,
+  type CampaignAnalysis,
+  type CampaignCode,
+  type MonthSummary,
+  type PerfilMes,
+  type SaleClass,
+} from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Columns2, Database, Download, History, LoaderCircle, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
 import {
@@ -1805,12 +1818,16 @@ function DescargaHistorico({ a, meses }: { a: CampaignAnalysis; meses: MonthSumm
     setBajando(true);
     setError("");
     try {
-      const t = await api.historicoTipologias(
-        a.campaign,
-        elegidos.map((m) => m.month),
-        a.agente,
-        dia,
-      );
+      const conBase = elegidos.filter((m) => m.base !== null).map((m) => m.month).slice(-13);
+      const [t, p] = await Promise.all([
+        api.historicoTipologias(
+          a.campaign,
+          elegidos.map((m) => m.month),
+          a.agente,
+          dia,
+        ),
+        conBase.length ? api.perfilBase(a.campaign, conBase, a.agente) : Promise.resolve({ meses: [] }),
+      ]);
       descargarHistorico({
         campana: isCampaignCode(a.campaign) ? getCampaign(a.campaign).name : a.campaign,
         meses: elegidos,
@@ -1819,6 +1836,7 @@ function DescargaHistorico({ a, meses }: { a: CampaignAnalysis; meses: MonthSumm
         contacto: t.contacto,
         mtd: t.mtd,
         dia,
+        perfil: p.meses,
         money: isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto",
         agente: a.agente,
       });
@@ -1833,7 +1851,7 @@ function DescargaHistorico({ a, meses }: { a: CampaignAnalysis; meses: MonthSumm
   return (
     <ChartCard
       title="Descargar Excel"
-      note={`MES A MES: cada mes completo (cumplimiento, contacto de la base y conversión). MTD AL DÍA ${dia}: cada mes del 1 al ${dia}, con su proyección al cierre y el mes completo al lado. TIPOLOGÍAS: llamadas y % de cada mes.${a.agente ? ` Solo ${a.agente}.` : ""}`}
+      note={`MES A MES: cada mes completo (cumplimiento, contacto de la base y conversión). MTD AL DÍA ${dia}: cada mes del 1 al ${dia}, con su proyección al cierre y el mes completo al lado. COMPOSICIÓN DE BASE, HORAS Y DÍAS y DÓNDE CONVIERTO: segmentaciones de la base y efectividad de la llamada. TIPOLOGÍAS: llamadas y % de cada mes.${a.agente ? ` Solo ${a.agente}.` : ""}`}
       actions={
         <button
           type="button"
@@ -2076,7 +2094,241 @@ function HistoricoTab({ a, setMonth }: Ctx) {
           ]}
         />
       </ChartCard>
+      {meses.length > 0 && <BaseYEfectividad a={a} meses={meses} />}
     </Stack>
+  );
+}
+
+/* ---------- composición de la base y efectividad de la llamada ---------- */
+
+const pctTxt = (a: number, b: number) => (b ? `${fmtNum((a / b) * 100, 1)}%` : "—");
+
+/**
+ * Con qué viene la base de cada mes (segmentaciones) y dónde se contacta y se vende más en la llamada: por
+ * segmentación, por hora y día de la semana, y perfil × franja horaria. Venta = cliente tipificado venta en VICI.
+ */
+function BaseYEfectividad({ a, meses }: { a: CampaignAnalysis; meses: MonthSummary[] }) {
+  const conBase = meses.filter((m) => m.base !== null).map((m) => m.month).sort().reverse();
+  const [sel, setSel] = useState<string[]>(() => conBase.slice(0, 2).sort());
+  const [dim, setDim] = useState<string>("");
+  const q = useQuery({
+    queryKey: ["perfil-base", a.campaign, sel.join(","), a.agente ?? ""],
+    queryFn: () => api.perfilBase(a.campaign, sel, a.agente),
+    enabled: sel.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  });
+  const datos = (q.data?.meses ?? []).slice().sort((x, y) => x.month.localeCompare(y.month));
+  const dims = datos.flatMap((m) => m.dimensiones.map((x) => ({ key: x.key, label: x.label }))).filter((x, i, arr) => arr.findIndex((y) => y.key === x.key) === i);
+  const dimActual = dims.find((x) => x.key === dim) ?? dims.find((x) => x.key === "perfil") ?? dims[0];
+  const ultimo = [...datos].reverse().find((m) => m.conLlamadas);
+  const toggle = (m: string) => setSel((s) => (s.includes(m) ? s.filter((x) => x !== m) : [...s, m].sort().slice(-4)));
+  const chip = (activo: boolean) =>
+    `rounded-full border px-3 py-1 text-[12.5px] transition-colors ${activo ? "border-brand-500 bg-brand-500/10 font-medium text-brand-600" : "border-hair text-ink-soft hover:text-ink"}`;
+
+  // Filas: los valores de la segmentación en todos los meses, de más a menos clientes en el último mes.
+  const valores = dimActual
+    ? [...new Set(datos.flatMap((m) => m.dimensiones.find((x) => x.key === dimActual.key)?.valores.map((v) => v.valor) ?? []))]
+    : [];
+  const de = (m: PerfilMes, valor: string) => m.dimensiones.find((x) => x.key === dimActual?.key)?.valores.find((v) => v.valor === valor);
+  const ref = datos[datos.length - 1];
+  valores.sort((x, y) => (ref ? (de(ref, y)?.clientes ?? 0) - (de(ref, x)?.clientes ?? 0) : 0));
+
+  const recs = ultimo ? recomendaciones(ultimo) : [];
+  const totales = (m: PerfilMes) => {
+    const ef = m.horas.reduce((s, h) => s + h.efectivos, 0);
+    const ve = m.horas.reduce((s, h) => s + h.ventas, 0);
+    return { ef, ve, ll: m.horas.reduce((s, h) => s + h.llamadas, 0) };
+  };
+
+  return (
+    <ChartCard
+      title="Composición de la base y efectividad de la llamada"
+      note={`Clientes de las bases del mes por segmentación: cuántos se llamaron, cuántos tuvieron contacto efectivo y cuántos se tipificaron venta en VICI. Conversión = ventas ÷ contactados.${a.agente ? ` Llamadas solo de ${a.agente}.` : ""}`}
+    >
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Meses a comparar">
+        {conBase.map((m) => (
+          <button key={m} type="button" aria-pressed={sel.includes(m)} onClick={() => toggle(m)} className={chip(sel.includes(m))}>
+            <span className="inline-block first-letter:uppercase">{monthLabel(m)}</span>
+          </button>
+        ))}
+        <span className="text-[12px] text-ink-faint">Hasta 4 meses.</span>
+      </div>
+      {q.isError && <p className="mt-3 text-[13px] text-[var(--st-critical)]">{(q.error as Error).message}</p>}
+      {q.isLoading && <p className="mt-4 text-[13px] text-ink-soft">Calculando…</p>}
+
+      {datos.length > 0 && (
+        <>
+          <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: `repeat(${datos.length}, minmax(0, 1fr))` }}>
+            {datos.map((m) => {
+              const t = totales(m);
+              const cli = m.dimensiones[0]?.valores ?? [];
+              const llamados = cli.reduce((s, v) => s + v.llamados, 0);
+              const contactados = cli.reduce((s, v) => s + v.contactados, 0);
+              const ventas = cli.reduce((s, v) => s + v.ventas, 0);
+              return (
+                <div key={m.month} className="rounded-2xl border border-hair p-4">
+                  <p className="text-[12.5px] text-ink-soft first-letter:uppercase">{monthLabel(m.month)}</p>
+                  <p className="mt-1 text-[22px] leading-tight font-light text-ink tabular-nums">{fmtInt.format(m.base)} clientes</p>
+                  {m.conLlamadas ? (
+                    <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[12.5px]">
+                      <dt className="text-ink-faint">Barrido</dt>
+                      <dd className="text-right text-ink tabular-nums">{pctTxt(llamados, m.base)}</dd>
+                      <dt className="text-ink-faint">Contacto de base</dt>
+                      <dd className="text-right text-ink tabular-nums">{pctTxt(contactados, m.base)}</dd>
+                      <dt className="text-ink-faint">Conversión</dt>
+                      <dd className="text-right text-ink tabular-nums">{pctTxt(ventas, contactados)}</dd>
+                      <dt className="text-ink-faint">Ventas (VICI)</dt>
+                      <dd className="text-right text-ink tabular-nums">{fmtInt.format(ventas)}</dd>
+                      <dt className="text-ink-faint">Contactabilidad</dt>
+                      <dd className="text-right text-ink tabular-nums">{pctTxt(t.ef, t.ll)}</dd>
+                    </dl>
+                  ) : (
+                    <p className="mt-2 text-[12.5px] text-ink-faint">Sin tipificaciones del mes.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Segmentación">
+            {dims.map((x) => (
+              <button key={x.key} type="button" aria-pressed={dimActual?.key === x.key} onClick={() => setDim(x.key)} className={chip(dimActual?.key === x.key)}>
+                {x.label}
+              </button>
+            ))}
+          </div>
+
+          {dimActual && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[640px] border-collapse text-[13px]">
+                <thead>
+                  <tr className="text-[12px] text-ink-faint">
+                    <th rowSpan={2} className="border-b border-hair py-2 pr-3 text-left font-normal">{dimActual.label}</th>
+                    {datos.map((m) => (
+                      <th key={m.month} colSpan={3} className="border-b border-l border-hair px-3 py-2 text-center font-medium text-ink-soft first-letter:uppercase">
+                        {monthLabel(m.month)}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr className="text-[11.5px] text-ink-faint">
+                    {datos.map((m) => (
+                      <Fragment key={m.month}>
+                        <th className="border-b border-l border-hair px-3 py-1.5 text-right font-normal">Clientes</th>
+                        <th className="border-b border-hair px-3 py-1.5 text-right font-normal">Contacto</th>
+                        <th className="border-b border-hair px-3 py-1.5 text-right font-normal">Conversión</th>
+                      </Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {valores.slice(0, 25).map((valor) => (
+                    <tr key={valor} className="border-b border-hair last:border-0">
+                      <td className="max-w-64 truncate py-2 pr-3 text-ink" title={valor}>
+                        {valor}
+                      </td>
+                      {datos.map((m) => {
+                        const v = de(m, valor);
+                        return (
+                          <Fragment key={m.month}>
+                            <td className="border-l border-hair px-3 py-2 text-right text-ink tabular-nums">
+                              {v ? fmtInt.format(v.clientes) : "—"}
+                              {v && <span className="ml-1 text-[11.5px] text-ink-faint">{pctTxt(v.clientes, m.base)}</span>}
+                            </td>
+                            <td className="px-3 py-2 text-right text-ink tabular-nums">{v && m.conLlamadas ? pctTxt(v.contactados, v.clientes) : "—"}</td>
+                            <td className="px-3 py-2 text-right text-ink tabular-nums" title={v ? `${fmtInt.format(v.ventas)} ventas de ${fmtInt.format(v.contactados)} contactados` : undefined}>
+                              {v && m.conLlamadas ? pctTxt(v.ventas, v.contactados) : "—"}
+                            </td>
+                          </Fragment>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {valores.length > 25 && <p className="mt-2 text-[12px] text-ink-faint">Se muestran los 25 valores con más clientes de {valores.length}.</p>}
+            </div>
+          )}
+
+          {ultimo && (
+            <div className="mt-8">
+              <p className="text-[14px] font-medium text-ink">
+                Dónde convierto más · <span className="first-letter:uppercase">{monthLabel(ultimo.month)}</span>
+              </p>
+              <p className="mt-1 text-[12.5px] text-ink-soft">
+                Conversión de la llamada = ventas ÷ contactos efectivos. Llamadas a clientes de la base: {pctTxt(promedioBase(ultimo).ventas, promedioBase(ultimo).efectivos)} (
+                {fmtInt.format(promedioBase(ultimo).ventas)} ventas de {fmtInt.format(promedioBase(ultimo).efectivos)} contactos efectivos). Todas las llamadas del mes:{" "}
+                {pctTxt(totales(ultimo).ve, totales(ultimo).ef)}. Perfil y franja con al menos 20 contactos efectivos y 3 ventas.
+              </p>
+              {recs.length > 0 ? (
+                <ol className="mt-3 space-y-2">
+                  {recs.map((r) => (
+                    <li key={`${r.dimension}|${r.valor}`} className="rounded-xl border border-hair px-4 py-3 text-[13.5px] text-ink">
+                      <span className="font-medium">
+                        {r.dimension}: {r.valor}
+                      </span>{" "}
+                      de {r.franja}: conversión {fmtNum(r.conversion * 100, 1)}%, {fmtNum(r.veces, 1)} veces el promedio de la base ({fmtNum(r.promedio * 100, 1)}%).
+                      <span className="ml-1 text-[12.5px] text-ink-soft">
+                        {fmtInt.format(r.ventas)} ventas de {fmtInt.format(r.efectivos)} contactos efectivos.
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-3 text-[13px] text-ink-soft">Ningún perfil y franja con al menos 20 contactos efectivos y 3 ventas supera el promedio de la base en 20% o más.</p>
+              )}
+              <div className="mt-5 grid gap-6 lg:grid-cols-2">
+                <TablaEfectividad
+                  titulo="Por hora de la llamada"
+                  filas={ultimo.horas.filter((h) => h.llamadas >= 20).map((h) => ({ label: `${String(h.hora).padStart(2, "0")}:00`, ...h }))}
+                  promedio={totales(ultimo).ef ? totales(ultimo).ve / totales(ultimo).ef : 0}
+                />
+                <TablaEfectividad
+                  titulo="Por día de la semana"
+                  filas={ultimo.dias.map((d) => ({ label: DIAS_SEMANA[d.dia] ?? String(d.dia), ...d }))}
+                  promedio={totales(ultimo).ef ? totales(ultimo).ve / totales(ultimo).ef : 0}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </ChartCard>
+  );
+}
+
+function TablaEfectividad({ titulo, filas, promedio }: { titulo: string; filas: { label: string; llamadas: number; efectivos: number; ventas: number }[]; promedio: number }) {
+  const mejor = Math.max(0, ...filas.filter((f) => f.efectivos >= 20).map((f) => f.ventas / f.efectivos));
+  return (
+    <div>
+      <p className="text-[12.5px] font-medium text-ink-soft">{titulo}</p>
+      <table className="mt-2 w-full border-collapse text-[13px]">
+        <thead>
+          <tr className="text-[11.5px] text-ink-faint">
+            <th className="border-b border-hair py-1.5 text-left font-normal" />
+            <th className="border-b border-hair px-2 py-1.5 text-right font-normal">Llamadas</th>
+            <th className="border-b border-hair px-2 py-1.5 text-right font-normal">Contactabilidad</th>
+            <th className="border-b border-hair px-2 py-1.5 text-right font-normal">Ventas</th>
+            <th className="border-b border-hair px-2 py-1.5 text-right font-normal">Conversión</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((f) => {
+            const conv = f.efectivos ? f.ventas / f.efectivos : 0;
+            const destaca = f.efectivos >= 20 && conv === mejor && mejor > 0;
+            return (
+              <tr key={f.label} className={`border-b border-hair last:border-0 ${destaca ? "bg-[var(--st-good)]/8" : ""}`}>
+                <td className="py-1.5 text-ink">{f.label}</td>
+                <td className="px-2 py-1.5 text-right text-ink tabular-nums">{fmtInt.format(f.llamadas)}</td>
+                <td className="px-2 py-1.5 text-right text-ink tabular-nums">{pctTxt(f.efectivos, f.llamadas)}</td>
+                <td className="px-2 py-1.5 text-right text-ink tabular-nums">{fmtInt.format(f.ventas)}</td>
+                <td className={`px-2 py-1.5 text-right tabular-nums ${promedio && conv >= promedio * 1.2 ? "font-medium text-[var(--st-good)]" : "text-ink"}`}>{pctTxt(f.ventas, f.efectivos)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

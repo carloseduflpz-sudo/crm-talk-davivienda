@@ -1,6 +1,6 @@
 /* Excel del histórico: los meses elegidos, con el cumplimiento, el contacto de la base y la conversión de cada mes
    (MES A MES) y sus tipificaciones (TIPOLOGÍAS, un mes por columna para compararlos lado a lado). */
-import { libroConEstilos, type ColumnaEstilo, type MonthSummary, type ValorCelda } from "@crm/core";
+import { DIAS_SEMANA, libroConEstilos, recomendaciones, type ColumnaEstilo, type MonthSummary, type PerfilMes, type ValorCelda } from "@crm/core";
 import type { ContactoBaseMes, MtdMes, TipologiaMes } from "./api";
 import { monthLabel } from "./xlsx";
 
@@ -37,6 +37,8 @@ export interface ExcelHistorico {
   mtd: MtdMes[];
   /** Día de corte del MTD. */
   dia: number;
+  /** Composición de la base y efectividad de la llamada de los meses (los que tienen base). */
+  perfil: PerfilMes[];
   /** Meses que tienen tipificaciones cargadas (en los demás las celdas quedan vacías, no en cero). */
   conTipificaciones: string[];
   /** La meta va en dólares (CDC, Extra). */
@@ -149,6 +151,92 @@ function hojaMtd(x: ExcelHistorico) {
   };
 }
 
+const perfilesOrdenados = (x: ExcelHistorico) => [...x.perfil].sort((a, b) => a.month.localeCompare(b.month));
+
+/** Cada segmentación de la base: clientes, % de la base, contacto y conversión, un mes al lado del otro. */
+function hojaComposicion(x: ExcelHistorico) {
+  const meses = perfilesOrdenados(x);
+  const ultimo = meses[meses.length - 1]!;
+  const dims = meses.flatMap((m) => m.dimensiones.map((d) => ({ key: d.key, label: d.label }))).filter((d, i, a) => a.findIndex((y) => y.key === d.key) === i);
+  const filas: ValorCelda[][] = [];
+  for (const d of dims) {
+    const de = (m: PerfilMes, v: string) => m.dimensiones.find((y) => y.key === d.key)?.valores.find((y) => y.valor === v);
+    const valores = [...new Set(meses.flatMap((m) => m.dimensiones.find((y) => y.key === d.key)?.valores.map((v) => v.valor) ?? []))].sort(
+      (a, b) => (de(ultimo, b)?.clientes ?? 0) - (de(ultimo, a)?.clientes ?? 0),
+    );
+    for (const v of valores)
+      filas.push([
+        d.label,
+        v,
+        ...meses.flatMap((m) => {
+          const r = de(m, v);
+          if (!r) return [null, null, null, null];
+          return [r.clientes, div(r.clientes, m.base), m.conLlamadas ? div(r.contactados, r.clientes) : null, m.conLlamadas ? div(r.ventas, r.contactados) : null];
+        }),
+      ]);
+  }
+  return {
+    nombre: "COMPOSICIÓN DE BASE",
+    fuente: { nombre: "Calibri", tamano: 11 },
+    congelar: { columnas: 2 },
+    columnas: [
+      col("SEGMENTACIÓN", 24),
+      col("VALOR", 34),
+      ...meses.flatMap((m) => [col(`${corto(m.month)} CLIENTES`, 14, ENT), col(`${corto(m.month)} % BASE`, 12, PCT), col(`${corto(m.month)} CONTACTO`, 14, PCT), col(`${corto(m.month)} CONVERSIÓN`, 16, PCT)]),
+    ],
+    filas,
+  };
+}
+
+/** Por hora de la llamada y por día de la semana: llamadas, contactabilidad, ventas y conversión de cada mes. */
+function hojaHorasDias(x: ExcelHistorico) {
+  const meses = perfilesOrdenados(x).filter((m) => m.conLlamadas);
+  const horas = [...new Set(meses.flatMap((m) => m.horas.map((h) => h.hora)))].sort((a, b) => a - b);
+  const dias = [1, 2, 3, 4, 5, 6, 0].filter((d) => meses.some((m) => m.dias.some((y) => y.dia === d)));
+  const celdas = (r: { llamadas: number; efectivos: number; ventas: number } | undefined) => (r ? [r.llamadas, div(r.efectivos, r.llamadas), r.ventas, div(r.ventas, r.efectivos)] : [null, null, null, null]);
+  const filas: ValorCelda[][] = [
+    ...horas.map((h) => ["HORA", `${String(h).padStart(2, "0")}:00`, ...meses.flatMap((m) => celdas(m.horas.find((y) => y.hora === h)))]),
+    ...dias.map((d) => ["DÍA", DIAS_SEMANA[d]!.toUpperCase(), ...meses.flatMap((m) => celdas(m.dias.find((y) => y.dia === d)))]),
+  ];
+  return {
+    nombre: "HORAS Y DÍAS",
+    fuente: { nombre: "Calibri", tamano: 11 },
+    congelar: { columnas: 2 },
+    columnas: [
+      col("POR", 8),
+      col("HORA / DÍA", 14),
+      ...meses.flatMap((m) => [col(`${corto(m.month)} LLAMADAS`, 14, ENT), col(`${corto(m.month)} CONTACTABILIDAD`, 18, PCT), col(`${corto(m.month)} VENTAS`, 12, ENT), col(`${corto(m.month)} CONVERSIÓN`, 16, PCT)]),
+    ],
+    filas,
+  };
+}
+
+/** Perfil × franja horaria donde la conversión de la llamada supera el promedio del mes (al menos 20 contactos efectivos). */
+function hojaDondeConvierto(x: ExcelHistorico) {
+  const filas: ValorCelda[][] = perfilesOrdenados(x)
+    .filter((m) => m.conLlamadas)
+    .flatMap((m) =>
+      recomendaciones(m, 20, 10).map((r) => [monthLabel(m.month).toUpperCase(), r.dimension, r.valor, r.franja, r.efectivos, r.ventas, r.conversion, r.promedio, r.veces]),
+    );
+  return {
+    nombre: "DÓNDE CONVIERTO",
+    fuente: { nombre: "Calibri", tamano: 11 },
+    congelar: { columnas: 1 },
+    columnas: [
+      col("MES", 16),
+      col("SEGMENTACIÓN", 24),
+      col("VALOR", 32),
+      col("FRANJA", 18),
+      col("CONTACTOS EFECTIVOS", 15, ENT),
+      col("VENTAS", 10, ENT),
+      col("CONVERSIÓN", 13, PCT),
+      col("PROMEDIO DEL MES", 14, PCT),
+      col("VECES EL PROMEDIO", 14, DEC),
+    ],
+    filas,
+  };
+}
+
 /** Una fila por categoría y tipificación y, por mes, sus llamadas y su % del total de llamadas del mes. */
 function hojaTipologias(x: ExcelHistorico) {
   const meses = x.meses.map((m) => m.month);
@@ -192,7 +280,7 @@ function hojaTipologias(x: ExcelHistorico) {
 }
 
 export function descargarHistorico(x: ExcelHistorico): void {
-  const libro = libroConEstilos([hojaMesAMes(x), hojaMtd(x), hojaTipologias(x)]);
+  const libro = libroConEstilos([hojaMesAMes(x), hojaMtd(x), ...(x.perfil.length ? [hojaComposicion(x), hojaHorasDias(x), hojaDondeConvierto(x)] : []), hojaTipologias(x)]);
   const url = URL.createObjectURL(new Blob([libro as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
   const a = document.createElement("a");
   const primero = x.meses[0]!.month;

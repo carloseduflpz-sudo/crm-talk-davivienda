@@ -1,5 +1,5 @@
 /* Cliente de la API. La sesión viaja en una cookie segura que el navegador maneja solo. */
-import type { CampaignAnalysis, DatasetDef, MesOficial, MonthSummary, Oficial, Permission, PresentacionCampania, Role, SabanaSummary } from "@crm/core";
+import type { CampaignAnalysis, DatasetDef, MesOficial, MonthSummary, Oficial, PerfilMes, Permission, PresentacionCampania, Role, SabanaSummary } from "@crm/core";
 
 export class ApiError extends Error {
   constructor(
@@ -326,6 +326,9 @@ export const api = {
     const qs = q.toString();
     return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
   },
+  /** Composición de la base y efectividad de la llamada de los meses elegidos. */
+  perfilBase: (campaign: string, meses: string[], agent?: string | null) =>
+    get<{ meses: PerfilMes[] }>(`/analisis/${campaign}/perfil?meses=${meses.join(",")}${agent ? `&agente=${encodeURIComponent(agent)}` : ""}`),
   /** Tipificaciones de los meses elegidos (Excel del histórico). */
   historicoTipologias: (campaign: string, meses: string[], agent?: string | null, dia?: number) =>
     get<{ meses: string[]; conTipificaciones: string[]; filas: TipologiaMes[]; contacto: ContactoBaseMes[]; mtd: MtdMes[] }>(
