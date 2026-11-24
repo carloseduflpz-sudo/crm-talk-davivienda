@@ -17,6 +17,8 @@ export interface ColumnaEstilo {
   /** "fecha": el valor es AAAA-MM-DD y se guarda como fecha de Excel; "numero": número. */
   tipo?: "texto" | "numero" | "fecha";
   alinear?: "left" | "center" | "right";
+  /** Formato de número de Excel para los datos (p. ej. "#,##0", "0.0%", "$#,##0.00"). */
+  formato?: string;
 }
 
 export interface HojaEstilo {
@@ -26,6 +28,10 @@ export interface HojaEstilo {
   /** Letra de toda la hoja. */
   fuente?: { nombre: string; tamano: number };
   zoom?: number;
+  /** Deja fija la fila de títulos y estas primeras columnas al desplazarse. */
+  congelar?: { columnas: number };
+  /** Filas de datos (posición en `filas`) que van en negrita, p. ej. el TOTAL. */
+  negrita?: number[];
 }
 
 const esc = (s: string) =>
@@ -55,6 +61,8 @@ class Estilos {
   fonts = ['<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>'];
   fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
   xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
+  /** Formatos de número propios (el 164 es la fecha dd/mm/yyyy). */
+  numFmts = new Map<string, number>([["dd/mm/yyyy", 164]]);
   private idx = new Map<string, number>();
   private add(list: string[], xml: string): number {
     const k = `${list === this.fonts ? "f" : list === this.fills ? "p" : "x"}:${xml}`;
@@ -65,7 +73,13 @@ class Estilos {
     }
     return i;
   }
-  xf(o: { fuente: string; tamano: number; negrita?: boolean; letra?: string; relleno?: string; alinear?: string; fecha?: boolean }): number {
+  xf(o: { fuente: string; tamano: number; negrita?: boolean; letra?: string; relleno?: string; alinear?: string; fecha?: boolean; formato?: string }): number {
+    const codigo = o.fecha ? "dd/mm/yyyy" : o.formato;
+    let numFmt = 0;
+    if (codigo) {
+      numFmt = this.numFmts.get(codigo) ?? 164 + this.numFmts.size;
+      this.numFmts.set(codigo, numFmt);
+    }
     const font = this.add(
       this.fonts,
       `<font>${o.negrita ? "<b/>" : ""}<sz val="${o.tamano}"/>${o.letra ? `<color rgb="FF${o.letra}"/>` : ""}<name val="${esc(o.fuente)}"/><family val="2"/></font>`,
@@ -74,14 +88,14 @@ class Estilos {
     const align = `<alignment horizontal="${o.alinear ?? "left"}" vertical="center"/>`;
     return this.add(
       this.xfs,
-      `<xf numFmtId="${o.fecha ? 164 : 0}" fontId="${font}" fillId="${fill}" borderId="1" xfId="0" applyFont="1" applyFill="${fill ? 1 : 0}" applyBorder="1" applyAlignment="1"${o.fecha ? ' applyNumberFormat="1"' : ""}>${align}</xf>`,
+      `<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="1" xfId="0" applyFont="1" applyFill="${fill ? 1 : 0}" applyBorder="1" applyAlignment="1"${numFmt ? ' applyNumberFormat="1"' : ""}>${align}</xf>`,
     );
   }
   xml(): string {
     const thin = '<left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/>';
     return (
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-      `<numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/></numFmts>` +
+      `<numFmts count="${this.numFmts.size}">${[...this.numFmts].map(([c, id]) => `<numFmt numFmtId="${id}" formatCode="${esc(c)}"/>`).join("")}</numFmts>` +
       `<fonts count="${this.fonts.length}">${this.fonts.join("")}</fonts>` +
       `<fills count="${this.fills.length}">${this.fills.join("")}</fills>` +
       `<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border>${thin}</border></borders>` +
@@ -92,12 +106,26 @@ class Estilos {
   }
 }
 
+/** Panel fijo: la fila 1 y las primeras `columnas` columnas. */
+function congelado(h: HojaEstilo): string {
+  if (!h.congelar) return "";
+  const n = h.congelar.columnas;
+  const celda = `${colLetra(n)}2`;
+  return n
+    ? `<pane xSplit="${n}" ySplit="1" topLeftCell="${celda}" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="${celda}" sqref="${celda}"/>`
+    : `<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/>`;
+}
+
 function hojaXml(h: HojaEstilo, est: Estilos): string {
   const fuente = h.fuente ?? { nombre: "Calibri Light", tamano: 11 };
   const enc = h.columnas.map((c) =>
     est.xf({ fuente: fuente.nombre, tamano: c.tamano ?? fuente.tamano, negrita: c.negrita, letra: c.letra, relleno: c.relleno, alinear: "center" }),
   );
-  const dat = h.columnas.map((c) => est.xf({ fuente: fuente.nombre, tamano: fuente.tamano, alinear: c.alinear ?? "left", fecha: c.tipo === "fecha" }));
+  const dat = h.columnas.map((c) => est.xf({ fuente: fuente.nombre, tamano: fuente.tamano, alinear: c.alinear ?? "left", fecha: c.tipo === "fecha", formato: c.formato }));
+  const datNegrita = h.negrita?.length
+    ? h.columnas.map((c) => est.xf({ fuente: fuente.nombre, tamano: fuente.tamano, negrita: true, alinear: c.alinear ?? "left", fecha: c.tipo === "fecha", formato: c.formato }))
+    : dat;
+  const negrita = new Set(h.negrita ?? []);
   const celda = (v: ValorCelda, r: number, i: number, s: number, tipo?: ColumnaEstilo["tipo"]) => {
     const ref = `${colLetra(i)}${r}`;
     if (v === null || v === undefined || v === "") return `<c r="${ref}" s="${s}"/>`;
@@ -111,11 +139,11 @@ function hojaXml(h: HojaEstilo, est: Estilos): string {
   };
   const filas = [
     `<row r="1">${h.columnas.map((c, i) => celda(c.titulo, 1, i, enc[i]!)).join("")}</row>`,
-    ...h.filas.map((f, j) => `<row r="${j + 2}">${h.columnas.map((c, i) => celda(f[i], j + 2, i, dat[i]!, c.tipo)).join("")}</row>`),
+    ...h.filas.map((f, j) => `<row r="${j + 2}">${h.columnas.map((c, i) => celda(f[i], j + 2, i, (negrita.has(j) ? datNegrita : dat)[i]!, c.tipo)).join("")}</row>`),
   ];
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-    `<sheetViews><sheetView workbookViewId="0"${h.zoom ? ` zoomScale="${h.zoom}" zoomScaleNormal="${h.zoom}"` : ""}/></sheetViews>` +
+    `<sheetViews><sheetView workbookViewId="0"${h.zoom ? ` zoomScale="${h.zoom}" zoomScaleNormal="${h.zoom}"` : ""}>${congelado(h)}</sheetView></sheetViews>` +
     `<sheetFormatPr defaultRowHeight="15"/>` +
     `<cols>${h.columnas.map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.ancho}" customWidth="1"/>`).join("")}</cols>` +
     `<sheetData>${filas.join("")}</sheetData>` +

@@ -123,6 +123,33 @@ export interface NuevaCitaDocumentacion {
   /** Comentario de la gestión (STATUS SE REALIZA CITA). */
   comentario: string;
 }
+/** Un mes al mismo día (MTD): lo que cuenta para la meta del día 1 al `dia`, su meta y sus días hábiles. */
+export interface MtdMes {
+  month: string;
+  dia: number;
+  meta: number | null;
+  logrado: number | null;
+  diasHabiles: number;
+  diasAlCorte: number;
+}
+/** Contacto de la base de un mes: clientes de la base llamados, con contacto efectivo y con venta (VICI). base null = sin base cargada. */
+export interface ContactoBaseMes {
+  month: string;
+  base: number | null;
+  llamados: number;
+  contactados: number;
+  ventas: number;
+}
+/** Llamadas de un mes por categoría, tipificación y subtipología. */
+export interface TipologiaMes {
+  month: string;
+  categoria: string;
+  tipologia: string;
+  subtipologia: string;
+  clase: string;
+  llamadas: number;
+  clientes: number;
+}
 export interface SeguimientoDocumentacion {
   /** Solo el dueño del CRM puede eliminar comentarios. */
   puedeEliminar: boolean;
@@ -299,6 +326,11 @@ export const api = {
     const qs = q.toString();
     return get<{ analysis: CampaignAnalysis }>(`/analisis/${campaign}${qs ? `?${qs}` : ""}`).then((r) => r.analysis);
   },
+  /** Tipificaciones de los meses elegidos (Excel del histórico). */
+  historicoTipologias: (campaign: string, meses: string[], agent?: string | null, dia?: number) =>
+    get<{ meses: string[]; conTipificaciones: string[]; filas: TipologiaMes[]; contacto: ContactoBaseMes[]; mtd: MtdMes[] }>(
+      `/analisis/${campaign}/historico/tipologias?meses=${meses.join(",")}${agent ? `&agente=${encodeURIComponent(agent)}` : ""}${dia ? `&dia=${dia}` : ""}`,
+    ),
   history: (campaign: string, agent?: string | null) =>
     get<{ meses: MonthSummary[] }>(`/analisis/${campaign}/historico${agent ? `?agente=${encodeURIComponent(agent)}` : ""}`).then((r) => r.meses),
   /** Todo lo que hay de un cliente: contacto, ventas, bases, llamadas y CRM (de una campaña o de todas). */

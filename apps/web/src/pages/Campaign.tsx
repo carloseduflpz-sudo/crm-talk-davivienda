@@ -5,7 +5,7 @@
    - mes y agente en el enlace, para compartir exactamente lo que se ve. */
 import { GOAL_UNIT, businessDays, getCampaign, isCampaignCode, type CampaignAnalysis, type CampaignCode, type MonthSummary, type SaleClass } from "@crm/core";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Columns2, Database, History, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
+import { BarChart3, Columns2, Database, Download, History, LoaderCircle, PhoneCall, Target, TrendingUp, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, useParams, useSearchParams } from "react-router";
 import { AgentPicker } from "../components/AgentPicker";
@@ -39,6 +39,7 @@ import { EmptyState, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { consultaAnalisis, consultaHistorico, mesAnterior, type Dias } from "../lib/consultas";
 import { downloadWorkbook } from "../lib/export";
+import { descargarHistorico } from "../lib/historicoExcel";
 import { currentMonth, monthLabel } from "../lib/xlsx";
 
 export const CAMPAIGN_TABS = [
@@ -1778,11 +1779,100 @@ function TrendCard({ t, meses, active, onSelect }: { t: Trend; meses: MonthSumma
   );
 }
 
+/** Excel del histórico con los meses que se elijan: MES A MES y TIPOLOGÍAS. */
+function DescargaHistorico({ a, meses }: { a: CampaignAnalysis; meses: MonthSummary[] }) {
+  const todos = [...meses].map((m) => m.month).sort().reverse();
+  const [sel, setSel] = useState<Set<string>>(() => new Set(todos.slice(0, 3)));
+  const [bajando, setBajando] = useState(false);
+  const [error, setError] = useState("");
+  const elegidos = meses.filter((m) => sel.has(m.month)).sort((x, y) => x.month.localeCompare(y.month));
+  /* Día del MTD: el corte del mes en curso (el de la sábana, con el corte del banco si lo trae); sin mes en curso, hoy. */
+  const enCurso = meses.find((m) => m.month === currentMonth());
+  const dia =
+    a.month === currentMonth() && a.cumplimiento.fechaCorte
+      ? Number(a.cumplimiento.fechaCorte.slice(8, 10))
+      : enCurso?.hasta
+        ? Number(enCurso.hasta.slice(8, 10))
+        : new Date().getDate();
+  const toggle = (m: string) =>
+    setSel((s) => {
+      const n = new Set(s);
+      if (n.has(m)) n.delete(m);
+      else n.add(m);
+      return n;
+    });
+  const descargar = async () => {
+    setBajando(true);
+    setError("");
+    try {
+      const t = await api.historicoTipologias(
+        a.campaign,
+        elegidos.map((m) => m.month),
+        a.agente,
+        dia,
+      );
+      descargarHistorico({
+        campana: isCampaignCode(a.campaign) ? getCampaign(a.campaign).name : a.campaign,
+        meses: elegidos,
+        tipologias: t.filas,
+        conTipificaciones: t.conTipificaciones,
+        contacto: t.contacto,
+        mtd: t.mtd,
+        dia,
+        money: isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto",
+        agente: a.agente,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo armar el Excel.");
+    } finally {
+      setBajando(false);
+    }
+  };
+  const chip = (activo: boolean) =>
+    `rounded-full border px-3 py-1 text-[12.5px] transition-colors ${activo ? "border-brand-500 bg-brand-500/10 font-medium text-brand-600" : "border-hair text-ink-soft hover:text-ink"}`;
+  return (
+    <ChartCard
+      title="Descargar Excel"
+      note={`MES A MES: cada mes completo (cumplimiento, contacto de la base y conversión). MTD AL DÍA ${dia}: cada mes del 1 al ${dia}, con su proyección al cierre y el mes completo al lado. TIPOLOGÍAS: llamadas y % de cada mes.${a.agente ? ` Solo ${a.agente}.` : ""}`}
+      actions={
+        <button
+          type="button"
+          onClick={descargar}
+          disabled={!elegidos.length || bajando}
+          className="inline-flex items-center gap-2 rounded-full bg-brand-600 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+        >
+          {bajando ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Download className="size-4" aria-hidden />}
+          Descargar {fmtInt.format(elegidos.length)} {elegidos.length === 1 ? "mes" : "meses"}
+        </button>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Meses del Excel">
+        {todos.map((m) => (
+          <button key={m} type="button" aria-pressed={sel.has(m)} onClick={() => toggle(m)} className={chip(sel.has(m))}>
+            <span className="inline-block first-letter:uppercase">{monthLabel(m)}</span>
+          </button>
+        ))}
+        <span className="mx-1 h-5 w-px bg-hair" aria-hidden />
+        <button type="button" onClick={() => setSel(new Set(todos.slice(0, 3)))} className="text-[12.5px] text-brand-600 hover:underline">
+          Últimos 3
+        </button>
+        <button type="button" onClick={() => setSel(new Set(todos))} className="text-[12.5px] text-brand-600 hover:underline">
+          Todos
+        </button>
+        <button type="button" onClick={() => setSel(new Set())} className="text-[12.5px] text-brand-600 hover:underline">
+          Ninguno
+        </button>
+      </div>
+      {error && <p className="mt-3 text-[13px] text-[var(--st-critical)]">{error}</p>}
+    </ChartCard>
+  );
+}
+
 function HistoricoTab({ a, setMonth }: Ctx) {
   const N = nombresDe(a.campaign);
   const h = useQuery(consultaHistorico(a.campaign, a.agente));
   const money = isCampaignCode(a.campaign) && GOAL_UNIT[a.campaign] === "monto";
-  const [cut, setCut] = useState<"dia" | "mes">("dia");
+  const [cut, setCut] = useState<"dia" | "mes">("mes");
   const nd = conNoDesembolso(a.campaign);
   // Evaluadas = aprobadas + rechazadas + no desembolsadas (en TC, ya pasaron por PCBM).
   const evaluadasDe = (r: MonthSummary) => (r.aprobadas === null || r.rechazadas === null ? null : r.aprobadas + r.rechazadas + (r.noDesembolsadas ?? 0));
@@ -1867,6 +1957,7 @@ function HistoricoTab({ a, setMonth }: Ctx) {
           </div>
         </div>
       )}
+      {meses.length > 0 && <DescargaHistorico a={a} meses={meses} />}
       {meses.length < 2 && (
         <Aside>
           Por ahora hay {meses.length === 1 ? "un solo mes" : "ningún mes"} con archivos. Al cargar otros meses (sábana, base y tipificaciones de cada mes) aquí se comparan mes contra mes.

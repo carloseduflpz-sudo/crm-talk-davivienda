@@ -1166,6 +1166,76 @@ function aplicarOficial(campaign: string, summary: MonthSummary[], oficial: Ofic
  * dan ventas, aprobación, monto, base, llamadas, contactabilidad y penetración de los 13 meses a la vez (las mismas
  * definiciones que cada pestaña), en tres viajes a la base sin importar cuántos meses haya.
  */
+/**
+ * Cada mes al mismo día (MTD): lo que cuenta para la meta con ventas del día 1 al `dia` (igual que el logrado del mes:
+ * estatus que cuentan y sin la cosecha que ya contó en un mes anterior; la cosecha sin fecha o de meses anteriores
+ * también entra), la meta del mes y sus días hábiles hasta ese día y en todo el mes.
+ */
+async function logradoAlDia(env: Env, campaign: string, meses: string[], dia: number, agente: string | null) {
+  const db = env.DB;
+  const fa = agente ? ` AND ${(await loadAgentNaming(env, campaign)).sql("executive")} = ?` : "";
+  const [{ results: sabanas }, { results: goalRows }] = await Promise.all([
+    db
+      .prepare("SELECT id, month FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month IN (SELECT value FROM json_each(?))")
+      .bind(campaign, JSON.stringify(meses))
+      .all<{ id: string; month: string }>(),
+    db.prepare("SELECT month, sales_goal, agents, counted_statuses, work_days, holidays FROM goals WHERE campaign = ?").bind(campaign).all<GoalRow & { month: string }>(),
+  ]);
+  const etiqueta = "COALESCE(NULLIF(TRIM(status_raw), ''), '(sin estatus)')";
+  const unidad = isCampaignCode(campaign) ? GOAL_UNIT[campaign] : "ventas";
+  const medida = unidad === "monto" ? "COALESCE(amount, 0)" : "1";
+  const metaDe = (month: string) => {
+    const goal = goalRows.find((g) => g.month === month) ?? null;
+    const anterior = goalRows.filter((g) => g.month < month).sort((x, y) => y.month.localeCompare(x.month))[0];
+    return { goal, config: goal ?? anterior ?? null };
+  };
+  const etiquetas = sabanas.length
+    ? (
+        await db
+          .prepare(`SELECT DISTINCT upload_id AS id, ${etiqueta} AS label FROM bank_sales WHERE upload_id IN (SELECT value FROM json_each(?))`)
+          .bind(JSON.stringify(sabanas.map((u) => u.id)))
+          .all<{ id: string; label: string }>()
+      ).results
+    : [];
+  const out = await Promise.all(
+    meses.map(async (month) => {
+      const { goal, config } = metaDe(month);
+      const habiles = businessDays(month, parseDays(config?.work_days), (parseList(goal?.holidays) ?? []).filter((d) => d.startsWith(month)));
+      const ultimo = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+      const d = Math.min(dia, ultimo);
+      const corte = `${month}-${String(d).padStart(2, "0")}`;
+      const sab = sabanas.find((u) => u.month === month);
+      let logrado: number | null = null;
+      if (sab) {
+        const cuentan = parseList(config?.counted_statuses) ?? etiquetas.filter((e) => e.id === sab.id).map((e) => e.label).filter((l) => countsForGoal(campaign as CampaignCode, l));
+        if (cuentan.length) {
+          const lista = JSON.stringify(cuentan);
+          const r = await db
+            .prepare(
+              `WITH prev AS (SELECT DISTINCT p.niu || '|' || COALESCE(p.sale_date, '') AS k FROM bank_sales p
+                   WHERE p.upload_id IN (SELECT id FROM uploads WHERE campaign = ? AND kind = 'sabana' AND is_current = 1 AND month < ?)
+                     AND COALESCE(NULLIF(TRIM(p.status_raw), ''), '(sin estatus)') IN (SELECT value FROM json_each(?)))
+               SELECT COALESCE(SUM(CASE WHEN (niu || '|' || COALESCE(sale_date, '')) IN (SELECT k FROM prev) THEN 0 ELSE ${medida} END), 0) AS v FROM bank_sales
+                WHERE upload_id = ? AND ${etiqueta} IN (SELECT value FROM json_each(?)) AND substr(COALESCE(sale_date, ''), 1, 10) <= ?${fa}`,
+            )
+            .bind(campaign, month, lista, sab.id, lista, corte, ...(agente ? [agente] : []))
+            .first<{ v: number }>();
+          logrado = n(r?.v);
+        } else logrado = 0;
+      }
+      return {
+        month,
+        dia: d,
+        meta: goal ? n(goal.sales_goal) : null,
+        logrado,
+        diasHabiles: habiles.length,
+        diasAlCorte: habiles.filter((x) => x <= corte).length,
+      };
+    }),
+  );
+  return out;
+}
+
 async function historicoRapido(env: Env, campaign: string): Promise<MonthSummary[]> {
   const db = env.DB;
   const [{ results: subidas }, ruleRow, { results: goalRows }, oficial] = await Promise.all([
@@ -1360,6 +1430,78 @@ export function registerAnalisis(r: Router): void {
     // Todo el histórico queda guardado (se recalcula solo cuando se carga o cambia algo).
     const meses = await res.obtener(`historico/${campaign}/${parteClave(agente)}.json`, () => (agente ? historicoCompleto(env, campaign, agente, res) : historicoRapido(env, campaign)), campaign);
     return json({ ok: true, agente, meses });
+  });
+
+  /**
+   * Tipificaciones de los meses elegidos (para el Excel del histórico): por categoría, tipificación y subtipología,
+   * llamadas y clientes distintos, de las tipificaciones vigentes de cada mes.
+   */
+  r.on("GET", "/analisis/:campaign/historico/tipologias", "datos:ver", async ({ env, params, url }) => {
+    const campaign = params.campaign!;
+    if (!isCampaignCode(campaign)) throw new HttpError(404, "Campaña desconocida.");
+    const agente = url.searchParams.get("agente")?.trim() || null;
+    if (agente && agente.length > 120) throw new HttpError(400, "Nombre de agente inválido.");
+    const meses = [...new Set((url.searchParams.get("meses") ?? "").split(",").map((m) => m.trim()))].filter((m) => /^20\d{2}-(0[1-9]|1[0-2])$/.test(m));
+    if (!meses.length) throw new HttpError(400, "Elige al menos un mes.");
+    if (meses.length > 24) throw new HttpError(400, "Elige hasta 24 meses.");
+    const naming = await loadAgentNaming(env, campaign);
+    const regla = await env.DB.prepare("SELECT contact_rule FROM campaigns WHERE code = ?").bind(campaign).first<{ contact_rule: string }>();
+    const efectivo = regla?.contact_rule === "sin_no_efectivo" ? "c.call_class IN ('venta','negativo')" : "c.call_class IN ('venta','negativo','no_efectivo')";
+    const { results: todas } = await env.DB.prepare(
+      `SELECT id, month, kind FROM uploads WHERE campaign = ? AND kind IN ('tipif', 'base') AND is_current = 1 AND month IN (SELECT value FROM json_each(?))`,
+    )
+      .bind(campaign, JSON.stringify(meses))
+      .all<{ id: string; month: string; kind: string }>();
+    const ups = todas.filter((u) => u.kind === "tipif");
+    const fa = agente ? ` AND ${naming.sql("c.agent")} = ?` : "";
+    const fb = agente ? [agente] : [];
+    /* Contacto de la base de cada mes: de los clientes de las bases del mes (original y adicionales), cuántos se
+       llamaron, cuántos tuvieron contacto efectivo y cuántos se tipificaron venta. Sin base cargada, sobre todas las llamadas. */
+    const contacto = await Promise.all(
+      ups.map(async (u) => {
+        const bases = todas.filter((b) => b.kind === "base" && b.month === u.month).map((b) => b.id);
+        const r = bases.length
+          ? await env.DB.prepare(
+              `WITH b AS (SELECT DISTINCT niu FROM base_records WHERE upload_id IN (SELECT value FROM json_each(?)) AND niu <> '')
+               SELECT (SELECT COUNT(*) FROM b) AS base, COUNT(DISTINCT c.niu) AS llamados, COUNT(DISTINCT CASE WHEN ${efectivo} THEN c.niu END) AS contactados,
+                      COUNT(DISTINCT CASE WHEN c.call_class = 'venta' THEN c.niu END) AS ventas
+                 FROM calls c JOIN b ON b.niu = c.niu WHERE c.upload_id = ?${fa}`,
+            )
+              .bind(JSON.stringify(bases), u.id, ...fb)
+              .first<{ base: number; llamados: number; contactados: number; ventas: number }>()
+          : await env.DB.prepare(
+              `SELECT NULL AS base, COUNT(DISTINCT c.niu) AS llamados, COUNT(DISTINCT CASE WHEN ${efectivo} THEN c.niu END) AS contactados,
+                      COUNT(DISTINCT CASE WHEN c.call_class = 'venta' THEN c.niu END) AS ventas
+                 FROM calls c WHERE c.upload_id = ? AND c.niu <> ''${fa}`,
+            )
+              .bind(u.id, ...fb)
+              .first<{ base: number | null; llamados: number; contactados: number; ventas: number }>();
+        return {
+          month: u.month,
+          base: r?.base == null ? null : Number(r.base),
+          llamados: Number(r?.llamados ?? 0),
+          contactados: Number(r?.contactados ?? 0),
+          ventas: Number(r?.ventas ?? 0),
+        };
+      }),
+    );
+    const filas = (
+      await Promise.all(
+        ups.map(async (u) => {
+          const { results } = await env.DB.prepare(
+            `SELECT COALESCE(NULLIF(TRIM(category), ''), 'Sin Tipificar') AS categoria, COALESCE(NULLIF(TRIM(tipologia), ''), 'Sin Tipificar') AS tipologia,
+                    ${SUBTIPOLOGIA} AS subtipologia, call_class AS clase, COUNT(*) AS llamadas, COUNT(DISTINCT NULLIF(niu, '')) AS clientes
+               FROM calls WHERE upload_id = ?${agente ? ` AND ${naming.sql("agent")} = ?` : ""} GROUP BY 1, 2, 3, 4`,
+          )
+            .bind(u.id, ...(agente ? [agente] : []))
+            .all<{ categoria: string; tipologia: string; subtipologia: string; clase: string; llamadas: number; clientes: number }>();
+          return results.map((r) => ({ month: u.month, ...r, llamadas: Number(r.llamadas), clientes: Number(r.clientes) }));
+        }),
+      )
+    ).flat();
+    const diaParam = Number(url.searchParams.get("dia"));
+    const mtd = Number.isInteger(diaParam) && diaParam >= 1 && diaParam <= 31 ? await logradoAlDia(env, campaign, meses, diaParam, agente) : [];
+    return json({ ok: true, meses, conTipificaciones: ups.map((u) => u.month).sort(), filas, contacto, mtd });
   });
 
   /** Meta de ventas y número de agentes de una campaña en un mes. */
