@@ -155,7 +155,7 @@ const perfilesOrdenados = (x: ExcelHistorico) => [...x.perfil].sort((a, b) => a.
 
 /** Cada segmentación de la base: clientes, % de la base, contacto y conversión, un mes al lado del otro. */
 function hojaComposicion(x: ExcelHistorico) {
-  const meses = perfilesOrdenados(x);
+  const meses = perfilesOrdenados(x).filter((m) => m.base > 0);
   const ultimo = meses[meses.length - 1]!;
   const dims = meses.flatMap((m) => m.dimensiones.map((d) => ({ key: d.key, label: d.label }))).filter((d, i, a) => a.findIndex((y) => y.key === d.key) === i);
   const filas: ValorCelda[][] = [];
@@ -280,7 +280,16 @@ function hojaTipologias(x: ExcelHistorico) {
 }
 
 export function descargarHistorico(x: ExcelHistorico): void {
-  const libro = libroConEstilos([hojaMesAMes(x), hojaMtd(x), ...(x.perfil.length ? [hojaComposicion(x), hojaHorasDias(x), hojaDondeConvierto(x)] : []), hojaTipologias(x)]);
+  const conBase = x.perfil.some((m) => m.base > 0);
+  const conLlamadas = x.perfil.some((m) => m.conLlamadas);
+  const libro = libroConEstilos([
+    hojaMesAMes(x),
+    hojaMtd(x),
+    ...(conBase ? [hojaComposicion(x)] : []),
+    ...(conLlamadas ? [hojaHorasDias(x)] : []),
+    ...(conBase && conLlamadas ? [hojaDondeConvierto(x)] : []),
+    hojaTipologias(x),
+  ]);
   const url = URL.createObjectURL(new Blob([libro as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
   const a = document.createElement("a");
   const primero = x.meses[0]!.month;

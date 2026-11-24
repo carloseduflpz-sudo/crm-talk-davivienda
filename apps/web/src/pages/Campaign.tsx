@@ -1818,7 +1818,8 @@ function DescargaHistorico({ a, meses }: { a: CampaignAnalysis; meses: MonthSumm
     setBajando(true);
     setError("");
     try {
-      const conBase = elegidos.filter((m) => m.base !== null).map((m) => m.month).slice(-13);
+      // Todos los meses elegidos (hasta 13): los que no tienen base igual traen sus llamadas por hora y día.
+      const conBase = elegidos.filter((m) => m.base !== null || m.llamadas !== null).map((m) => m.month).slice(-13);
       const [t, p] = await Promise.all([
         api.historicoTipologias(
           a.campaign,
@@ -2108,7 +2109,8 @@ const pctTxt = (a: number, b: number) => (b ? `${fmtNum((a / b) * 100, 1)}%` : "
  * segmentación, por hora y día de la semana, y perfil × franja horaria. Venta = cliente tipificado venta en VICI.
  */
 function BaseYEfectividad({ a, meses }: { a: CampaignAnalysis; meses: MonthSummary[] }) {
-  const conBase = meses.filter((m) => m.base !== null).map((m) => m.month).sort().reverse();
+  const conBase = meses.filter((m) => m.base !== null || m.llamadas !== null).map((m) => m.month).sort().reverse();
+  const [mesConv, setMesConv] = useState<string>("");
   const [sel, setSel] = useState<string[]>(() => conBase.slice(0, 2).sort());
   const [dim, setDim] = useState<string>("");
   const q = useQuery({
@@ -2121,7 +2123,8 @@ function BaseYEfectividad({ a, meses }: { a: CampaignAnalysis; meses: MonthSumma
   const datos = (q.data?.meses ?? []).slice().sort((x, y) => x.month.localeCompare(y.month));
   const dims = datos.flatMap((m) => m.dimensiones.map((x) => ({ key: x.key, label: x.label }))).filter((x, i, arr) => arr.findIndex((y) => y.key === x.key) === i);
   const dimActual = dims.find((x) => x.key === dim) ?? dims.find((x) => x.key === "perfil") ?? dims[0];
-  const ultimo = [...datos].reverse().find((m) => m.conLlamadas);
+  const conLlamadas = datos.filter((m) => m.conLlamadas);
+  const ultimo = conLlamadas.find((m) => m.month === mesConv) ?? conLlamadas[conLlamadas.length - 1];
   const toggle = (m: string) => setSel((s) => (s.includes(m) ? s.filter((x) => x !== m) : [...s, m].sort().slice(-4)));
   const chip = (activo: boolean) =>
     `rounded-full border px-3 py-1 text-[12.5px] transition-colors ${activo ? "border-brand-500 bg-brand-500/10 font-medium text-brand-600" : "border-hair text-ink-soft hover:text-ink"}`;
@@ -2252,9 +2255,16 @@ function BaseYEfectividad({ a, meses }: { a: CampaignAnalysis; meses: MonthSumma
 
           {ultimo && (
             <div className="mt-8">
-              <p className="text-[14px] font-medium text-ink">
-                Dónde convierto más · <span className="first-letter:uppercase">{monthLabel(ultimo.month)}</span>
-              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-[14px] font-medium text-ink">Dónde convierto más</p>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Mes">
+                  {conLlamadas.map((m) => (
+                    <button key={m.month} type="button" aria-pressed={m.month === ultimo.month} onClick={() => setMesConv(m.month)} className={chip(m.month === ultimo.month)}>
+                      <span className="inline-block first-letter:uppercase">{monthLabel(m.month)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <p className="mt-1 text-[12.5px] text-ink-soft">
                 Conversión de la llamada = ventas ÷ contactos efectivos. Llamadas a clientes de la base: {pctTxt(promedioBase(ultimo).ventas, promedioBase(ultimo).efectivos)} (
                 {fmtInt.format(promedioBase(ultimo).ventas)} ventas de {fmtInt.format(promedioBase(ultimo).efectivos)} contactos efectivos). Todas las llamadas del mes:{" "}
