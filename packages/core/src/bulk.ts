@@ -25,6 +25,8 @@ export interface BulkUnit {
   upload: boolean;
   /** Sábanas: dos archivos dicen ser del mismo mes; no se guarda ninguno hasta corregir el mes. */
   conflicto?: boolean;
+  /** Consolidados de ventas: ventas que ya tiene el mes cargado (para guardar solo los meses con ventas nuevas). */
+  cargadas?: number;
   /** Bases: qué base es (p. ej. "tdc:base:primeras") y cómo entra si el mes ya tiene una. */
   dataset?: string;
   modo?: "nueva" | "reemplazar" | "adicional";
@@ -53,6 +55,19 @@ export function planBulk(files: readonly ScannedFile[], existing: ReadonlySet<st
   return [...units.values()]
     .map((u) => ({ ...u, upload: !u.exists || replace }))
     .sort((a, b) => order.get(a.campaign)! - order.get(b.campaign)! || a.month.localeCompare(b.month));
+}
+
+/**
+ * Consolidados de ventas: el consolidado trae todo el año, pero solo se guardan los meses que cambiaron.
+ * Un mes ya cargado se vuelve a guardar si el archivo trae más ventas que las cargadas (las nuevas); si trae
+ * las mismas, se salta; si trae menos, se salta salvo que se pida reemplazar.
+ */
+export function planVentas(files: readonly ScannedFile[], cargadas: ReadonlyMap<string, number>, replace: boolean): BulkUnit[] {
+  return planBulk(files, new Set(cargadas.keys()), false).map((u) => {
+    const antes = cargadas.get(unitKey(u.campaign, u.month));
+    if (antes === undefined) return u;
+    return { ...u, cargadas: antes, upload: u.rows > antes || (replace && u.rows !== antes) };
+  });
 }
 
 /**

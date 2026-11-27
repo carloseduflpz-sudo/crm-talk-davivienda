@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mesDeSabana, planBases, planBulk, planSabanas } from "./bulk";
+import { mesDeSabana, planBases, planBulk, planSabanas, planVentas } from "./bulk";
 
 describe("carga histórica: reparto por campaña y mes", () => {
   const files = [
@@ -72,5 +72,26 @@ describe("carga masiva de bases", () => {
   it("si el mes ya tiene base: se salta, se reemplaza o se suma como adicional, según se elija", () => {
     expect(planBases(files, existing, "reemplazar").find((u) => u.dataset === "domi:base:domi")).toMatchObject({ modo: "reemplazar", upload: true });
     expect(planBases(files, existing, "adicional").find((u) => u.dataset === "domi:base:domi")).toMatchObject({ modo: "adicional", upload: true });
+  });
+});
+
+describe("planVentas (consolidados)", () => {
+  const archivo = [{ index: 0, campaign: "tdc" as const, byMonth: { "2026-09": 229, "2026-10": 190, "2026-11": 95 } }];
+  it("solo guarda los meses con ventas nuevas; los iguales se saltan", () => {
+    const plan = planVentas(archivo, new Map([["tdc|2026-09", 229], ["tdc|2026-10", 190], ["tdc|2026-11", 86]]), false);
+    expect(plan.map((u) => [u.month, u.upload, u.cargadas])).toEqual([
+      ["2026-09", false, 229],
+      ["2026-10", false, 190],
+      ["2026-11", true, 86],
+    ]);
+  });
+  it("un mes nuevo se guarda; uno con menos ventas solo si se pide reemplazar", () => {
+    const cargadas = new Map([["tdc|2026-10", 195]]);
+    expect(planVentas(archivo, cargadas, false).map((u) => [u.month, u.upload])).toEqual([
+      ["2026-09", true],
+      ["2026-10", false],
+      ["2026-11", true],
+    ]);
+    expect(planVentas(archivo, cargadas, true).find((u) => u.month === "2026-10")!.upload).toBe(true);
   });
 });

@@ -14,6 +14,7 @@ import {
   mesDeSabana,
   planBases,
   planBulk,
+  planVentas,
   planSabanas,
   readZipEntry,
   rowMonth,
@@ -162,6 +163,8 @@ export function BulkUpload() {
   const [dragging, setDragging] = useState(false);
   // Campaña × mes que ya tiene una carga vigente de este tipo → su id (para comparar sábanas).
   const [existing, setExisting] = useState<Map<string, string>>(new Map());
+  /** Consolidados: ventas cargadas por campaña × mes. */
+  const [cargadas, setCargadas] = useState<Map<string, number>>(new Map());
   /** Campaña × mes que ya tienen algún archivo vigente (los consolidados traen años de historia: solo se guardan esos meses). */
   const [conDatos, setConDatos] = useState<Set<string>>(new Set());
   const [replace, setReplace] = useState(false);
@@ -242,6 +245,7 @@ export function BulkUpload() {
       // Bases: por tipo de base y mes (una campaña puede tener dos bases); lo demás, por campaña y mes.
       setExisting(new Map(vigentes.map((u) => [kind === "base" ? `${u.dataset}|${u.month}` : unitKey(u.campaign, u.month), u.id] as const)));
       setConDatos(new Set(lists.flat().filter((u) => u.isCurrent).map((u) => unitKey(u.campaign, u.month))));
+      setCargadas(new Map(vigentes.map((u) => [unitKey(u.campaign, u.month), u.rowsValid] as const)));
     } catch {
       /* sin la lista se trata todo como nuevo; el servidor igual guarda versiones */
     }
@@ -303,12 +307,18 @@ export function BulkUpload() {
             existe,
             replace,
           )
+        : kind === "ventas"
+        ? planVentas(
+            rows.flatMap((r, index) => (r.status === "listo" && r.campaign ? [{ index, campaign: r.campaign, byMonth: r.byMonth }] : [])),
+            cargadas,
+            replace,
+          ).filter((u) => u.month === mesEnCurso || conDatos.has(unitKey(u.campaign, u.month)))
         : planBulk(
             rows.flatMap((r, index) => (r.status === "listo" && r.campaign ? [{ index, campaign: r.campaign, byMonth: r.byMonth }] : [])),
             existe,
             replace,
-          ).filter((u) => kind !== "ventas" || u.month === mesEnCurso || conDatos.has(unitKey(u.campaign, u.month))),
-    [rows, existe, replace, kind, siExiste, conDatos],
+          ),
+    [rows, existe, replace, kind, siExiste, conDatos, cargadas],
   );
   const sinMes = porArchivo(kind) && rows.some((r) => r.status === "listo" && !r.month);
   const conflictos = plan.filter((u) => u.conflicto).length;
@@ -705,7 +715,10 @@ export function BulkUpload() {
                     ? "1 mes por guardar"
                     : `${toUpload.length} meses por guardar`}{" "}
                 · {fmt.format(totalRows)} {tipo.filas}
-                {plan.length - toUpload.length - conflictos > 0 && ` · ${plan.length - toUpload.length - conflictos} ya cargados se saltan`}
+                {plan.length - toUpload.length - conflictos > 0 &&
+                  (kind === "ventas"
+                    ? ` · ${plan.length - toUpload.length - conflictos} ${plan.length - toUpload.length - conflictos === 1 ? "mes sin ventas nuevas se salta" : "meses sin ventas nuevas se saltan"}`
+                    : ` · ${plan.length - toUpload.length - conflictos} ya cargados se saltan`)}
               </p>
               {(conflictos > 0 || sinMes) && (
                 <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
@@ -727,7 +740,7 @@ export function BulkUpload() {
             {kind !== "base" && plan.some((u) => u.exists) && phase === "planned" && (
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input type="checkbox" className="accent-brand-500" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
-                Reemplazar los meses que ya tienen {tipo.label.toLowerCase()}
+                {kind === "ventas" ? "Reemplazar también los meses donde el consolidado trae menos ventas que las cargadas" : `Reemplazar los meses que ya tienen ${tipo.label.toLowerCase()}`}
                 {kind === "sabana" && " (si la nueva trae menos que la cargada, no se reemplaza)"}
               </label>
             )}
@@ -763,6 +776,18 @@ export function BulkUpload() {
                             <span className="text-brand-600">Se suma como adicional</span>
                           ) : u.modo === "nueva" ? (
                             <span className="text-slate-500">Nueva</span>
+                          ) : u.cargadas !== undefined ? (
+                            u.rows > u.cargadas ? (
+                              <span className="text-brand-600">+{fmt.format(u.rows - u.cargadas)} ventas nuevas</span>
+                            ) : u.rows === u.cargadas ? (
+                              <span className="text-slate-400">Sin ventas nuevas: se salta</span>
+                            ) : u.upload ? (
+                              <span className="text-amber-700 dark:text-amber-300">Trae {fmt.format(u.cargadas - u.rows)} menos: reemplaza</span>
+                            ) : (
+                              <span className="text-slate-400" title={`Cargadas: ${fmt.format(u.cargadas)}`}>
+                                Trae {fmt.format(u.cargadas - u.rows)} menos: se salta
+                              </span>
+                            )
                           ) : !u.upload ? (
                             <span className="text-slate-400">Ya cargado: se salta</span>
                           ) : u.exists ? (
