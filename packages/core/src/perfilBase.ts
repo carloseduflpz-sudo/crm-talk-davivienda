@@ -55,6 +55,9 @@ export const DIMENSIONES_BASE: Record<string, DimensionBase[]> = {
     d("probabilidad", "Mayor prob. de aceptación", "Mayor Prob. Aceptación"), { ...EDAD, campo: "Edad" },
   ],
   "domi:base:piloto": [d("oferta", "Estado", "offer")],
+  "seguros:base:renorepo": [
+    d("estado", "Estado del seguro", "profile"), d("plan", "Plan", "offer"), d("tarjeta", "Tarjeta", "Tarjeta"), d("medioPago", "Medio de pago", "MedioPago"),
+  ],
 };
 
 /** Sin dato en el archivo de la base. */

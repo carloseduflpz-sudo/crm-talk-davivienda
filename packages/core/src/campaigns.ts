@@ -125,6 +125,7 @@ export const CAMPAIGNS: readonly CampaignDef[] = [
     datasets: [
       { id: "seguros:sabana", kind: "sabana", label: "Sábana", source: "Reporte de Seguros (hoja BASE)" },
       { id: "seguros:base", kind: "base", label: "Base", source: "Base Compras y Retiros Protegidos" },
+      { id: "seguros:base:renorepo", kind: "base", label: "Base RENO-REPO", source: "Base complementaria RENO-REPO" },
       tipif("seguros"),
       ventasCrm("seguros"),
     ],

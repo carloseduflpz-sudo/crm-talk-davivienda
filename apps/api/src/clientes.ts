@@ -48,13 +48,13 @@ export function parseExtra(v: unknown): Extra {
 
 /** Columnas donde suele venir cada dato, según el archivo (en orden de preferencia). */
 const CONTACT_KEYS = {
-  nombre: ["NOMBRE", "Nombre", "NOMBRE DEL CLIENTE", "NOMBRE DE CLIENTE", "Nombre del cliente", "Nombre Completo", "NombreSociedad", "Nombre legal según IBS"],
+  nombre: ["NOMBRE", "Nombre", "NOMBRE TITULAR", "NOMBRE DEL CLIENTE", "NOMBRE DE CLIENTE", "Nombre del cliente", "Nombre Completo", "NombreSociedad", "Nombre legal según IBS"],
   telefono: [
     "CELULAR CLIENTE", "TEL. VENTA REALIZADA", "Telefono", "Teléfono", "TelNotif", "TEL Notificaciones", "TelNotificaciones", "Tel. 1", "Tel.1", "Telefono1",
-    "Telefono2", "Telefono3", "Celular",
+    "Telefono2", "Telefono3", "Celular", "TelCasa", "TelTrabajo",
   ],
   dui: ["DUI", "DUI OK", "Dui", "NumeroDUI"],
-  correo: ["CORREO ELECTRONICO", "Correo", "Correo Electrónico", "Correo Electronico"],
+  correo: ["CORREO ELECTRONICO", "Correo", "Correo Electrónico", "Correo Electronico", "EMAIL"],
   municipio: ["Municipio"],
   departamento: ["Departamento"],
 } as const;

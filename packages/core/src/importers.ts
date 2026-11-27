@@ -270,7 +270,7 @@ const CONSOLIDADO: Record<CampaignCode, Profile> = {
     required: ["NIU", "EJECUTIVO", "FECHA", "COLECTOR", "NPE"],
     fields: {
       NIU: ["NIU", "niu"], Fecha: ["FECHA", "isoDMY"], Agente: ["EJECUTIVO"], Nombre: ["NOMBRE"], Producto: ["COLECTOR"],
-      Monto: ["MONTO MAXIMO MENSUAL A PAGAR", "num"], Campana: ["CAMPAÑA DE VENTA"],
+      Monto: ["MONTO MAXIMO MENSUAL A PAGAR", "num"], Campana: ["CAMPAÑA DE VENTA"], NPE: ["NPE"],
     },
   }),
 };
@@ -503,6 +503,30 @@ export const PROFILES: Record<string, Profile> = {
       "NIU", "Nombre", "Dui", "Edad", "Rango Ingresos", "Perfil", "Segmento Empresa", "Correo Electrónico", "TelNotificaciones", "Tel.1", "Genero",
       "Contratacion_Seguro_Todo_Protegido", "Oferta Todo Protegido", "Cluster TC", "BASE", "Tipo de TC",
     ]),
+  },
+  /* Base complementaria RENO-REPO: clientes con el seguro de protección de tarjetas (estado, plan, tarjeta y
+     medio de pago). Trae los 3 teléfonos en una sola columna ("22002375 | 25001400 | 60663953"). */
+  "seguros:base:renorepo": {
+    label: "Base RENO-REPO",
+    sheets: [],
+    anySheet: true,
+    required: ["NIU", "Llave", "PLAN", "MEDIO DE PAGO"],
+    fileHint: /RENO|REPO/i,
+    fields: {
+      NIU: ["NIU", "niu"], DUI: ["DUI"], FEmision: ["F. EMISION", "iso"], FGrabacion: ["F. GRABACION", "iso"], Cuenta: ["CUENTA"],
+      "NOMBRE TITULAR": [["NOMBRE TITULAR", "NOMBRE TC"]], Direccion: ["DIRECCION DE DOMICILIO"], Trabajo: ["TRABAJO"],
+      Telefonos: [["TEL TRABAJO | CASA | CEL", "TELEFONOS", "TELEFONO"]], Correo: [["EMAIL", "CORREO"]], Digitos: ["4 DIGI"], Tarjeta: ["BIN"],
+      Llave: ["Llave"], Estado: ["ESTADO"], Plan: ["PLAN"], MedioPago: ["MEDIO DE PAGO"], UltimoPago: ["ULTIMO PAGO", "iso"],
+    },
+    transform: (rec) => {
+      // "trabajo | casa | celular" → un campo por teléfono (así se buscan y se unen a las llamadas).
+      const partes = String(rec.Telefonos ?? "").split("|").map((x) => x.trim());
+      const [trabajo, casa, cel] = partes;
+      if (trabajo) rec.TelTrabajo = trabajo;
+      if (casa) rec.TelCasa = casa;
+      if (cel) rec.Celular = cel;
+      delete rec.Telefonos;
+    },
   },
   "seguros:tipif": VICI,
   "seguros:ventas": CONSOLIDADO.seguros,
@@ -1042,6 +1066,7 @@ const BASE_MAP: Record<string, { niu?: string; profile?: string; offer?: string 
   "cdc:base:bienvenida": { niu: "Niu Cliente", profile: "Perfil", offer: "Producto" },
   "upin:base": { niu: "NIUCliente", profile: "Perfil", offer: "Tipo de Iniciativa" },
   "seguros:base": { profile: "Perfil", offer: "Oferta Todo Protegido" },
+  "seguros:base:renorepo": { profile: "Estado", offer: "Plan" },
   "domi:base:domi": { profile: "Perfil", offer: "Colectores que paga" },
   "domi:base:piloto": { offer: "Estado" },
 };

@@ -29,7 +29,7 @@ export interface Segmento {
 
 /** Bases que cuentan como "la base" de la campaña (DOMI y CDC: la Bau; la piloto y la de bienvenida van aparte). */
 export function datasetsPrincipales(campaign: CampaignCode | string, datasets: string[]): string[] {
-  const principal = ({ domi: "domi:base:domi", cdc: "cdc:base:cdc" } as Record<string, string>)[campaign];
+  const principal = ({ domi: "domi:base:domi", cdc: "cdc:base:cdc", seguros: "seguros:base" } as Record<string, string>)[campaign];
   return principal && datasets.includes(principal) ? [principal] : datasets;
 }
 
